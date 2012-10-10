@@ -234,9 +234,9 @@ LOCAL_CFLAGS := $(MY_CFLAGS_C) $(MY_CFLAGS) $(MY_DEFS)
 # Include paths placed before CFLAGS/CPPFLAGS
 LOCAL_C_INCLUDES := \
 	$(LOCAL_PATH)/v8/src \
-	$(LOCAL_PATH)/v8/tools/gyp/${GYP_ABS_ANDROID_TOP_DIR}/frameworks/wilhelm/include \
-	$(LOCAL_PATH)/v8/tools/gyp/${GYP_ABS_ANDROID_TOP_DIR}/bionic \
-	$(LOCAL_PATH)/v8/tools/gyp/${GYP_ABS_ANDROID_TOP_DIR}/external/stlport/stlport
+	$(GYP_ABS_ANDROID_TOP_DIR)/frameworks/wilhelm/include \
+	$(GYP_ABS_ANDROID_TOP_DIR)/bionic \
+	$(GYP_ABS_ANDROID_TOP_DIR)/external/stlport/stlport
 
 LOCAL_C_INCLUDES := $(GYP_COPIED_SOURCE_ORIGIN_DIRS) $(LOCAL_C_INCLUDES)
 
