@@ -66,6 +66,7 @@ LOCAL_SRC_FILES := \
 	v8/src/frames.cc \
 	v8/src/full-codegen.cc \
 	v8/src/func-name-inferrer.cc \
+	v8/src/gdb-jit.cc \
 	v8/src/global-handles.cc \
 	v8/src/handles.cc \
 	v8/src/heap-profiler.cc \
@@ -191,7 +192,6 @@ MY_CFLAGS := \
 	-Wno-error=non-virtual-dtor \
 	-Wno-error=return-type \
 	-Wno-error=sequence-point \
-	 \
 	-Os \
 	-g \
 	-fomit-frame-pointer \
@@ -261,7 +261,6 @@ LOCAL_LDFLAGS := \
 	-Wl,--no-undefined \
 	-Wl,--exclude-libs=ALL \
 	-Wl,--icf=safe \
-	 \
 	-Wl,-O1 \
 	-Wl,--as-needed \
 	-Wl,--gc-sections

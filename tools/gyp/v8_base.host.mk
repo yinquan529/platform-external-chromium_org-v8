@@ -67,6 +67,7 @@ LOCAL_SRC_FILES := \
 	v8/src/frames.cc \
 	v8/src/full-codegen.cc \
 	v8/src/func-name-inferrer.cc \
+	v8/src/gdb-jit.cc \
 	v8/src/global-handles.cc \
 	v8/src/handles.cc \
 	v8/src/heap-profiler.cc \

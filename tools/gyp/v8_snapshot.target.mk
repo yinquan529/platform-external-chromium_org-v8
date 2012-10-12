@@ -82,7 +82,6 @@ MY_CFLAGS := \
 	-Wno-error=non-virtual-dtor \
 	-Wno-error=return-type \
 	-Wno-error=sequence-point \
-	 \
 	-Os \
 	-g \
 	-fomit-frame-pointer \
@@ -151,7 +150,6 @@ LOCAL_LDFLAGS := \
 	-Wl,--no-undefined \
 	-Wl,--exclude-libs=ALL \
 	-Wl,--icf=safe \
-	 \
 	-Wl,-O1 \
 	-Wl,--as-needed \
 	-Wl,--gc-sections
