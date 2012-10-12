@@ -5299,7 +5299,7 @@ void MacroAssembler::LoadInstanceDescriptors(Register map,
   Register temp = descriptors;
   lw(temp, FieldMemOperand(map, Map::kTransitionsOrBackPointerOffset));
 
-  Label ok, fail;
+  Label ok, fail, load_from_back_pointer;
   CheckMap(temp,
            scratch,
            isolate()->factory()->fixed_array_map(),
@@ -5307,9 +5307,24 @@ void MacroAssembler::LoadInstanceDescriptors(Register map,
            DONT_DO_SMI_CHECK);
   lw(descriptors, FieldMemOperand(temp, TransitionArray::kDescriptorsOffset));
   jmp(&ok);
+
   bind(&fail);
+  LoadRoot(scratch, Heap::kUndefinedValueRootIndex);
+  Branch(&load_from_back_pointer, ne, temp, Operand(scratch));
   LoadRoot(descriptors, Heap::kEmptyDescriptorArrayRootIndex);
+  jmp(&ok);
+
+  bind(&load_from_back_pointer);
+  lw(temp, FieldMemOperand(temp, Map::kTransitionsOrBackPointerOffset));
+  lw(descriptors, FieldMemOperand(temp, TransitionArray::kDescriptorsOffset));
+
   bind(&ok);
+}
+
+
+void MacroAssembler::NumberOfOwnDescriptors(Register dst, Register map) {
+  lw(dst, FieldMemOperand(map, Map::kBitField3Offset));
+  DecodeField<Map::NumberOfOwnDescriptorsBits>(dst);
 }
 
 
