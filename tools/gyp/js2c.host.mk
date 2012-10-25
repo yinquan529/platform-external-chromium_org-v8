@@ -2,7 +2,7 @@
 
 include $(CLEAR_VARS)
 
-LOCAL_MODULE_CLASS := NONE
+LOCAL_MODULE_CLASS := GYP
 LOCAL_MODULE := v8_tools_gyp_js2c_host_gyp
 LOCAL_MODULE_STEM := js2c
 LOCAL_MODULE_SUFFIX := .stamp

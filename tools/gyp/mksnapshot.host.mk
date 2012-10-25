@@ -15,7 +15,7 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 GYP_TARGET_DEPENDENCIES := \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_base_host_gyp,true)/v8_tools_gyp_v8_base_host_gyp.a \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_nosnapshot_host_gyp,true)/v8_tools_gyp_v8_nosnapshot_host_gyp.a \
-	$(call intermediates-dir-for,NONE,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
 
 GYP_GENERATED_OUTPUTS :=
 
