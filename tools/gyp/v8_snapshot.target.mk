@@ -60,7 +60,7 @@ MY_CFLAGS := \
 	-march=armv7-a \
 	-mtune=cortex-a8 \
 	-mfloat-abi=softfp \
-	-mfpu=neon \
+	-mfpu=vfpv3-d16 \
 	-fno-tree-sra \
 	-fuse-ld=gold \
 	-Wno-psabi \
@@ -104,6 +104,7 @@ MY_DEFS := \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DENABLE_EXTRA_CHECKS' \
 	'-DV8_TARGET_ARCH_ARM' \
+	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
 	'-DUSE_EABI_HARDFLOAT=0' \
 	'-DANDROID' \
 	'-D__GNU_SOURCE=1' \
