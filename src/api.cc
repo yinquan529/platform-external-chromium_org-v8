@@ -656,6 +656,14 @@ bool V8::IsGlobalIndependent(i::Object** obj) {
 }
 
 
+bool V8::IsGlobalIndependent(i::Isolate* isolate, i::Object** obj) {
+  ASSERT(isolate == i::Isolate::Current());
+  LOG_API(isolate, "IsGlobalIndependent");
+  if (!isolate->IsInitialized()) return false;
+  return i::GlobalHandles::IsIndependent(obj);
+}
+
+
 bool V8::IsGlobalNearDeath(i::Object** obj) {
   i::Isolate* isolate = i::Isolate::Current();
   LOG_API(isolate, "IsGlobalNearDeath");
@@ -674,6 +682,14 @@ bool V8::IsGlobalWeak(i::Object** obj) {
 
 void V8::DisposeGlobal(i::Object** obj) {
   i::Isolate* isolate = i::Isolate::Current();
+  LOG_API(isolate, "DisposeGlobal");
+  if (!isolate->IsInitialized()) return;
+  isolate->global_handles()->Destroy(obj);
+}
+
+
+void V8::DisposeGlobal(i::Isolate* isolate, i::Object** obj) {
+  ASSERT(isolate == i::Isolate::Current());
   LOG_API(isolate, "DisposeGlobal");
   if (!isolate->IsInitialized()) return;
   isolate->global_handles()->Destroy(obj);

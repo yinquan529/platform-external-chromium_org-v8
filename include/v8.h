@@ -381,6 +381,7 @@ template <class T> class Persistent : public Handle<T> {
    * cell remain and IsEmpty will still return false.
    */
   inline void Dispose();
+  inline void Dispose(Isolate* isolate);
 
   /**
    * Make the reference to this object weak.  When only weak handles
@@ -404,6 +405,7 @@ template <class T> class Persistent : public Handle<T> {
 
   /** Returns true if this handle was previously marked as independent. */
   inline bool IsIndependent() const;
+  inline bool IsIndependent(Isolate* isolate) const;
 
   /** Checks if the handle holds the only reference to an object. */
   inline bool IsNearDeath() const;
@@ -3444,8 +3446,8 @@ class V8EXPORT V8 {
 
   /**
    * Iterates through all external resources referenced from current isolate
-   * heap. This method is not expected to be used except for debugging purposes
-   * and may be quite slow.
+   * heap.  GC is not invoked prior to iterating, therefore there is no
+   * guarantee that visited objects are still alive.
    */
   static void VisitExternalResources(ExternalResourceVisitor* visitor);
 
@@ -3488,12 +3490,16 @@ class V8EXPORT V8 {
 
   static internal::Object** GlobalizeReference(internal::Object** handle);
   static void DisposeGlobal(internal::Object** global_handle);
+  static void DisposeGlobal(internal::Isolate* isolate,
+                            internal::Object** global_handle);
   static void MakeWeak(internal::Object** global_handle,
                        void* data,
                        WeakReferenceCallback);
   static void ClearWeak(internal::Object** global_handle);
   static void MarkIndependent(internal::Object** global_handle);
   static bool IsGlobalIndependent(internal::Object** global_handle);
+  static bool IsGlobalIndependent(internal::Isolate* isolate,
+                                  internal::Object** global_handle);
   static bool IsGlobalNearDeath(internal::Object** global_handle);
   static bool IsGlobalWeak(internal::Object** global_handle);
   static void SetWrapperClassId(internal::Object** global_handle,
@@ -4223,6 +4229,14 @@ bool Persistent<T>::IsIndependent() const {
 
 
 template <class T>
+bool Persistent<T>::IsIndependent(Isolate* isolate) const {
+  if (this->IsEmpty()) return false;
+  return V8::IsGlobalIndependent(reinterpret_cast<internal::Isolate*>(isolate),
+                                 reinterpret_cast<internal::Object**>(**this));
+}
+
+
+template <class T>
 bool Persistent<T>::IsNearDeath() const {
   if (this->IsEmpty()) return false;
   return V8::IsGlobalNearDeath(reinterpret_cast<internal::Object**>(**this));
@@ -4240,6 +4254,14 @@ template <class T>
 void Persistent<T>::Dispose() {
   if (this->IsEmpty()) return;
   V8::DisposeGlobal(reinterpret_cast<internal::Object**>(**this));
+}
+
+
+template <class T>
+void Persistent<T>::Dispose(Isolate* isolate) {
+  if (this->IsEmpty()) return;
+  V8::DisposeGlobal(reinterpret_cast<internal::Isolate*>(isolate),
+                    reinterpret_cast<internal::Object**>(**this));
 }
 
 
