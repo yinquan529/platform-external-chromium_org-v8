@@ -1333,6 +1333,12 @@ void Heap::Scavenge() {
   scavenge_visitor.VisitPointer(BitCast<Object**>(&native_contexts_list_));
 
   new_space_front = DoScavenge(&scavenge_visitor, new_space_front);
+
+  while (IterateObjectGroups(&scavenge_visitor)) {
+    new_space_front = DoScavenge(&scavenge_visitor, new_space_front);
+  }
+  isolate()->global_handles()->RemoveObjectGroups();
+
   isolate_->global_handles()->IdentifyNewSpaceWeakIndependentHandles(
       &IsUnscavengedHeapObject);
   isolate_->global_handles()->IterateNewSpaceWeakIndependentRoots(
@@ -1370,6 +1376,51 @@ void Heap::Scavenge() {
   gc_state_ = NOT_IN_GC;
 
   scavenges_since_last_idle_round_++;
+}
+
+
+// TODO(mstarzinger): Unify this method with
+// MarkCompactCollector::MarkObjectGroups().
+bool Heap::IterateObjectGroups(ObjectVisitor* scavenge_visitor) {
+  List<ObjectGroup*>* object_groups =
+    isolate()->global_handles()->object_groups();
+
+  int last = 0;
+  bool changed = false;
+  for (int i = 0; i < object_groups->length(); i++) {
+    ObjectGroup* entry = object_groups->at(i);
+    ASSERT(entry != NULL);
+
+    Object*** objects = entry->objects_;
+    bool group_marked = false;
+    for (size_t j = 0; j < entry->length_; j++) {
+      Object* object = *objects[j];
+      if (object->IsHeapObject()) {
+        if (!IsUnscavengedHeapObject(this, &object)) {
+          group_marked = true;
+          break;
+        }
+      }
+    }
+
+    if (!group_marked) {
+      (*object_groups)[last++] = entry;
+      continue;
+    }
+
+    for (size_t j = 0; j < entry->length_; ++j) {
+      Object* object = *objects[j];
+      if (object->IsHeapObject()) {
+        scavenge_visitor->VisitPointer(&object);
+        changed = true;
+      }
+    }
+
+    entry->Dispose();
+    object_groups->at(i) = NULL;
+  }
+  object_groups->Rewind(last);
+  return changed;
 }
 
 
@@ -2527,6 +2578,14 @@ bool Heap::CreateInitialMaps() {
   }
   set_message_object_map(Map::cast(obj));
 
+  Map* external_map;
+  { MaybeObject* maybe_obj =
+        AllocateMap(JS_OBJECT_TYPE, JSObject::kHeaderSize + kPointerSize);
+    if (!maybe_obj->To(&external_map)) return false;
+  }
+  external_map->set_is_extensible(false);
+  set_external_map(external_map);
+
   ASSERT(!InNewSpace(empty_fixed_array()));
   return true;
 }
@@ -2844,6 +2903,15 @@ bool Heap::CreateInitialObjects() {
   }
   set_natives_source_cache(FixedArray::cast(obj));
 
+  // Allocate object to hold object observation state.
+  { MaybeObject* maybe_obj = AllocateMap(JS_OBJECT_TYPE, JSObject::kHeaderSize);
+    if (!maybe_obj->ToObject(&obj)) return false;
+  }
+  { MaybeObject* maybe_obj = AllocateJSObjectFromMap(Map::cast(obj));
+    if (!maybe_obj->ToObject(&obj)) return false;
+  }
+  set_observation_state(JSObject::cast(obj));
+
   // Handling of script id generation is in FACTORY->NewScript.
   set_last_script_id(undefined_value());
 
@@ -2860,6 +2928,34 @@ bool Heap::CreateInitialObjects() {
   isolate_->compilation_cache()->Clear();
 
   return true;
+}
+
+
+bool Heap::RootCanBeWrittenAfterInitialization(Heap::RootListIndex root_index) {
+  RootListIndex writable_roots[] = {
+    kStoreBufferTopRootIndex,
+    kStackLimitRootIndex,
+    kInstanceofCacheFunctionRootIndex,
+    kInstanceofCacheMapRootIndex,
+    kInstanceofCacheAnswerRootIndex,
+    kCodeStubsRootIndex,
+    kNonMonomorphicCacheRootIndex,
+    kPolymorphicCodeCacheRootIndex,
+    kLastScriptIdRootIndex,
+    kEmptyScriptRootIndex,
+    kRealStackLimitRootIndex,
+    kArgumentsAdaptorDeoptPCOffsetRootIndex,
+    kConstructStubDeoptPCOffsetRootIndex,
+    kGetterStubDeoptPCOffsetRootIndex,
+    kSetterStubDeoptPCOffsetRootIndex,
+    kSymbolTableRootIndex,
+  };
+
+  for (unsigned int i = 0; i < ARRAY_SIZE(writable_roots); i++) {
+    if (root_index == writable_roots[i])
+      return true;
+  }
+  return false;
 }
 
 
@@ -5126,6 +5222,20 @@ MaybeObject* Heap::AllocateScopeInfo(int length) {
   if (!maybe_scope_info->To(&scope_info)) return maybe_scope_info;
   scope_info->set_map_no_write_barrier(scope_info_map());
   return scope_info;
+}
+
+
+MaybeObject* Heap::AllocateExternal(void* value) {
+  Foreign* foreign;
+  { MaybeObject* maybe_result = AllocateForeign(static_cast<Address>(value));
+    if (!maybe_result->To(&foreign)) return maybe_result;
+  }
+  JSObject* external;
+  { MaybeObject* maybe_result = AllocateJSObjectFromMap(external_map());
+    if (!maybe_result->To(&external)) return maybe_result;
+  }
+  external->SetInternalField(0, foreign);
+  return external;
 }
 
 

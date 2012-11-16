@@ -646,7 +646,7 @@ Handle<Code> CallICBase::ComputeMonomorphicStub(LookupResult* lookup,
   Handle<JSObject> holder(lookup->holder());
   switch (lookup->type()) {
     case FIELD: {
-      int index = lookup->GetFieldIndex();
+      PropertyIndex index = lookup->GetFieldIndex();
       return isolate()->stub_cache()->ComputeCallField(
           argc, kind_, extra_state, name, object, holder, index);
     }
@@ -1377,6 +1377,11 @@ MaybeObject* StoreIC::Store(State state,
     return *value;
   }
 
+  // Observed objects are always modified through the runtime.
+  if (FLAG_harmony_observation && receiver->map()->is_observed()) {
+    return receiver->SetProperty(*name, *value, NONE, strict_mode);
+  }
+
   // Use specialized code for setting the length of arrays with fast
   // properties.  Slow properties might indicate redefinition of the
   // length property.
@@ -1462,11 +1467,9 @@ void StoreIC::UpdateCaches(LookupResult* lookup,
   Handle<Code> code;
   switch (type) {
     case FIELD:
-      code = isolate()->stub_cache()->ComputeStoreField(name,
-                                                        receiver,
-                                                        lookup->GetFieldIndex(),
-                                                        Handle<Map>::null(),
-                                                        strict_mode);
+      code = isolate()->stub_cache()->ComputeStoreField(
+          name, receiver, lookup->GetFieldIndex().field_index(),
+          Handle<Map>::null(), strict_mode);
       break;
     case NORMAL:
       if (receiver->IsGlobalObject()) {
@@ -1902,7 +1905,8 @@ MaybeObject* KeyedStoreIC::Store(State state,
     }
 
     // Update inline cache and stub cache.
-    if (FLAG_use_ic && !receiver->IsJSGlobalProxy()) {
+    if (FLAG_use_ic && !receiver->IsJSGlobalProxy() &&
+        !(FLAG_harmony_observation && receiver->map()->is_observed())) {
       LookupResult lookup(isolate());
       if (LookupForWrite(receiver, name, &lookup)) {
         UpdateCaches(&lookup, state, strict_mode, receiver, name, value);
@@ -1914,8 +1918,10 @@ MaybeObject* KeyedStoreIC::Store(State state,
   }
 
   // Do not use ICs for objects that require access checks (including
-  // the global object).
-  bool use_ic = FLAG_use_ic && !object->IsAccessCheckNeeded();
+  // the global object), or are observed.
+  bool use_ic = FLAG_use_ic && !object->IsAccessCheckNeeded() &&
+      !(FLAG_harmony_observation && object->IsJSObject() &&
+          JSObject::cast(*object)->map()->is_observed());
   ASSERT(!(use_ic && object->IsJSGlobalProxy()));
 
   if (use_ic) {
@@ -1973,7 +1979,7 @@ void KeyedStoreIC::UpdateCaches(LookupResult* lookup,
   switch (type) {
     case FIELD:
       code = isolate()->stub_cache()->ComputeKeyedStoreField(
-          name, receiver, lookup->GetFieldIndex(),
+          name, receiver, lookup->GetFieldIndex().field_index(),
           Handle<Map>::null(), strict_mode);
       break;
     case TRANSITION: {

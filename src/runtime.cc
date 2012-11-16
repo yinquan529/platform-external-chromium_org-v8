@@ -783,6 +783,15 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_SetDelete) {
 }
 
 
+RUNTIME_FUNCTION(MaybeObject*, Runtime_SetGetSize) {
+  HandleScope scope(isolate);
+  ASSERT(args.length() == 1);
+  CONVERT_ARG_HANDLE_CHECKED(JSSet, holder, 0);
+  Handle<ObjectHashSet> table(ObjectHashSet::cast(holder->table()));
+  return Smi::FromInt(table->NumberOfElements());
+}
+
+
 RUNTIME_FUNCTION(MaybeObject*, Runtime_MapInitialize) {
   HandleScope scope(isolate);
   ASSERT(args.length() == 1);
@@ -839,6 +848,15 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_MapSet) {
   Handle<ObjectHashTable> new_table = PutIntoObjectHashTable(table, key, value);
   holder->set_table(*new_table);
   return isolate->heap()->undefined_value();
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_MapGetSize) {
+  HandleScope scope(isolate);
+  ASSERT(args.length() == 1);
+  CONVERT_ARG_HANDLE_CHECKED(JSMap, holder, 0);
+  Handle<ObjectHashTable> table(ObjectHashTable::cast(holder->table()));
+  return Smi::FromInt(table->NumberOfElements());
 }
 
 
@@ -1073,7 +1091,7 @@ static MaybeObject* GetOwnProperty(Isolate* isolate,
   // This could be an element.
   uint32_t index;
   if (name->AsArrayIndex(&index)) {
-    switch (obj->HasLocalElement(index)) {
+    switch (obj->GetLocalElementType(index)) {
       case JSObject::UNDEFINED_ELEMENT:
         return heap->undefined_value();
 
@@ -1661,7 +1679,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_InitializeConstGlobal) {
   // Strict mode handling not needed (const is disallowed in strict mode).
   if (lookup.IsField()) {
     FixedArray* properties = global->properties();
-    int index = lookup.GetFieldIndex();
+    int index = lookup.GetFieldIndex().field_index();
     if (properties->get(index)->IsTheHole() || !lookup.IsReadOnly()) {
       properties->set(index, *value);
     }
@@ -1751,7 +1769,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_InitializeConstContextSlot) {
 
     if (lookup.IsField()) {
       FixedArray* properties = object->properties();
-      int index = lookup.GetFieldIndex();
+      int index = lookup.GetFieldIndex().field_index();
       if (properties->get(index)->IsTheHole()) {
         properties->set(index, *value);
       }
@@ -4058,7 +4076,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_KeyedGetProperty) {
         LookupResult result(isolate);
         receiver->LocalLookup(key, &result);
         if (result.IsField()) {
-          int offset = result.GetFieldIndex();
+          int offset = result.GetFieldIndex().field_index();
           keyed_lookup_cache->Update(receiver_map, key, offset);
           return receiver->FastPropertyAt(offset);
         }
@@ -4217,6 +4235,34 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_DefineOrRedefineDataProperty) {
                                          name,
                                          obj_value,
                                          attr);
+}
+
+
+// Return property without being observable by accessors or interceptors.
+RUNTIME_FUNCTION(MaybeObject*, Runtime_GetDataProperty) {
+  ASSERT(args.length() == 2);
+  CONVERT_ARG_HANDLE_CHECKED(JSObject, object, 0);
+  CONVERT_ARG_HANDLE_CHECKED(String, key, 1);
+  LookupResult lookup(isolate);
+  object->LookupRealNamedProperty(*key, &lookup);
+  if (!lookup.IsFound()) return isolate->heap()->undefined_value();
+  switch (lookup.type()) {
+    case NORMAL:
+      return lookup.holder()->GetNormalizedProperty(&lookup);
+    case FIELD:
+      return lookup.holder()->FastPropertyAt(
+          lookup.GetFieldIndex().field_index());
+    case CONSTANT_FUNCTION:
+      return lookup.GetConstantFunction();
+    case CALLBACKS:
+    case HANDLER:
+    case INTERCEPTOR:
+    case TRANSITION:
+      return isolate->heap()->undefined_value();
+    case NONEXISTENT:
+      UNREACHABLE();
+  }
+  return isolate->heap()->undefined_value();
 }
 
 
@@ -4681,7 +4727,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_IsPropertyEnumerable) {
 
   uint32_t index;
   if (key->AsArrayIndex(&index)) {
-    JSObject::LocalElementType type = object->HasLocalElement(index);
+    JSObject::LocalElementType type = object->GetLocalElementType(index);
     switch (type) {
       case JSObject::UNDEFINED_ELEMENT:
       case JSObject::STRING_CHARACTER_ELEMENT:
@@ -9965,8 +10011,8 @@ static MaybeObject* DebugLookupResultValue(Heap* heap,
       return value;
     case FIELD:
       value =
-          JSObject::cast(
-              result->holder())->FastPropertyAt(result->GetFieldIndex());
+          JSObject::cast(result->holder())->FastPropertyAt(
+              result->GetFieldIndex().field_index());
       if (value->IsTheHole()) {
         return heap->undefined_value();
       }
@@ -12858,47 +12904,6 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_GetScript) {
 }
 
 
-// Determines whether the given stack frame should be displayed in
-// a stack trace.  The caller is the error constructor that asked
-// for the stack trace to be collected.  The first time a construct
-// call to this function is encountered it is skipped.  The seen_caller
-// in/out parameter is used to remember if the caller has been seen
-// yet.
-static bool ShowFrameInStackTrace(StackFrame* raw_frame,
-                                  Object* caller,
-                                  bool* seen_caller) {
-  // Only display JS frames.
-  if (!raw_frame->is_java_script()) {
-    return false;
-  }
-  JavaScriptFrame* frame = JavaScriptFrame::cast(raw_frame);
-  Object* raw_fun = frame->function();
-  // Not sure when this can happen but skip it just in case.
-  if (!raw_fun->IsJSFunction()) {
-    return false;
-  }
-  if ((raw_fun == caller) && !(*seen_caller)) {
-    *seen_caller = true;
-    return false;
-  }
-  // Skip all frames until we've seen the caller.
-  if (!(*seen_caller)) return false;
-  // Also, skip non-visible built-in functions and any call with the builtins
-  // object as receiver, so as to not reveal either the builtins object or
-  // an internal function.
-  // The --builtins-in-stack-traces command line flag allows including
-  // internal call sites in the stack trace for debugging purposes.
-  if (!FLAG_builtins_in_stack_traces) {
-    JSFunction* fun = JSFunction::cast(raw_fun);
-    if (frame->receiver()->IsJSBuiltinsObject() ||
-        (fun->IsBuiltin() && !fun->shared()->native())) {
-      return false;
-    }
-  }
-  return true;
-}
-
-
 // Collect the raw data for a stack trace.  Returns an array of 4
 // element segments each containing a receiver, function, code and
 // native code offset.
@@ -12909,57 +12914,23 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_CollectStackTrace) {
   CONVERT_NUMBER_CHECKED(int32_t, limit, Int32, args[2]);
 
   HandleScope scope(isolate);
-  Factory* factory = isolate->factory();
+  // Optionally capture a more detailed stack trace for the message.
+  isolate->CaptureAndSetDetailedStackTrace(error_object);
+  // Capture a simple stack trace for the stack property.
+  return *isolate->CaptureSimpleStackTrace(error_object, caller, limit);
+}
 
-  limit = Max(limit, 0);  // Ensure that limit is not negative.
-  int initial_size = Min(limit, 10);
-  Handle<FixedArray> elements =
-      factory->NewFixedArrayWithHoles(initial_size * 4);
 
-  StackFrameIterator iter(isolate);
-  // If the caller parameter is a function we skip frames until we're
-  // under it before starting to collect.
-  bool seen_caller = !caller->IsJSFunction();
-  int cursor = 0;
-  int frames_seen = 0;
-  while (!iter.done() && frames_seen < limit) {
-    StackFrame* raw_frame = iter.frame();
-    if (ShowFrameInStackTrace(raw_frame, *caller, &seen_caller)) {
-      frames_seen++;
-      JavaScriptFrame* frame = JavaScriptFrame::cast(raw_frame);
-      // Set initial size to the maximum inlining level + 1 for the outermost
-      // function.
-      List<FrameSummary> frames(Compiler::kMaxInliningLevels + 1);
-      frame->Summarize(&frames);
-      for (int i = frames.length() - 1; i >= 0; i--) {
-        if (cursor + 4 > elements->length()) {
-          int new_capacity = JSObject::NewElementsCapacity(elements->length());
-          Handle<FixedArray> new_elements =
-              factory->NewFixedArrayWithHoles(new_capacity);
-          for (int i = 0; i < cursor; i++) {
-            new_elements->set(i, elements->get(i));
-          }
-          elements = new_elements;
-        }
-        ASSERT(cursor + 4 <= elements->length());
-
-        Handle<Object> recv = frames[i].receiver();
-        Handle<JSFunction> fun = frames[i].function();
-        Handle<Code> code = frames[i].code();
-        Handle<Smi> offset(Smi::FromInt(frames[i].offset()));
-        elements->set(cursor++, *recv);
-        elements->set(cursor++, *fun);
-        elements->set(cursor++, *code);
-        elements->set(cursor++, *offset);
-      }
-    }
-    iter.Advance();
-  }
-  Handle<JSArray> result = factory->NewJSArrayWithElements(elements);
-  // Capture and attach a more detailed stack trace if necessary.
-  isolate->CaptureAndSetCurrentStackTraceFor(error_object);
-  result->set_length(Smi::FromInt(cursor));
-  return *result;
+// Retrieve the raw stack trace collected on stack overflow and delete
+// it since it is used only once to avoid keeping it alive.
+RUNTIME_FUNCTION(MaybeObject*, Runtime_GetOverflowedRawStackTrace) {
+  ASSERT_EQ(args.length(), 1);
+  CONVERT_ARG_CHECKED(JSObject, error_object, 0);
+  String* key = isolate->heap()->hidden_stack_trace_symbol();
+  Object* result = error_object->GetHiddenProperty(key);
+  RUNTIME_ASSERT(result->IsJSArray() || result->IsUndefined());
+  error_object->DeleteHiddenProperty(key);
+  return result;
 }
 
 
@@ -13083,33 +13054,6 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_GetFromCache) {
 }
 
 
-RUNTIME_FUNCTION(MaybeObject*, Runtime_NewMessageObject) {
-  HandleScope scope(isolate);
-  CONVERT_ARG_HANDLE_CHECKED(String, type, 0);
-  CONVERT_ARG_HANDLE_CHECKED(JSArray, arguments, 1);
-  return *isolate->factory()->NewJSMessageObject(
-      type,
-      arguments,
-      0,
-      0,
-      isolate->factory()->undefined_value(),
-      isolate->factory()->undefined_value(),
-      isolate->factory()->undefined_value());
-}
-
-
-RUNTIME_FUNCTION(MaybeObject*, Runtime_MessageGetType) {
-  CONVERT_ARG_CHECKED(JSMessageObject, message, 0);
-  return message->type();
-}
-
-
-RUNTIME_FUNCTION(MaybeObject*, Runtime_MessageGetArguments) {
-  CONVERT_ARG_CHECKED(JSMessageObject, message, 0);
-  return message->arguments();
-}
-
-
 RUNTIME_FUNCTION(MaybeObject*, Runtime_MessageGetStartPosition) {
   CONVERT_ARG_CHECKED(JSMessageObject, message, 0);
   return Smi::FromInt(message->start_position());
@@ -13221,6 +13165,78 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_HaveSameMap) {
   CONVERT_ARG_CHECKED(JSObject, obj2, 1);
   return isolate->heap()->ToBoolean(obj1->map() == obj2->map());
 }
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_IsObserved) {
+  ASSERT(args.length() == 1);
+  CONVERT_ARG_CHECKED(JSReceiver, obj, 0);
+  return isolate->heap()->ToBoolean(obj->map()->is_observed());
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_SetIsObserved) {
+  ASSERT(args.length() == 2);
+  CONVERT_ARG_CHECKED(JSReceiver, obj, 0);
+  CONVERT_BOOLEAN_ARG_CHECKED(is_observed, 1);
+  if (obj->map()->is_observed() != is_observed) {
+    MaybeObject* maybe = obj->map()->Copy();
+    Map* map;
+    if (!maybe->To(&map)) return maybe;
+    map->set_is_observed(is_observed);
+    obj->set_map(map);
+  }
+  return isolate->heap()->undefined_value();
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_SetObserverDeliveryPending) {
+  ASSERT(args.length() == 0);
+  isolate->set_observer_delivery_pending(true);
+  return isolate->heap()->undefined_value();
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_GetObservationState) {
+  ASSERT(args.length() == 0);
+  return isolate->heap()->observation_state();
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_CreateObjectHashTable) {
+  ASSERT(args.length() == 0);
+  return ObjectHashTable::Allocate(0);
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_ObjectHashTableGet) {
+  NoHandleAllocation ha;
+  ASSERT(args.length() == 2);
+  CONVERT_ARG_CHECKED(ObjectHashTable, table, 0);
+  Object* key = args[1];
+  Object* lookup = table->Lookup(key);
+  return lookup->IsTheHole() ? isolate->heap()->undefined_value() : lookup;
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_ObjectHashTableSet) {
+  HandleScope scope(isolate);
+  ASSERT(args.length() == 3);
+  CONVERT_ARG_HANDLE_CHECKED(ObjectHashTable, table, 0);
+  Handle<Object> key = args.at<Object>(1);
+  Handle<Object> value = args.at<Object>(2);
+  return *PutIntoObjectHashTable(table, key, value);
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_ObjectHashTableHas) {
+  NoHandleAllocation ha;
+  ASSERT(args.length() == 2);
+  CONVERT_ARG_CHECKED(ObjectHashTable, table, 0);
+  Object* key = args[1];
+  Object* lookup = table->Lookup(key);
+  return isolate->heap()->ToBoolean(!lookup->IsTheHole());
+}
+
 
 // ----------------------------------------------------------------------------
 // Implementation of Runtime

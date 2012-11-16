@@ -354,6 +354,7 @@ typedef List<HeapObject*, PreallocatedStorageAllocationPolicy> DebugObjectCache;
   V(uint64_t, enabled_cpu_features, 0)                                         \
   V(CpuProfiler*, cpu_profiler, NULL)                                          \
   V(HeapProfiler*, heap_profiler, NULL)                                        \
+  V(bool, observer_delivery_pending, false)                                    \
   ISOLATE_DEBUGGER_INIT_LIST(V)
 
 class Isolate {
@@ -715,7 +716,10 @@ class Isolate {
       int frame_limit,
       StackTrace::StackTraceOptions options);
 
-  void CaptureAndSetCurrentStackTraceFor(Handle<JSObject> error_object);
+  Handle<JSArray> CaptureSimpleStackTrace(Handle<JSObject> error_object,
+                                          Handle<Object> caller,
+                                          int limit);
+  void CaptureAndSetDetailedStackTrace(Handle<JSObject> error_object);
 
   // Returns if the top context may access the given global object. If
   // the result is false, the pending exception is guaranteed to be
@@ -1394,12 +1398,7 @@ class StackLimitCheck BASE_EMBEDDED {
 
   bool HasOverflowed() const {
     StackGuard* stack_guard = isolate_->stack_guard();
-    // Stack has overflowed in C++ code only if stack pointer exceeds the C++
-    // stack guard and the limits are not set to interrupt values.
-    // TODO(214): Stack overflows are ignored if a interrupt is pending. This
-    // code should probably always use the initial C++ limit.
-    return (reinterpret_cast<uintptr_t>(this) < stack_guard->climit()) &&
-           stack_guard->IsStackOverflow();
+    return (reinterpret_cast<uintptr_t>(this) < stack_guard->real_climit());
   }
  private:
   Isolate* isolate_;

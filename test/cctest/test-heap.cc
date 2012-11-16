@@ -1133,6 +1133,65 @@ TEST(TestCodeFlushingIncrementalScavenge) {
 }
 
 
+TEST(TestCodeFlushingIncrementalAbort) {
+  // If we do not flush code this test is invalid.
+  if (!FLAG_flush_code || !FLAG_flush_code_incrementally) return;
+  i::FLAG_allow_natives_syntax = true;
+  InitializeVM();
+  v8::HandleScope scope;
+  const char* source = "function foo() {"
+                       "  var x = 42;"
+                       "  var y = 42;"
+                       "  var z = x + y;"
+                       "};"
+                       "foo()";
+  Handle<String> foo_name = FACTORY->LookupAsciiSymbol("foo");
+
+  // This compile will add the code to the compilation cache.
+  { v8::HandleScope scope;
+    CompileRun(source);
+  }
+
+  // Check function is compiled.
+  Object* func_value = Isolate::Current()->context()->global_object()->
+      GetProperty(*foo_name)->ToObjectChecked();
+  CHECK(func_value->IsJSFunction());
+  Handle<JSFunction> function(JSFunction::cast(func_value));
+  CHECK(function->shared()->is_compiled());
+
+  // The code will survive at least two GCs.
+  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
+  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
+  CHECK(function->shared()->is_compiled());
+
+  // Bump the code age so that flushing is triggered.
+  const int kAgingThreshold = 6;
+  function->shared()->set_code_age(kAgingThreshold);
+
+  // Simulate incremental marking so that the function is enqueued as
+  // code flushing candidate.
+  SimulateIncrementalMarking();
+
+  // Enable the debugger and add a breakpoint while incremental marking
+  // is running so that incremental marking aborts and code flushing is
+  // disabled.
+  int position = 0;
+  Handle<Object> breakpoint_object(Smi::FromInt(0));
+  ISOLATE->debug()->SetBreakPoint(function, breakpoint_object, &position);
+  ISOLATE->debug()->ClearAllBreakPoints();
+
+  // Force optimization now that code flushing is disabled.
+  { v8::HandleScope scope;
+    CompileRun("%OptimizeFunctionOnNextCall(foo); foo();");
+  }
+
+  // Simulate one final GC to make sure the candidate queue is sane.
+  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
+  CHECK(function->shared()->is_compiled() || !function->IsOptimized());
+  CHECK(function->is_compiled() || !function->IsOptimized());
+}
+
+
 // Count the number of native contexts in the weak list of native contexts.
 int CountNativeContexts() {
   int count = 0;
@@ -2351,19 +2410,13 @@ class SourceResource: public v8::String::ExternalAsciiStringResource {
 };
 
 
-TEST(ReleaseStackTraceData) {
+void ReleaseStackTraceDataTest(const char* source) {
   // Test that the data retained by the Error.stack accessor is released
   // after the first time the accessor is fired.  We use external string
   // to check whether the data is being released since the external string
   // resource's callback is fired when the external string is GC'ed.
   InitializeVM();
   v8::HandleScope scope;
-  static const char* source = "var error = 1;       "
-                              "try {                "
-                              "  throw new Error(); "
-                              "} catch (e) {        "
-                              "  error = e;         "
-                              "}                    ";
   SourceResource* resource = new SourceResource(i::StrDup(source));
   {
     v8::HandleScope scope;
@@ -2375,12 +2428,29 @@ TEST(ReleaseStackTraceData) {
   // External source is being retained by the stack trace.
   CHECK(!resource->IsDisposed());
 
-  CompileRun("error.stack; error.stack;");
+  CompileRun("error.stack;");
   HEAP->CollectAllAvailableGarbage();
   // External source has been released.
   CHECK(resource->IsDisposed());
-
   delete resource;
+}
+
+
+TEST(ReleaseStackTraceData) {
+  static const char* source1 = "var error = null;            "
+  /* Normal Error */           "try {                        "
+                               "  throw new Error();         "
+                               "} catch (e) {                "
+                               "  error = e;                 "
+                               "}                            ";
+  static const char* source2 = "var error = null;            "
+  /* Stack overflow */         "try {                        "
+                               "  (function f() { f(); })(); "
+                               "} catch (e) {                "
+                               "  error = e;                 "
+                               "}                            ";
+  ReleaseStackTraceDataTest(source1);
+  ReleaseStackTraceDataTest(source2);
 }
 
 

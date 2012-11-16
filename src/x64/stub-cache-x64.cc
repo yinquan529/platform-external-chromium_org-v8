@@ -350,18 +350,23 @@ void StubCompiler::GenerateFastPropertyLoad(MacroAssembler* masm,
                                             Register dst,
                                             Register src,
                                             Handle<JSObject> holder,
-                                            int index) {
-  // Adjust for the number of properties stored in the holder.
-  index -= holder->map()->inobject_properties();
-  if (index < 0) {
-    // Get the property straight out of the holder.
-    int offset = holder->map()->instance_size() + (index * kPointerSize);
+                                            PropertyIndex index) {
+  if (index.is_header_index()) {
+    int offset = index.header_index() * kPointerSize;
     __ movq(dst, FieldOperand(src, offset));
   } else {
-    // Calculate the offset into the properties array.
-    int offset = index * kPointerSize + FixedArray::kHeaderSize;
-    __ movq(dst, FieldOperand(src, JSObject::kPropertiesOffset));
-    __ movq(dst, FieldOperand(dst, offset));
+    // Adjust for the number of properties stored in the holder.
+    int slot = index.field_index() - holder->map()->inobject_properties();
+    if (slot < 0) {
+      // Get the property straight out of the holder.
+      int offset = holder->map()->instance_size() + (slot * kPointerSize);
+      __ movq(dst, FieldOperand(src, offset));
+    } else {
+      // Calculate the offset into the properties array.
+      int offset = slot * kPointerSize + FixedArray::kHeaderSize;
+      __ movq(dst, FieldOperand(src, JSObject::kPropertiesOffset));
+      __ movq(dst, FieldOperand(dst, offset));
+    }
   }
 }
 
@@ -1013,7 +1018,7 @@ void StubCompiler::GenerateLoadField(Handle<JSObject> object,
                                      Register scratch1,
                                      Register scratch2,
                                      Register scratch3,
-                                     int index,
+                                     PropertyIndex index,
                                      Handle<String> name,
                                      Label* miss) {
   // Check that the receiver isn't a smi.
@@ -1388,7 +1393,7 @@ void CallStubCompiler::GenerateMissBranch() {
 
 Handle<Code> CallStubCompiler::CompileCallField(Handle<JSObject> object,
                                                 Handle<JSObject> holder,
-                                                int index,
+                                                PropertyIndex index,
                                                 Handle<String> name) {
   // ----------- S t a t e -------------
   // rcx                 : function name
@@ -2780,7 +2785,7 @@ Handle<Code> LoadStubCompiler::CompileLoadNonexistent(Handle<String> name,
 
 Handle<Code> LoadStubCompiler::CompileLoadField(Handle<JSObject> object,
                                                 Handle<JSObject> holder,
-                                                int index,
+                                                PropertyIndex index,
                                                 Handle<String> name) {
   // ----------- S t a t e -------------
   //  -- rax    : receiver
@@ -2973,7 +2978,7 @@ Handle<Code> LoadStubCompiler::CompileLoadGlobal(
 Handle<Code> KeyedLoadStubCompiler::CompileLoadField(Handle<String> name,
                                                      Handle<JSObject> receiver,
                                                      Handle<JSObject> holder,
-                                                     int index) {
+                                                     PropertyIndex index) {
   // ----------- S t a t e -------------
   //  -- rax     : key
   //  -- rdx     : receiver
@@ -3240,6 +3245,7 @@ Handle<Code> ConstructStubCompiler::CompileConstructStub(
 #endif
 
   // Load the initial map and verify that it is in fact a map.
+  // rdi: constructor
   __ movq(rbx, FieldOperand(rdi, JSFunction::kPrototypeOrInitialMapOffset));
   // Will both indicate a NULL and a Smi.
   STATIC_ASSERT(kSmiTag == 0);
@@ -3249,18 +3255,22 @@ Handle<Code> ConstructStubCompiler::CompileConstructStub(
 
 #ifdef DEBUG
   // Cannot construct functions this way.
-  // rdi: constructor
   // rbx: initial map
   __ CmpInstanceType(rbx, JS_FUNCTION_TYPE);
-  __ Assert(not_equal, "Function constructed by construct stub.");
+  __ Check(not_equal, "Function constructed by construct stub.");
 #endif
 
   // Now allocate the JSObject in new space.
-  // rdi: constructor
   // rbx: initial map
+  ASSERT(function->has_initial_map());
+  int instance_size = function->initial_map()->instance_size();
+#ifdef DEBUG
   __ movzxbq(rcx, FieldOperand(rbx, Map::kInstanceSizeOffset));
   __ shl(rcx, Immediate(kPointerSizeLog2));
-  __ AllocateInNewSpace(rcx, rdx, rcx, no_reg,
+  __ cmpq(rcx, Immediate(instance_size));
+  __ Check(equal, "Instance size of initial map changed.");
+#endif
+  __ AllocateInNewSpace(instance_size, rdx, rcx, no_reg,
                         &generic_stub_call, NO_ALLOCATION_FLAGS);
 
   // Allocated the JSObject, now initialize the fields and add the heap tag.
@@ -3306,7 +3316,6 @@ Handle<Code> ConstructStubCompiler::CompileConstructStub(
   }
 
   // Fill the unused in-object property fields with undefined.
-  ASSERT(function->has_initial_map());
   for (int i = shared->this_property_assignments_count();
        i < function->initial_map()->inobject_properties();
        i++) {

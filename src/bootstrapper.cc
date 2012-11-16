@@ -1084,11 +1084,11 @@ bool Genesis::InitializeGlobal(Handle<GlobalObject> inner_global,
     LookupResult lookup(isolate);
     result->LocalLookup(heap->callee_symbol(), &lookup);
     ASSERT(lookup.IsField());
-    ASSERT(lookup.GetFieldIndex() == Heap::kArgumentsCalleeIndex);
+    ASSERT(lookup.GetFieldIndex().field_index() == Heap::kArgumentsCalleeIndex);
 
     result->LocalLookup(heap->length_symbol(), &lookup);
     ASSERT(lookup.IsField());
-    ASSERT(lookup.GetFieldIndex() == Heap::kArgumentsLengthIndex);
+    ASSERT(lookup.GetFieldIndex().field_index() == Heap::kArgumentsLengthIndex);
 
     ASSERT(result->map()->inobject_properties() > Heap::kArgumentsCalleeIndex);
     ASSERT(result->map()->inobject_properties() > Heap::kArgumentsLengthIndex);
@@ -1186,7 +1186,7 @@ bool Genesis::InitializeGlobal(Handle<GlobalObject> inner_global,
     LookupResult lookup(isolate);
     result->LocalLookup(heap->length_symbol(), &lookup);
     ASSERT(lookup.IsField());
-    ASSERT(lookup.GetFieldIndex() == Heap::kArgumentsLengthIndex);
+    ASSERT(lookup.GetFieldIndex().field_index() == Heap::kArgumentsLengthIndex);
 
     ASSERT(result->map()->inobject_properties() > Heap::kArgumentsLengthIndex);
 
@@ -1240,8 +1240,9 @@ bool Genesis::InitializeGlobal(Handle<GlobalObject> inner_global,
   // Initialize the out of memory slot.
   native_context()->set_out_of_memory(heap->false_value());
 
-  // Initialize the data slot.
-  native_context()->set_data(heap->undefined_value());
+  // Initialize the embedder data slot.
+  Handle<FixedArray> embedder_data = factory->NewFixedArray(2);
+  native_context()->set_embedder_data(*embedder_data);
 
   {
     // Initialize the random seed slot.
@@ -1414,6 +1415,11 @@ void Genesis::InstallExperimentalNativeFunctions() {
     INSTALL_NATIVE(JSFunction, "DerivedGetTrap", derived_get_trap);
     INSTALL_NATIVE(JSFunction, "DerivedSetTrap", derived_set_trap);
     INSTALL_NATIVE(JSFunction, "ProxyEnumerate", proxy_enumerate);
+  }
+  if (FLAG_harmony_observation) {
+    INSTALL_NATIVE(JSFunction, "NotifyChange", observers_notify_change);
+    INSTALL_NATIVE(JSFunction, "DeliverChangeRecords",
+                   observers_deliver_changes);
   }
 }
 
@@ -1828,7 +1834,7 @@ bool Genesis::InstallExperimentalNatives() {
                "native collection.js") == 0) {
       if (!CompileExperimentalBuiltin(isolate(), i)) return false;
     }
-    if (FLAG_harmony_object_observe &&
+    if (FLAG_harmony_observation &&
         strcmp(ExperimentalNatives::GetScriptName(i).start(),
                "native object-observe.js") == 0) {
       if (!CompileExperimentalBuiltin(isolate(), i)) return false;
