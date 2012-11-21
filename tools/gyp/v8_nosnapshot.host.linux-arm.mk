@@ -37,6 +37,8 @@ LOCAL_SRC_FILES := \
 
 # Flags passed to both C and C++ files.
 MY_CFLAGS := \
+	-fstack-protector \
+	--param=ssp-buffer-size=4 \
 	-pthread \
 	-fno-exceptions \
 	-fno-strict-aliasing \
@@ -68,7 +70,6 @@ MY_DEFS := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DUSE_SKIA=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
-	'-DENABLE_EXTRA_CHECKS' \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
 	'-DUSE_EABI_HARDFLOAT=0' \
@@ -78,7 +79,8 @@ MY_DEFS := \
 	'-DENABLE_DISASSEMBLER' \
 	'-DV8_ENABLE_CHECKS' \
 	'-DOBJECT_PRINT' \
-	'-DVERIFY_HEAP'
+	'-DVERIFY_HEAP' \
+	'-DENABLE_EXTRA_CHECKS'
 
 LOCAL_CFLAGS := $(MY_CFLAGS_C) $(MY_CFLAGS) $(MY_DEFS)
 # Undefine ANDROID for host modules
@@ -100,6 +102,8 @@ LOCAL_CPPFLAGS := \
 ### Rules for final target.
 
 LOCAL_LDFLAGS := \
+	-Wl,-z,now \
+	-Wl,-z,relro \
 	-pthread \
 	-fPIC \
 	-m32
