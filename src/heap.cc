@@ -5318,8 +5318,7 @@ bool Heap::IdleNotification(int hint) {
       AgeInlineCaches();
     }
     int mark_sweep_time = Min(TimeMarkSweepWouldTakeInMs(), 1000);
-    if (hint >= mark_sweep_time && !FLAG_expose_gc &&
-        incremental_marking()->IsStopped()) {
+    if (hint >= mark_sweep_time && incremental_marking()->IsStopped()) {
       HistogramTimerScope scope(isolate_->counters()->gc_context());
       CollectAllGarbage(kReduceMemoryFootprintMask,
                         "idle notification: contexts disposed");
@@ -5327,10 +5326,6 @@ bool Heap::IdleNotification(int hint) {
       AdvanceIdleIncrementalMarking(step_size);
       contexts_disposed_ = 0;
     }
-    // Make sure that we have no pending context disposals.
-    // Take into account that we might have decided to delay full collection
-    // because incremental marking is in progress.
-    ASSERT((contexts_disposed_ == 0) || !incremental_marking()->IsStopped());
     // After context disposal there is likely a lot of garbage remaining, reset
     // the idle notification counters in order to trigger more incremental GCs
     // on subsequent idle notifications.
@@ -5338,7 +5333,7 @@ bool Heap::IdleNotification(int hint) {
     return false;
   }
 
-  if (!FLAG_incremental_marking || FLAG_expose_gc || Serializer::enabled()) {
+  if (!FLAG_incremental_marking || Serializer::enabled()) {
     return IdleGlobalGC();
   }
 
