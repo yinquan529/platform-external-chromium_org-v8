@@ -113,7 +113,6 @@ namespace internal {
   F(Typeof, 1, 1) \
   \
   F(StringToNumber, 1, 1) \
-  F(StringFromCharCodeArray, 1, 1) \
   F(StringParseInt, 2, 1) \
   F(StringParseFloat, 1, 1) \
   F(StringToLowerCase, 1, 1) \
@@ -122,10 +121,6 @@ namespace internal {
   F(CharFromCode, 1, 1) \
   F(URIEscape, 1, 1) \
   F(URIUnescape, 1, 1) \
-  F(BasicJSONStringify, 1, 1) \
-  F(QuoteJSONString, 1, 1) \
-  F(QuoteJSONStringComma, 1, 1) \
-  F(QuoteJSONStringArray, 1, 1) \
   \
   F(NumberToString, 1, 1) \
   F(NumberToStringSkipCache, 1, 1) \
@@ -194,6 +189,10 @@ namespace internal {
   \
   /* JSON */ \
   F(ParseJson, 1, 1) \
+  F(BasicJSONStringify, 1, 1) \
+  F(QuoteJSONString, 1, 1) \
+  F(QuoteJSONStringComma, 1, 1) \
+  F(QuoteJSONStringArray, 1, 1) \
   \
   /* Strings */ \
   F(StringCharCodeAt, 2, 1) \
@@ -207,6 +206,8 @@ namespace internal {
   F(StringTrim, 3, 1) \
   F(StringToArray, 2, 1) \
   F(NewStringWrapper, 1, 1) \
+  F(NewString, 2, 1) \
+  F(TruncateString, 2, 1) \
   \
   /* Numbers */ \
   F(NumberToRadixString, 2, 1) \
@@ -331,7 +332,6 @@ namespace internal {
   F(CreateObjectHashTable, 0, 1) \
   F(ObjectHashTableGet, 2, 1) \
   F(ObjectHashTableSet, 3, 1) \
-  F(ObjectHashTableHas, 2, 1) \
   \
   /* Statements */ \
   F(NewClosure, 3, 1) \
@@ -530,6 +530,8 @@ namespace internal {
   F(DateField, 2 /* date object, field index */, 1)                          \
   F(StringCharFromCode, 1, 1)                                                \
   F(StringCharAt, 2, 1)                                                      \
+  F(OneByteSeqStringSetChar, 3, 1)                                           \
+  F(TwoByteSeqStringSetChar, 3, 1)                                           \
   F(ObjectEquals, 2, 1)                                                      \
   F(RandomHeapNumber, 0, 1)                                                  \
   F(IsObject, 1, 1)                                                          \

@@ -26,8 +26,10 @@ static void InitializeVM() {
 // Go through all incremental marking steps in one swoop.
 static void SimulateIncrementalMarking() {
   IncrementalMarking* marking = HEAP->incremental_marking();
-  CHECK(marking->IsStopped());
-  marking->Start();
+  CHECK(marking->IsMarking() || marking->IsStopped());
+  if (marking->IsStopped()) {
+    marking->Start();
+  }
   CHECK(marking->IsMarking());
   while (!marking->IsComplete()) {
     marking->Step(MB, IncrementalMarking::NO_GC_VIA_STACK_GUARD);
@@ -413,9 +415,10 @@ TEST(WeakGlobalHandlesMark) {
     h2 = global_handles->Create(*u);
   }
 
+  // Make sure the objects are promoted.
   HEAP->CollectGarbage(OLD_POINTER_SPACE);
   HEAP->CollectGarbage(NEW_SPACE);
-  // Make sure the object is promoted.
+  CHECK(!HEAP->InNewSpace(*h1) && !HEAP->InNewSpace(*h2));
 
   global_handles->MakeWeak(h2.location(),
                            reinterpret_cast<void*>(1234),
@@ -423,7 +426,8 @@ TEST(WeakGlobalHandlesMark) {
   CHECK(!GlobalHandles::IsNearDeath(h1.location()));
   CHECK(!GlobalHandles::IsNearDeath(h2.location()));
 
-  HEAP->CollectGarbage(OLD_POINTER_SPACE);
+  // Incremental marking potentially marked handles before they turned weak.
+  HEAP->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
 
   CHECK((*h1)->IsString());
 
@@ -981,8 +985,8 @@ TEST(TestCodeFlushing) {
   CHECK(function->shared()->is_compiled());
 
   // The code will survive at least two GCs.
-  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
-  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
+  HEAP->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
+  HEAP->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
   CHECK(function->shared()->is_compiled());
 
   // Simulate several GCs that use full marking.
@@ -1028,14 +1032,13 @@ TEST(TestCodeFlushingIncremental) {
   CHECK(function->shared()->is_compiled());
 
   // The code will survive at least two GCs.
-  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
-  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
+  HEAP->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
+  HEAP->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
   CHECK(function->shared()->is_compiled());
 
   // Simulate several GCs that use incremental marking.
   const int kAgingThreshold = 6;
   for (int i = 0; i < kAgingThreshold; i++) {
-    HEAP->incremental_marking()->Abort();
     SimulateIncrementalMarking();
     HEAP->CollectAllGarbage(Heap::kNoGCFlags);
   }
@@ -1050,7 +1053,6 @@ TEST(TestCodeFlushingIncremental) {
   // Simulate several GCs that use incremental marking but make sure
   // the loop breaks once the function is enqueued as a candidate.
   for (int i = 0; i < kAgingThreshold; i++) {
-    HEAP->incremental_marking()->Abort();
     SimulateIncrementalMarking();
     if (!function->next_function_link()->IsUndefined()) break;
     HEAP->CollectAllGarbage(Heap::kNoGCFlags);
@@ -1089,7 +1091,7 @@ TEST(TestCodeFlushingIncrementalScavenge) {
   Handle<String> bar_name = FACTORY->LookupAsciiSymbol("bar");
 
   // Perfrom one initial GC to enable code flushing.
-  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
+  HEAP->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
 
   // This compile will add the code to the compilation cache.
   { v8::HandleScope scope;
@@ -1162,8 +1164,8 @@ TEST(TestCodeFlushingIncrementalAbort) {
   CHECK(function->shared()->is_compiled());
 
   // The code will survive at least two GCs.
-  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
-  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
+  HEAP->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
+  HEAP->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
   CHECK(function->shared()->is_compiled());
 
   // Bump the code age so that flushing is triggered.
@@ -1224,6 +1226,10 @@ static int CountOptimizedUserFunctions(v8::Handle<v8::Context> context) {
 
 TEST(TestInternalWeakLists) {
   v8::V8::Initialize();
+
+  // Some flags turn Scavenge collections into Mark-sweep collections
+  // and hence are incompatible with this test case.
+  if (FLAG_gc_global || FLAG_stress_compaction) return;
 
   static const int kNumTestContexts = 10;
 
@@ -1946,6 +1952,7 @@ TEST(OptimizedAllocationAlwaysInNewSpace) {
   i::FLAG_allow_natives_syntax = true;
   InitializeVM();
   if (!i::V8::UseCrankshaft() || i::FLAG_always_opt) return;
+  if (i::FLAG_gc_global || i::FLAG_stress_compaction) return;
   v8::HandleScope scope;
 
   SimulateFullSpace(HEAP->new_space());
@@ -2121,7 +2128,7 @@ TEST(ReleaseOverReservedPages) {
   // Triggering one GC will cause a lot of garbage to be discovered but
   // even spread across all allocated pages.
   HEAP->CollectAllGarbage(Heap::kNoGCFlags, "triggered for preparation");
-  CHECK_EQ(number_of_test_pages + 1, old_pointer_space->CountTotalPages());
+  CHECK_GE(number_of_test_pages + 1, old_pointer_space->CountTotalPages());
 
   // Triggering subsequent GCs should cause at least half of the pages
   // to be released to the OS after at most two cycles.
@@ -2507,4 +2514,64 @@ TEST(Regression144230) {
   // the CallIC is executed the next time.
   USE(global->SetProperty(*name, *call_function, NONE, kNonStrictMode));
   CompileRun("call();");
+}
+
+
+TEST(Regress159140) {
+  i::FLAG_allow_natives_syntax = true;
+  i::FLAG_flush_code_incrementally = true;
+  InitializeVM();
+  v8::HandleScope scope;
+
+  // Perform one initial GC to enable code flushing.
+  HEAP->CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
+
+  // Prepare several closures that are all eligible for code flushing
+  // because all reachable ones are not optimized. Make sure that the
+  // optimized code object is directly reachable through a handle so
+  // that it is marked black during incremental marking.
+  Handle<Code> code;
+  {
+    HandleScope inner_scope;
+    CompileRun("function h(x) {}"
+               "function mkClosure() {"
+               "  return function(x) { return x + 1; };"
+               "}"
+               "var f = mkClosure();"
+               "var g = mkClosure();"
+               "f(1); f(2);"
+               "g(1); g(2);"
+               "h(1); h(2);"
+               "%OptimizeFunctionOnNextCall(f); f(3);"
+               "%OptimizeFunctionOnNextCall(h); h(3);");
+
+    Handle<JSFunction> f =
+        v8::Utils::OpenHandle(
+            *v8::Handle<v8::Function>::Cast(
+                v8::Context::GetCurrent()->Global()->Get(v8_str("f"))));
+    CHECK(f->is_compiled());
+    CompileRun("f = null;");
+
+    Handle<JSFunction> g =
+        v8::Utils::OpenHandle(
+            *v8::Handle<v8::Function>::Cast(
+                v8::Context::GetCurrent()->Global()->Get(v8_str("g"))));
+    CHECK(g->is_compiled());
+    const int kAgingThreshold = 6;
+    for (int i = 0; i < kAgingThreshold; i++) {
+      g->code()->MakeOlder(static_cast<MarkingParity>(i % 2));
+    }
+
+    code = inner_scope.CloseAndEscape(Handle<Code>(f->code()));
+  }
+
+  // Simulate incremental marking so that the functions are enqueued as
+  // code flushing candidates. Then optimize one function. Finally
+  // finish the GC to complete code flushing.
+  SimulateIncrementalMarking();
+  CompileRun("%OptimizeFunctionOnNextCall(g); g(3);");
+  HEAP->CollectAllGarbage(Heap::kNoGCFlags);
+
+  // Unoptimized code is missing and the deoptimizer will go ballistic.
+  CompileRun("g('bozo');");
 }

@@ -1790,9 +1790,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_RegExpInitializeObject) {
         JSRegExp::kIgnoreCaseFieldIndex, ignoreCase, SKIP_WRITE_BARRIER);
     regexp->InObjectPropertyAtPut(
         JSRegExp::kMultilineFieldIndex, multiline, SKIP_WRITE_BARRIER);
-    regexp->InObjectPropertyAtPut(JSRegExp::kLastIndexFieldIndex,
-                                  Smi::FromInt(0),
-                                  SKIP_WRITE_BARRIER);  // It's a Smi.
+    regexp->ResetLastIndex();
     return regexp;
   }
 
@@ -2904,7 +2902,10 @@ MUST_USE_RESULT static MaybeObject* StringReplaceAtomRegExpWithString(
       isolate, *subject, pattern, &indices, 0xffffffff, zone);
 
   int matches = indices.length();
-  if (matches == 0) return *subject;
+  if (matches == 0) {
+    pattern_regexp->ResetLastIndex();
+    return *subject;
+  }
 
   // Detect integer overflow.
   int64_t result_len_64 =
@@ -3004,6 +3005,7 @@ MUST_USE_RESULT static MaybeObject* StringReplaceRegExpWithString(
   int32_t* current_match = global_cache.FetchNext();
   if (current_match == NULL) {
     if (global_cache.HasException()) return Failure::Exception();
+    regexp->ResetLastIndex();
     return *subject;
   }
 
@@ -3102,6 +3104,7 @@ MUST_USE_RESULT static MaybeObject* StringReplaceRegExpWithEmptyString(
   int32_t* current_match = global_cache.FetchNext();
   if (current_match == NULL) {
     if (global_cache.HasException()) return Failure::Exception();
+    regexp->ResetLastIndex();
     return *subject;
   }
 
@@ -3804,15 +3807,6 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_NumberToFixed) {
   ASSERT(args.length() == 2);
 
   CONVERT_DOUBLE_ARG_CHECKED(value, 0);
-  if (isnan(value)) {
-    return *isolate->factory()->nan_symbol();
-  }
-  if (isinf(value)) {
-    if (value < 0) {
-      return *isolate->factory()->minus_infinity_symbol();
-    }
-    return *isolate->factory()->infinity_symbol();
-  }
   CONVERT_DOUBLE_ARG_CHECKED(f_number, 1);
   int f = FastD2IChecked(f_number);
   RUNTIME_ASSERT(f >= 0);
@@ -3829,15 +3823,6 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_NumberToExponential) {
   ASSERT(args.length() == 2);
 
   CONVERT_DOUBLE_ARG_CHECKED(value, 0);
-  if (isnan(value)) {
-    return *isolate->factory()->nan_symbol();
-  }
-  if (isinf(value)) {
-    if (value < 0) {
-      return *isolate->factory()->minus_infinity_symbol();
-    }
-    return *isolate->factory()->infinity_symbol();
-  }
   CONVERT_DOUBLE_ARG_CHECKED(f_number, 1);
   int f = FastD2IChecked(f_number);
   RUNTIME_ASSERT(f >= -1 && f <= 20);
@@ -3854,15 +3839,6 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_NumberToPrecision) {
   ASSERT(args.length() == 2);
 
   CONVERT_DOUBLE_ARG_CHECKED(value, 0);
-  if (isnan(value)) {
-    return *isolate->factory()->nan_symbol();
-  }
-  if (isinf(value)) {
-    if (value < 0) {
-      return *isolate->factory()->minus_infinity_symbol();
-    }
-    return *isolate->factory()->infinity_symbol();
-  }
   CONVERT_DOUBLE_ARG_CHECKED(f_number, 1);
   int f = FastD2IChecked(f_number);
   RUNTIME_ASSERT(f >= 1 && f <= 21);
@@ -5098,46 +5074,22 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_StringToNumber) {
 }
 
 
-RUNTIME_FUNCTION(MaybeObject*, Runtime_StringFromCharCodeArray) {
-  NoHandleAllocation ha;
-  ASSERT(args.length() == 1);
-
-  CONVERT_ARG_CHECKED(JSArray, codes, 0);
-  int length = Smi::cast(codes->length())->value();
-
-  // Check if the string can be ASCII.
-  int i;
-  for (i = 0; i < length; i++) {
-    Object* element;
-    { MaybeObject* maybe_element = codes->GetElement(i);
-      // We probably can't get an exception here, but just in order to enforce
-      // the checking of inputs in the runtime calls we check here.
-      if (!maybe_element->ToObject(&element)) return maybe_element;
-    }
-    CONVERT_NUMBER_CHECKED(int, chr, Int32, element);
-    if ((chr & 0xffff) > String::kMaxAsciiCharCode)
-      break;
+RUNTIME_FUNCTION(MaybeObject*, Runtime_NewString) {
+  CONVERT_SMI_ARG_CHECKED(length, 0);
+  CONVERT_BOOLEAN_ARG_CHECKED(is_one_byte, 1);
+  if (length == 0) return isolate->heap()->empty_string();
+  if (is_one_byte) {
+    return isolate->heap()->AllocateRawOneByteString(length);
+  } else {
+    return isolate->heap()->AllocateRawTwoByteString(length);
   }
+}
 
-  MaybeObject* maybe_object = NULL;
-  if (i == length) {  // The string is ASCII.
-    maybe_object = isolate->heap()->AllocateRawOneByteString(length);
-  } else {  // The string is not ASCII.
-    maybe_object = isolate->heap()->AllocateRawTwoByteString(length);
-  }
 
-  Object* object = NULL;
-  if (!maybe_object->ToObject(&object)) return maybe_object;
-  String* result = String::cast(object);
-  for (int i = 0; i < length; i++) {
-    Object* element;
-    { MaybeObject* maybe_element = codes->GetElement(i);
-      if (!maybe_element->ToObject(&element)) return maybe_element;
-    }
-    CONVERT_NUMBER_CHECKED(int, chr, Int32, element);
-    result->Set(i, chr & 0xffff);
-  }
-  return result;
+RUNTIME_FUNCTION(MaybeObject*, Runtime_TruncateString) {
+  CONVERT_ARG_CHECKED(SeqString, string, 0);
+  CONVERT_SMI_ARG_CHECKED(new_length, 1);
+  return string->Truncate(new_length);
 }
 
 
@@ -8183,15 +8135,8 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_CompileForOnStackReplacement) {
     function->PrintName();
     PrintF("]\n");
   }
-  Handle<Code> check_code;
-  if (FLAG_count_based_interrupts) {
-    InterruptStub interrupt_stub;
-    check_code = interrupt_stub.GetCode();
-  } else  // NOLINT
-  {  // NOLINT
-    StackCheckStub check_stub;
-    check_code = check_stub.GetCode();
-  }
+  InterruptStub interrupt_stub;
+  Handle<Code> check_code = interrupt_stub.GetCode();
   Handle<Code> replacement_code = isolate->builtins()->OnStackReplacement();
   Deoptimizer::RevertStackCheckCode(*unoptimized,
                                     *check_code,
@@ -13402,6 +13347,12 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_HaveSameMap) {
 RUNTIME_FUNCTION(MaybeObject*, Runtime_IsObserved) {
   ASSERT(args.length() == 1);
   CONVERT_ARG_CHECKED(JSReceiver, obj, 0);
+  if (obj->IsJSGlobalProxy()) {
+    Object* proto = obj->GetPrototype();
+    if (obj->IsNull()) return isolate->heap()->false_value();
+    ASSERT(proto->IsJSGlobalObject());
+    obj = JSReceiver::cast(proto);
+  }
   return isolate->heap()->ToBoolean(obj->map()->is_observed());
 }
 
@@ -13410,6 +13361,12 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_SetIsObserved) {
   ASSERT(args.length() == 2);
   CONVERT_ARG_CHECKED(JSReceiver, obj, 0);
   CONVERT_BOOLEAN_ARG_CHECKED(is_observed, 1);
+  if (obj->IsJSGlobalProxy()) {
+    Object* proto = obj->GetPrototype();
+    if (obj->IsNull()) return isolate->heap()->undefined_value();
+    ASSERT(proto->IsJSGlobalObject());
+    obj = JSReceiver::cast(proto);
+  }
   if (obj->map()->is_observed() != is_observed) {
     MaybeObject* maybe = obj->map()->Copy();
     Map* map;
@@ -13445,6 +13402,10 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_ObjectHashTableGet) {
   ASSERT(args.length() == 2);
   CONVERT_ARG_CHECKED(ObjectHashTable, table, 0);
   Object* key = args[1];
+  if (key->IsJSGlobalProxy()) {
+    key = key->GetPrototype();
+    if (key->IsNull()) return isolate->heap()->undefined_value();
+  }
   Object* lookup = table->Lookup(key);
   return lookup->IsTheHole() ? isolate->heap()->undefined_value() : lookup;
 }
@@ -13455,18 +13416,12 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_ObjectHashTableSet) {
   ASSERT(args.length() == 3);
   CONVERT_ARG_HANDLE_CHECKED(ObjectHashTable, table, 0);
   Handle<Object> key = args.at<Object>(1);
+  if (key->IsJSGlobalProxy()) {
+    key = handle(key->GetPrototype(), isolate);
+    if (key->IsNull()) return *table;
+  }
   Handle<Object> value = args.at<Object>(2);
   return *PutIntoObjectHashTable(table, key, value);
-}
-
-
-RUNTIME_FUNCTION(MaybeObject*, Runtime_ObjectHashTableHas) {
-  NoHandleAllocation ha;
-  ASSERT(args.length() == 2);
-  CONVERT_ARG_CHECKED(ObjectHashTable, table, 0);
-  Object* key = args[1];
-  Object* lookup = table->Lookup(key);
-  return isolate->heap()->ToBoolean(!lookup->IsTheHole());
 }
 
 

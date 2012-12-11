@@ -155,6 +155,7 @@ class LChunkBuilder;
   V(Return)                                    \
   V(Ror)                                       \
   V(Sar)                                       \
+  V(SeqStringSetChar)                          \
   V(Shl)                                       \
   V(Shr)                                       \
   V(Simulate)                                  \
@@ -3658,6 +3659,16 @@ class HDiv: public HArithmeticBinaryOperation {
     SetFlag(kCanOverflow);
   }
 
+  bool HasPowerOf2Divisor() {
+    if (right()->IsConstant() &&
+        HConstant::cast(right())->HasInteger32Value()) {
+      int32_t value = HConstant::cast(right())->Integer32Value();
+      return value != 0 && (IsPowerOf2(value) || IsPowerOf2(-value));
+    }
+
+    return false;
+  }
+
   virtual HValue* EnsureAndPropagateNotMinusZero(BitVector* visited);
 
   static HInstruction* NewHDiv(Zone* zone,
@@ -3690,6 +3701,8 @@ class HMathMinMax: public HArithmeticBinaryOperation {
   virtual Representation observed_input_representation(int index) {
     return RequiredInputRepresentation(index);
   }
+
+  virtual void InferRepresentation(HInferRepresentation* h_infer);
 
   virtual Representation RepresentationFromInputs() {
     Representation left_rep = left()->representation();
@@ -5209,6 +5222,33 @@ class HDateField: public HUnaryOperation {
 
  private:
   Smi* index_;
+};
+
+
+class HSeqStringSetChar: public HTemplateInstruction<3> {
+ public:
+  HSeqStringSetChar(String::Encoding encoding,
+                    HValue* string,
+                    HValue* index,
+                    HValue* value) : encoding_(encoding) {
+    SetOperandAt(0, string);
+    SetOperandAt(1, index);
+    SetOperandAt(2, value);
+  }
+
+  String::Encoding encoding() { return encoding_; }
+  HValue* string() { return OperandAt(0); }
+  HValue* index() { return OperandAt(1); }
+  HValue* value() { return OperandAt(2); }
+
+  virtual Representation RequiredInputRepresentation(int index) {
+    return Representation::Tagged();
+  }
+
+  DECLARE_CONCRETE_INSTRUCTION(SeqStringSetChar)
+
+ private:
+  String::Encoding encoding_;
 };
 
 

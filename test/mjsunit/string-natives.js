@@ -25,31 +25,48 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Filler long enough to trigger lazy parsing.
-var filler = "//" + new Array(1024).join('x');
+// Flags: --expose-gc --allow-natives-syntax
 
-// Test strict eval in global context.
-assertEquals(23, eval(
-  "'use strict';" +
-  "var x = 23;" +
-  "var f = function bozo1() {" +
-  "  return x;" +
-  "};" +
-  "assertSame(23, f());" +
-  "f;" +
-  filler
-)());
+function test() {
+  var s1 = %NewString(26, true);
+  for (i = 0; i < 26; i++) %_OneByteSeqStringSetChar(s1, i, i+65);
+  assertEquals("ABCDEFGHIJKLMNOPQRSTUVWXYZ", s1);
+  s1 = %TruncateString(s1, 13);
+  assertEquals("ABCDEFGHIJKLM", s1);
 
-// Test default eval in strict context.
-assertEquals(42, (function() {
-  "use strict";
-  return eval(
-    "var y = 42;" +
-    "var g = function bozo2() {" +
-    "  return y;" +
-    "};" +
-    "assertSame(42, g());" +
-    "g;" +
-    filler
-  )();
-})());
+  var s2 = %NewString(26, false);
+  for (i = 0; i < 26; i++) %_TwoByteSeqStringSetChar(s2, i, i+65);
+  assertEquals("ABCDEFGHIJKLMNOPQRSTUVWXYZ", s2);
+  s2 = %TruncateString(s1, 13);
+  assertEquals("ABCDEFGHIJKLM", s2);
+
+  var s3 = %NewString(26, false);
+  for (i = 0; i < 26; i++) %_TwoByteSeqStringSetChar(s3, i, i+1000);
+  for (i = 0; i < 26; i++) assertEquals(s3[i], String.fromCharCode(i+1000));
+
+  var a = [];
+  for (var i = 0; i < 1000; i++) {
+    var s = %NewString(10000, i % 2 == 1);
+    a.push(s);
+  }
+
+  gc();
+
+  for (var i = 0; i < 1000; i++) {
+    assertEquals(10000, a[i].length);
+    a[i] = %TruncateString(a[i], 5000);
+  }
+
+  gc();
+
+  for (var i = 0; i < 1000; i++) {
+    assertEquals(5000, a[i].length);
+  }
+}
+
+
+test();
+test();
+%OptimizeFunctionOnNextCall(test);
+test();
+

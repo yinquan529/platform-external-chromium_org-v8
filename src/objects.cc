@@ -27,6 +27,7 @@
 
 #include "v8.h"
 
+#include "accessors.h"
 #include "api.h"
 #include "arguments.h"
 #include "bootstrapper.h"
@@ -1753,6 +1754,9 @@ void JSObject::EnqueueChangeRecord(Handle<JSObject> object,
   Isolate* isolate = object->GetIsolate();
   HandleScope scope;
   Handle<String> type = isolate->factory()->LookupAsciiSymbol(type_str);
+  if (object->IsJSGlobalObject()) {
+    object = handle(JSGlobalObject::cast(*object)->global_receiver(), isolate);
+  }
   Handle<Object> args[] = { type, object, name, old_value };
   bool threw;
   Execution::Call(Handle<JSFunction>(isolate->observers_notify_change()),
@@ -3104,8 +3108,17 @@ MaybeObject* JSObject::SetLocalPropertyIgnoreAttributes(
 
   Handle<Object> old_value(isolate->heap()->the_hole_value(), isolate);
   PropertyAttributes old_attributes = ABSENT;
-  if (FLAG_harmony_observation && map()->is_observed()) {
-    old_value = handle(lookup.GetLazyValue(), isolate);
+  bool is_observed = FLAG_harmony_observation && self->map()->is_observed();
+  if (is_observed) {
+    // Function prototypes are stored specially
+    if (self->IsJSFunction() &&
+        JSFunction::cast(*self)->should_have_prototype() &&
+        name->Equals(isolate->heap()->prototype_symbol())) {
+      MaybeObject* maybe = Accessors::FunctionGetPrototype(*self, NULL);
+      if (!maybe->ToHandle(&old_value, isolate)) return maybe;
+    } else {
+      old_value = handle(lookup.GetLazyValue(), isolate);
+    }
     old_attributes = lookup.GetAttributes();
   }
 
@@ -3169,7 +3182,7 @@ MaybeObject* JSObject::SetLocalPropertyIgnoreAttributes(
   Handle<Object> hresult;
   if (!result->ToHandle(&hresult, isolate)) return result;
 
-  if (FLAG_harmony_observation && map()->is_observed()) {
+  if (is_observed) {
     if (lookup.IsTransition()) {
       EnqueueChangeRecord(self, "new", name, old_value);
     } else {
@@ -7013,8 +7026,128 @@ void StringInputBuffer::Seek(unsigned pos) {
 }
 
 
-void SafeStringInputBuffer::Seek(unsigned pos) {
-  Reset(pos, input_);
+String* ConsStringIteratorOp::Operate(ConsString* consString,
+    unsigned* outerOffset, int32_t* typeOut, unsigned* lengthOut) {
+  ASSERT(*lengthOut == (unsigned)consString->length());
+  // Push the root string.
+  PushLeft(consString);
+  root_ = consString;
+  root_type_ = *typeOut;
+  root_length_ = *lengthOut;
+  unsigned targetOffset = *outerOffset;
+  unsigned offset = 0;
+  while (true) {
+    // Loop until the string is found which contains the target offset.
+    String* string = consString->first();
+    unsigned length = string->length();
+    int32_t type;
+    if (targetOffset < offset + length) {
+      // Target offset is in the left branch.
+      // Mark the descent.
+      ClearRightDescent();
+      // Keep going if we're still in a ConString.
+      type = string->map()->instance_type();
+      if ((type & kStringRepresentationMask) == kConsStringTag) {
+        consString = ConsString::cast(string);
+        PushLeft(consString);
+        continue;
+      }
+    } else {
+      // Descend right.
+      // Update progress through the string.
+      offset += length;
+      // Keep going if we're still in a ConString.
+      string = consString->second();
+      type = string->map()->instance_type();
+      if ((type & kStringRepresentationMask) == kConsStringTag) {
+        consString = ConsString::cast(string);
+        PushRight(consString, type);
+        continue;
+      }
+      // Mark the descent.
+      SetRightDescent();
+      // Need this to be updated for the current string.
+      length = string->length();
+      // Account for the possibility of an empty right leaf.
+      while (length == 0) {
+        bool blewStack;
+        // Need to adjust maximum depth for NextLeaf to work.
+        AdjustMaximumDepth();
+        string = NextLeaf(&blewStack, &type);
+        if (string == NULL) {
+          // Luckily, this case is impossible.
+          ASSERT(!blewStack);
+          return NULL;
+        }
+        length = string->length();
+      }
+    }
+    // Tell the stack we're done decending.
+    AdjustMaximumDepth();
+    ASSERT(length != 0);
+    // Adjust return values and exit.
+    unsigned innerOffset = targetOffset - offset;
+    consumed_ += length - innerOffset;
+    *outerOffset = innerOffset;
+    *typeOut = type;
+    *lengthOut = length;
+    return string;
+  }
+  UNREACHABLE();
+  return NULL;
+}
+
+
+String* ConsStringIteratorOp::NextLeaf(bool* blewStack, int32_t* typeOut) {
+  while (true) {
+    // Tree traversal complete.
+    if (depth_ == 0) {
+      *blewStack = false;
+      return NULL;
+    }
+    // We've lost track of higher nodes.
+    if (maximum_depth_ - depth_ == kStackSize) {
+      *blewStack = true;
+      return NULL;
+    }
+    // Check if we're done with this level.
+    bool haveAlreadyReadRight = trace_ & MaskForDepth(depth_ - 1);
+    if (haveAlreadyReadRight) {
+      Pop();
+      continue;
+    }
+    // Go right.
+    ConsString* consString = frames_[OffsetForDepth(depth_ - 1)];
+    String* string = consString->second();
+    int32_t type = string->map()->instance_type();
+    if ((type & kStringRepresentationMask) != kConsStringTag) {
+      // Don't need to mark the descent here.
+      // Pop stack so next iteration is in correct place.
+      Pop();
+      *typeOut = type;
+      return string;
+    }
+    // No need to mark the descent.
+    consString = ConsString::cast(string);
+    PushRight(consString, type);
+    // Need to traverse all the way left.
+    while (true) {
+      // Continue left.
+      // Update marker.
+      ClearRightDescent();
+      string = consString->first();
+      type = string->map()->instance_type();
+      if ((type & kStringRepresentationMask) != kConsStringTag) {
+        AdjustMaximumDepth();
+        *typeOut = type;
+        return string;
+      }
+      consString = ConsString::cast(string);
+      PushLeft(consString);
+    }
+  }
+  UNREACHABLE();
+  return NULL;
 }
 
 
@@ -7619,6 +7752,36 @@ bool String::SlowAsArrayIndex(uint32_t* index) {
     StringInputBuffer buffer(this);
     return ComputeArrayIndex(&buffer, index, length());
   }
+}
+
+
+String* SeqString::Truncate(int new_length) {
+  Heap* heap = GetHeap();
+  if (new_length <= 0) return heap->empty_string();
+
+  int string_size, allocated_string_size;
+  int old_length = length();
+  if (old_length <= new_length) return this;
+
+  if (IsSeqOneByteString()) {
+    allocated_string_size = SeqOneByteString::SizeFor(old_length);
+    string_size = SeqOneByteString::SizeFor(new_length);
+  } else {
+    allocated_string_size = SeqTwoByteString::SizeFor(old_length);
+    string_size = SeqTwoByteString::SizeFor(new_length);
+  }
+
+  int delta = allocated_string_size - string_size;
+  set_length(new_length);
+
+  // String sizes are pointer size aligned, so that we can use filler objects
+  // that are a multiple of pointer size.
+  Address end_of_string = address() + string_size;
+  heap->CreateFillerObjectAt(end_of_string, delta);
+  if (Marking::IsBlack(Marking::MarkBitFrom(this))) {
+    MemoryChunk::IncrementLiveBytesFromMutator(address(), -delta);
+  }
+  return this;
 }
 
 
@@ -9982,7 +10145,7 @@ MaybeObject* JSObject::SetFastElement(uint32_t index,
 
 
 MaybeObject* JSObject::SetDictionaryElement(uint32_t index,
-                                            Object* value,
+                                            Object* value_raw,
                                             PropertyAttributes attributes,
                                             StrictModeFlag strict_mode,
                                             bool check_prototype,
@@ -9990,24 +10153,23 @@ MaybeObject* JSObject::SetDictionaryElement(uint32_t index,
   ASSERT(HasDictionaryElements() || HasDictionaryArgumentsElements());
   Isolate* isolate = GetIsolate();
   Heap* heap = isolate->heap();
+  Handle<JSObject> self(this);
+  Handle<Object> value(value_raw);
 
   // Insert element in the dictionary.
-  FixedArray* elements = FixedArray::cast(this->elements());
+  Handle<FixedArray> elements(FixedArray::cast(this->elements()));
   bool is_arguments =
       (elements->map() == heap->non_strict_arguments_elements_map());
-  SeededNumberDictionary* dictionary = NULL;
-  if (is_arguments) {
-    dictionary = SeededNumberDictionary::cast(elements->get(1));
-  } else {
-    dictionary = SeededNumberDictionary::cast(elements);
-  }
+  Handle<SeededNumberDictionary> dictionary(is_arguments
+    ? SeededNumberDictionary::cast(elements->get(1))
+    : SeededNumberDictionary::cast(*elements));
 
   int entry = dictionary->FindEntry(index);
   if (entry != SeededNumberDictionary::kNotFound) {
     Object* element = dictionary->ValueAt(entry);
     PropertyDetails details = dictionary->DetailsAt(entry);
     if (details.type() == CALLBACKS && set_mode == SET_PROPERTY) {
-      return SetElementWithCallback(element, index, value, this, strict_mode);
+      return SetElementWithCallback(element, index, *value, this, strict_mode);
     } else {
       dictionary->UpdateMaxNumberKey(index);
       // If a value has not been initialized we allow writing to it even if it
@@ -10036,24 +10198,24 @@ MaybeObject* JSObject::SetDictionaryElement(uint32_t index,
         Context* context = Context::cast(elements->get(0));
         int context_index = entry->aliased_context_slot();
         ASSERT(!context->get(context_index)->IsTheHole());
-        context->set(context_index, value);
+        context->set(context_index, *value);
         // For elements that are still writable we keep slow aliasing.
-        if (!details.IsReadOnly()) value = element;
+        if (!details.IsReadOnly()) value = handle(element, isolate);
       }
-      dictionary->ValueAtPut(entry, value);
+      dictionary->ValueAtPut(entry, *value);
     }
   } else {
     // Index not already used. Look for an accessor in the prototype chain.
+    // Can cause GC!
     if (check_prototype) {
       bool found;
-      MaybeObject* result =
-          SetElementWithCallbackSetterInPrototypes(
-              index, value, &found, strict_mode);
+      MaybeObject* result = SetElementWithCallbackSetterInPrototypes(
+          index, *value, &found, strict_mode);
       if (found) return result;
     }
     // When we set the is_extensible flag to false we always force the
     // element into dictionary mode (and force them to stay there).
-    if (!map()->is_extensible()) {
+    if (!self->map()->is_extensible()) {
       if (strict_mode == kNonStrictMode) {
         return isolate->heap()->undefined_value();
       } else {
@@ -10068,30 +10230,31 @@ MaybeObject* JSObject::SetDictionaryElement(uint32_t index,
     }
     FixedArrayBase* new_dictionary;
     PropertyDetails details = PropertyDetails(attributes, NORMAL);
-    MaybeObject* maybe = dictionary->AddNumberEntry(index, value, details);
+    MaybeObject* maybe = dictionary->AddNumberEntry(index, *value, details);
     if (!maybe->To(&new_dictionary)) return maybe;
-    if (dictionary != SeededNumberDictionary::cast(new_dictionary)) {
+    if (*dictionary != SeededNumberDictionary::cast(new_dictionary)) {
       if (is_arguments) {
         elements->set(1, new_dictionary);
       } else {
-        set_elements(new_dictionary);
+        self->set_elements(new_dictionary);
       }
-      dictionary = SeededNumberDictionary::cast(new_dictionary);
+      dictionary =
+          handle(SeededNumberDictionary::cast(new_dictionary), isolate);
     }
   }
 
   // Update the array length if this JSObject is an array.
-  if (IsJSArray()) {
+  if (self->IsJSArray()) {
     MaybeObject* result =
-        JSArray::cast(this)->JSArrayUpdateLengthFromIndex(index, value);
+        JSArray::cast(*self)->JSArrayUpdateLengthFromIndex(index, *value);
     if (result->IsFailure()) return result;
   }
 
   // Attempt to put this object back in fast case.
-  if (ShouldConvertToFastElements()) {
+  if (self->ShouldConvertToFastElements()) {
     uint32_t new_length = 0;
-    if (IsJSArray()) {
-      CHECK(JSArray::cast(this)->length()->ToArrayIndex(&new_length));
+    if (self->IsJSArray()) {
+      CHECK(JSArray::cast(*self)->length()->ToArrayIndex(&new_length));
     } else {
       new_length = dictionary->max_number_key() + 1;
     }
@@ -10100,16 +10263,15 @@ MaybeObject* JSObject::SetDictionaryElement(uint32_t index,
         : kDontAllowSmiElements;
     bool has_smi_only_elements = false;
     bool should_convert_to_fast_double_elements =
-        ShouldConvertToFastDoubleElements(&has_smi_only_elements);
+        self->ShouldConvertToFastDoubleElements(&has_smi_only_elements);
     if (has_smi_only_elements) {
       smi_mode = kForceSmiElements;
     }
     MaybeObject* result = should_convert_to_fast_double_elements
-        ? SetFastDoubleElementsCapacityAndLength(new_length, new_length)
-        : SetFastElementsCapacityAndLength(new_length,
-                                           new_length,
-                                           smi_mode);
-    ValidateElements();
+        ? self->SetFastDoubleElementsCapacityAndLength(new_length, new_length)
+        : self->SetFastElementsCapacityAndLength(
+            new_length, new_length, smi_mode);
+    self->ValidateElements();
     if (result->IsFailure()) return result;
 #ifdef DEBUG
     if (FLAG_trace_normalization) {
@@ -10118,7 +10280,7 @@ MaybeObject* JSObject::SetDictionaryElement(uint32_t index,
     }
 #endif
   }
-  return value;
+  return *value;
 }
 
 

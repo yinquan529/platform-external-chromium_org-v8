@@ -25,31 +25,28 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Filler long enough to trigger lazy parsing.
-var filler = "//" + new Array(1024).join('x');
+function testSideEffects(subject, re) {
+  var counter = 0;
+  var side_effect_object = { valueOf: function() { return counter++; } };
+  re.lastIndex = side_effect_object;
+  re.exec(subject);
+  assertEquals(1, counter);
 
-// Test strict eval in global context.
-assertEquals(23, eval(
-  "'use strict';" +
-  "var x = 23;" +
-  "var f = function bozo1() {" +
-  "  return x;" +
-  "};" +
-  "assertSame(23, f());" +
-  "f;" +
-  filler
-)());
+  re.lastIndex = side_effect_object;
+  re.test(subject);
+  assertEquals(2, counter);
 
-// Test default eval in strict context.
-assertEquals(42, (function() {
-  "use strict";
-  return eval(
-    "var y = 42;" +
-    "var g = function bozo2() {" +
-    "  return y;" +
-    "};" +
-    "assertSame(42, g());" +
-    "g;" +
-    filler
-  )();
-})());
+  re.lastIndex = side_effect_object;
+  subject.match(re);
+  assertEquals(3, counter);
+
+  re.lastIndex = side_effect_object;
+  subject.replace(re, "");
+  assertEquals(4, counter);
+}
+
+testSideEffects("zzzz", /a/);
+testSideEffects("zzzz", /a/g);
+testSideEffects("xaxa", /a/);
+testSideEffects("xaxa", /a/g);
+

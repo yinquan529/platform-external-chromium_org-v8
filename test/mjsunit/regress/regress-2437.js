@@ -25,31 +25,51 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Filler long enough to trigger lazy parsing.
-var filler = "//" + new Array(1024).join('x');
+// Test Regexp.prototype.exec
+r = /a/;
+r.lastIndex = 1;
+r.exec("zzzz");
+assertEquals(0, r.lastIndex);
 
-// Test strict eval in global context.
-assertEquals(23, eval(
-  "'use strict';" +
-  "var x = 23;" +
-  "var f = function bozo1() {" +
-  "  return x;" +
-  "};" +
-  "assertSame(23, f());" +
-  "f;" +
-  filler
-)());
+// Test Regexp.prototype.test
+r = /a/;
+r.lastIndex = 1;
+r.test("zzzz");
+assertEquals(0, r.lastIndex);
 
-// Test default eval in strict context.
-assertEquals(42, (function() {
-  "use strict";
-  return eval(
-    "var y = 42;" +
-    "var g = function bozo2() {" +
-    "  return y;" +
-    "};" +
-    "assertSame(42, g());" +
-    "g;" +
-    filler
-  )();
-})());
+// Test String.prototype.match
+r = /a/;
+r.lastIndex = 1;
+"zzzz".match(r);
+assertEquals(0, r.lastIndex);
+
+// Test String.prototype.replace with atomic regexp and empty string.
+r = /a/;
+r.lastIndex = 1;
+"zzzz".replace(r, "");
+assertEquals(0, r.lastIndex);
+
+// Test String.prototype.replace with non-atomic regexp and empty string.
+r = /\d/;
+r.lastIndex = 1;
+"zzzz".replace(r, "");
+assertEquals(0, r.lastIndex);
+
+// Test String.prototype.replace with atomic regexp and non-empty string.
+r = /a/;
+r.lastIndex = 1;
+"zzzz".replace(r, "a");
+assertEquals(0, r.lastIndex);
+
+// Test String.prototype.replace with non-atomic regexp and non-empty string.
+r = /\d/;
+r.lastIndex = 1;
+"zzzz".replace(r, "a");
+assertEquals(0, r.lastIndex);
+
+// Test String.prototype.replace with replacement function
+r = /a/;
+r.lastIndex = 1;
+"zzzz".replace(r, function() { return ""; });
+assertEquals(0, r.lastIndex);
+

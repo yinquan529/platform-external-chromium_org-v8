@@ -9125,6 +9125,39 @@ void HGraphBuilder::GenerateDateField(CallRuntime* call) {
 }
 
 
+void HGraphBuilder::GenerateOneByteSeqStringSetChar(
+    CallRuntime* call) {
+  ASSERT(call->arguments()->length() == 3);
+  CHECK_ALIVE(VisitForValue(call->arguments()->at(0)));
+  CHECK_ALIVE(VisitForValue(call->arguments()->at(1)));
+  CHECK_ALIVE(VisitForValue(call->arguments()->at(2)));
+  HValue* value = Pop();
+  HValue* index = Pop();
+  HValue* string = Pop();
+  HSeqStringSetChar* result = new(zone()) HSeqStringSetChar(
+      String::ONE_BYTE_ENCODING, string, index, value);
+  return ast_context()->ReturnInstruction(result, call->id());
+}
+
+
+void HGraphBuilder::GenerateTwoByteSeqStringSetChar(
+    CallRuntime* call) {
+  ASSERT(call->arguments()->length() == 3);
+  CHECK_ALIVE(VisitForValue(call->arguments()->at(0)));
+  CHECK_ALIVE(VisitForValue(call->arguments()->at(1)));
+  CHECK_ALIVE(VisitForValue(call->arguments()->at(2)));
+  HValue* value = Pop();
+  HValue* index = Pop();
+  HValue* string = Pop();
+  HValue* context = environment()->LookupContext();
+  HStringCharCodeAt* char_code = BuildStringCharCodeAt(context, string, index);
+  AddInstruction(char_code);
+  HSeqStringSetChar* result = new(zone()) HSeqStringSetChar(
+      String::TWO_BYTE_ENCODING, string, index, value);
+  return ast_context()->ReturnInstruction(result, call->id());
+}
+
+
 void HGraphBuilder::GenerateSetValueOf(CallRuntime* call) {
   ASSERT(call->arguments()->length() == 2);
   CHECK_ALIVE(VisitForValue(call->arguments()->at(0)));
