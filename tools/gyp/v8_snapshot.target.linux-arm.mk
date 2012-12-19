@@ -19,7 +19,7 @@ $(gyp_intermediate_dir)/snapshot.cc: gyp_local_path := $(LOCAL_PATH)
 $(gyp_intermediate_dir)/snapshot.cc: gyp_intermediate_dir := $(GYP_ABS_ANDROID_TOP_DIR)/$(gyp_intermediate_dir)
 $(gyp_intermediate_dir)/snapshot.cc: gyp_shared_intermediate_dir := $(GYP_ABS_ANDROID_TOP_DIR)/$(gyp_shared_intermediate_dir)
 $(gyp_intermediate_dir)/snapshot.cc: $(gyp_shared_intermediate_dir)/mksnapshot $(GYP_TARGET_DEPENDENCIES)
-	@echo "Gyp action: _usr_local_google_code_automerger_external_chromium_org_v8_tools_gyp_v8_gyp_v8_snapshot_target_run_mksnapshot ($@)"
+	@echo "Gyp action: _automerger_android_src_external_chromium_org_v8_tools_gyp_v8_gyp_v8_snapshot_target_run_mksnapshot ($@)"
 	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_intermediate_dir); "$(gyp_shared_intermediate_dir)/mksnapshot" --log-snapshot-positions --logfile "$(gyp_intermediate_dir)/snapshot.log" "$(gyp_intermediate_dir)/snapshot.cc"
 
 
