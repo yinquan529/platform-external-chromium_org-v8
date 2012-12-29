@@ -38,6 +38,7 @@ LOCAL_SRC_FILES := \
 	v8/src/checks.cc \
 	v8/src/circular-queue.cc \
 	v8/src/code-stubs.cc \
+	v8/src/code-stubs-hydrogen.cc \
 	v8/src/codegen.cc \
 	v8/src/compilation-cache.cc \
 	v8/src/compiler.cc \
