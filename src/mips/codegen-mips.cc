@@ -143,7 +143,8 @@ void StubRuntimeCallHelper::AfterCall(MacroAssembler* masm) const {
 #define __ ACCESS_MASM(masm)
 
 void ElementsTransitionGenerator::GenerateMapChangeElementsTransition(
-    MacroAssembler* masm) {
+    MacroAssembler* masm, AllocationSiteMode mode,
+    Label* allocation_site_info_found) {
   // ----------- S t a t e -------------
   //  -- a0    : value
   //  -- a1    : key
@@ -152,6 +153,12 @@ void ElementsTransitionGenerator::GenerateMapChangeElementsTransition(
   //  -- a3    : target map, scratch for subsequent call
   //  -- t0    : scratch (elements)
   // -----------------------------------
+  if (mode == TRACK_ALLOCATION_SITE) {
+    ASSERT(allocation_site_info_found != NULL);
+    masm->TestJSArrayForAllocationSiteInfo(a2, t0,
+                                           allocation_site_info_found);
+  }
+
   // Set transitioned map.
   __ sw(a3, FieldMemOperand(a2, HeapObject::kMapOffset));
   __ RecordWriteField(a2,
@@ -166,7 +173,7 @@ void ElementsTransitionGenerator::GenerateMapChangeElementsTransition(
 
 
 void ElementsTransitionGenerator::GenerateSmiToDouble(
-    MacroAssembler* masm, Label* fail) {
+    MacroAssembler* masm, AllocationSiteMode mode, Label* fail) {
   // ----------- S t a t e -------------
   //  -- a0    : value
   //  -- a1    : key
@@ -180,7 +187,7 @@ void ElementsTransitionGenerator::GenerateSmiToDouble(
 
   Register scratch = t6;
 
-  if (FLAG_track_allocation_sites) {
+  if (mode == TRACK_ALLOCATION_SITE) {
     masm->TestJSArrayForAllocationSiteInfo(a2, t0, fail);
   }
 
@@ -313,7 +320,7 @@ void ElementsTransitionGenerator::GenerateSmiToDouble(
 
 
 void ElementsTransitionGenerator::GenerateDoubleToObject(
-    MacroAssembler* masm, Label* fail) {
+    MacroAssembler* masm, AllocationSiteMode mode, Label* fail) {
   // ----------- S t a t e -------------
   //  -- a0    : value
   //  -- a1    : key
@@ -323,6 +330,10 @@ void ElementsTransitionGenerator::GenerateDoubleToObject(
   //  -- t0    : scratch (elements)
   // -----------------------------------
   Label entry, loop, convert_hole, gc_required, only_change_map;
+
+  if (mode == TRACK_ALLOCATION_SITE) {
+    masm->TestJSArrayForAllocationSiteInfo(a2, t0, fail);
+  }
 
   // Check for empty arrays, which only require a map transition and no changes
   // to the backing store.
@@ -533,9 +544,9 @@ void SeqStringSetCharGenerator::Generate(MacroAssembler* masm,
     __ Check(eq, "Non-smi value", at, Operand(zero_reg));
 
     __ lw(at, FieldMemOperand(string, String::kLengthOffset));
-    __ Check(lt, "Index is too large", at, Operand(index));
+    __ Check(lt, "Index is too large", index, Operand(at));
 
-    __ Check(ge, "Index is negative", index, Operand(Smi::FromInt(0)));
+    __ Check(ge, "Index is negative", index, Operand(zero_reg));
 
     __ lw(at, FieldMemOperand(string, HeapObject::kMapOffset));
     __ lbu(at, FieldMemOperand(at, Map::kInstanceTypeOffset));
@@ -543,9 +554,9 @@ void SeqStringSetCharGenerator::Generate(MacroAssembler* masm,
     __ And(at, at, Operand(kStringRepresentationMask | kStringEncodingMask));
     static const uint32_t one_byte_seq_type = kSeqStringTag | kOneByteStringTag;
     static const uint32_t two_byte_seq_type = kSeqStringTag | kTwoByteStringTag;
-    __ Check(eq, "Unexpected string type", at,
-        Operand(encoding == String::ONE_BYTE_ENCODING
-                    ? one_byte_seq_type : two_byte_seq_type));
+    __ Subu(at, at, Operand(encoding == String::ONE_BYTE_ENCODING
+        ? one_byte_seq_type : two_byte_seq_type));
+    __ Check(eq, "Unexpected string type", at, Operand(zero_reg));
   }
 
   __ Addu(at,

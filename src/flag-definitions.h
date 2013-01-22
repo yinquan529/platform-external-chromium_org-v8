@@ -194,6 +194,8 @@ DEFINE_bool(trace_all_uses, false, "trace all use positions")
 DEFINE_bool(trace_range, false, "trace range analysis")
 DEFINE_bool(trace_gvn, false, "trace global value numbering")
 DEFINE_bool(trace_representation, false, "trace representation types")
+DEFINE_bool(trace_track_allocation_sites, false,
+            "trace the tracking of allocation sites")
 DEFINE_bool(stress_pointer_maps, false, "pointer map for every instruction")
 DEFINE_bool(stress_environments, false, "environment for every instruction")
 DEFINE_int(deopt_every_n_times,
@@ -209,6 +211,8 @@ DEFINE_bool(array_index_dehoisting, true,
             "perform array index dehoisting")
 DEFINE_bool(dead_code_elimination, true, "use dead code elimination")
 DEFINE_bool(trace_dead_code_elimination, false, "trace dead code elimination")
+DEFINE_bool(unreachable_code_elimination, false,
+            "eliminate unreachable code (hidden behind soft deopts)")
 DEFINE_bool(track_allocation_sites, true,
             "Use allocation site info to reduce transitions")
 DEFINE_bool(trace_osr, false, "trace on-stack replacement")
@@ -418,12 +422,6 @@ DEFINE_bool(use_idle_notification, true,
             "Use idle notification to reduce memory footprint.")
 // ic.cc
 DEFINE_bool(use_ic, true, "use inline caching")
-
-#ifdef LIVE_OBJECT_LIST
-// liveobjectlist.cc
-DEFINE_string(lol_workdir, NULL, "path for lol temp files")
-DEFINE_bool(verify_lol, false, "perform debugging verification for lol")
-#endif
 
 // macro-assembler-ia32.cc
 DEFINE_bool(native_code_counters, false,

@@ -2706,17 +2706,15 @@ void MacroAssembler::JumpIfNotBothSequentialAsciiStrings(Register object1,
   movzx_b(scratch2, FieldOperand(scratch2, Map::kInstanceTypeOffset));
 
   // Check that both are flat ASCII strings.
-  const int kFlatAsciiStringMask = kIsNotStringMask | kStringRepresentationMask
-          | kStringEncodingMask | kAsciiDataHintTag;
+  const int kFlatAsciiStringMask =
+      kIsNotStringMask | kStringRepresentationMask | kStringEncodingMask;
   const int kFlatAsciiStringTag = ASCII_STRING_TYPE;
   // Interleave bits from both instance types and compare them in one check.
-  ASSERT_EQ(0, kFlatAsciiStringMask & (kFlatAsciiStringMask << 8));
-  ASSERT_EQ(ASCII_STRING_TYPE, ASCII_STRING_TYPE & kFlatAsciiStringMask);
+  ASSERT_EQ(0, kFlatAsciiStringMask & (kFlatAsciiStringMask << 3));
   and_(scratch1, kFlatAsciiStringMask);
   and_(scratch2, kFlatAsciiStringMask);
-  shl(scratch1, 8);
-  or_(scratch1, scratch2);
-  cmp(scratch1, kFlatAsciiStringTag | (kFlatAsciiStringTag << 8));
+  lea(scratch1, Operand(scratch1, scratch2, times_8, 0));
+  cmp(scratch1, kFlatAsciiStringTag | (kFlatAsciiStringTag << 3));
   j(not_equal, failure);
 }
 
@@ -3057,18 +3055,19 @@ void MacroAssembler::TestJSArrayForAllocationSiteInfo(
     Register scratch_reg,
     Label* allocation_info_present) {
   Label no_info_available;
+
   ExternalReference new_space_start =
       ExternalReference::new_space_start(isolate());
   ExternalReference new_space_allocation_top =
       ExternalReference::new_space_allocation_top_address(isolate());
 
   lea(scratch_reg, Operand(receiver_reg,
-                           JSArray::kSize + AllocationSiteInfo::kSize));
+      JSArray::kSize + AllocationSiteInfo::kSize - kHeapObjectTag));
   cmp(scratch_reg, Immediate(new_space_start));
   j(less, &no_info_available);
   cmp(scratch_reg, Operand::StaticVariable(new_space_allocation_top));
-  j(greater_equal, &no_info_available);
-  cmp(MemOperand(scratch_reg, 0),
+  j(greater, &no_info_available);
+  cmp(MemOperand(scratch_reg, -AllocationSiteInfo::kSize),
       Immediate(Handle<Map>(isolate()->heap()->allocation_site_info_map())));
   j(equal, allocation_info_present);
   bind(&no_info_available);

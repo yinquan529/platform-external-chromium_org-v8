@@ -343,7 +343,7 @@ static void GenerateFastCloneShallowArrayCommon(
     MacroAssembler* masm,
     int length,
     FastCloneShallowArrayStub::Mode mode,
-    AllocationSiteInfoMode allocation_site_info_mode,
+    AllocationSiteMode allocation_site_mode,
     Label* fail) {
   // Registers on entry:
   // a3: boilerplate literal array.
@@ -356,9 +356,10 @@ static void GenerateFastCloneShallowArrayCommon(
         ? FixedDoubleArray::SizeFor(length)
         : FixedArray::SizeFor(length);
   }
+
   int size = JSArray::kSize;
   int allocation_info_start = size;
-  if (allocation_site_info_mode == TRACK_ALLOCATION_SITE_INFO) {
+  if (allocation_site_mode == TRACK_ALLOCATION_SITE) {
     size += AllocationSiteInfo::kSize;
   }
   size += elements_size;
@@ -372,7 +373,7 @@ static void GenerateFastCloneShallowArrayCommon(
                         fail,
                         TAG_OBJECT);
 
-  if (allocation_site_info_mode == TRACK_ALLOCATION_SITE_INFO) {
+  if (allocation_site_mode == TRACK_ALLOCATION_SITE) {
     __ li(a2, Operand(Handle<Map>(masm->isolate()->heap()->
                                    allocation_site_info_map())));
     __ sw(a2, FieldMemOperand(v0, allocation_info_start));
@@ -391,7 +392,7 @@ static void GenerateFastCloneShallowArrayCommon(
     // Get hold of the elements array of the boilerplate and setup the
     // elements pointer in the resulting object.
     __ lw(a3, FieldMemOperand(a3, JSArray::kElementsOffset));
-    if (allocation_site_info_mode == TRACK_ALLOCATION_SITE_INFO) {
+    if (allocation_site_mode == TRACK_ALLOCATION_SITE) {
       __ Addu(a2, v0, Operand(JSArray::kSize + AllocationSiteInfo::kSize));
     } else {
       __ Addu(a2, v0, Operand(JSArray::kSize));
@@ -424,21 +425,14 @@ void FastCloneShallowArrayStub::Generate(MacroAssembler* masm) {
   __ Branch(&slow_case, eq, a3, Operand(t1));
 
   FastCloneShallowArrayStub::Mode mode = mode_;
-  AllocationSiteInfoMode allocation_site_info_mode =
-      DONT_TRACK_ALLOCATION_SITE_INFO;
-  if (mode == CLONE_ANY_ELEMENTS_WITH_ALLOCATION_SITE_INFO) {
-    mode = CLONE_ANY_ELEMENTS;
-    allocation_site_info_mode = TRACK_ALLOCATION_SITE_INFO;
-  }
   if (mode == CLONE_ANY_ELEMENTS) {
     Label double_elements, check_fast_elements;
     __ lw(v0, FieldMemOperand(a3, JSArray::kElementsOffset));
     __ lw(v0, FieldMemOperand(v0, HeapObject::kMapOffset));
     __ LoadRoot(t1, Heap::kFixedCOWArrayMapRootIndex);
     __ Branch(&check_fast_elements, ne, v0, Operand(t1));
-    GenerateFastCloneShallowArrayCommon(masm, 0,
-                                        COPY_ON_WRITE_ELEMENTS,
-                                        allocation_site_info_mode,
+    GenerateFastCloneShallowArrayCommon(masm, 0, COPY_ON_WRITE_ELEMENTS,
+                                        allocation_site_mode_,
                                         &slow_case);
     // Return and remove the on-stack parameters.
     __ DropAndRet(3);
@@ -446,9 +440,8 @@ void FastCloneShallowArrayStub::Generate(MacroAssembler* masm) {
     __ bind(&check_fast_elements);
     __ LoadRoot(t1, Heap::kFixedArrayMapRootIndex);
     __ Branch(&double_elements, ne, v0, Operand(t1));
-    GenerateFastCloneShallowArrayCommon(masm, length_,
-                                        CLONE_ELEMENTS,
-                                        allocation_site_info_mode,
+    GenerateFastCloneShallowArrayCommon(masm, length_, CLONE_ELEMENTS,
+                                        allocation_site_mode_,
                                         &slow_case);
     // Return and remove the on-stack parameters.
     __ DropAndRet(3);
@@ -481,7 +474,8 @@ void FastCloneShallowArrayStub::Generate(MacroAssembler* masm) {
   }
 
   GenerateFastCloneShallowArrayCommon(masm, length_, mode,
-                                      allocation_site_info_mode, &slow_case);
+                                      allocation_site_mode_,
+                                      &slow_case);
 
   // Return and remove the on-stack parameters.
   __ DropAndRet(3);
@@ -3965,6 +3959,17 @@ void CEntryStub::GenerateAheadOfTime() {
 }
 
 
+static void JumpIfOOM(MacroAssembler* masm,
+                      Register value,
+                      Register scratch,
+                      Label* oom_label) {
+  STATIC_ASSERT(Failure::OUT_OF_MEMORY_EXCEPTION == 3);
+  STATIC_ASSERT(kFailureTag == 3);
+  __ andi(scratch, value, 0xf);
+  __ Branch(oom_label, eq, scratch, Operand(0xf));
+}
+
+
 void CEntryStub::GenerateCore(MacroAssembler* masm,
                               Label* throw_normal_exception,
                               Label* throw_termination_exception,
@@ -4071,14 +4076,7 @@ void CEntryStub::GenerateCore(MacroAssembler* masm,
   __ Branch(&retry, eq, t0, Operand(zero_reg));
 
   // Special handling of out of memory exceptions.
-  Failure* out_of_memory = Failure::OutOfMemoryException();
-  __ Branch(USE_DELAY_SLOT,
-            throw_out_of_memory_exception,
-            eq,
-            v0,
-            Operand(reinterpret_cast<int32_t>(out_of_memory)));
-  // If we throw the OOM exception, the value of a3 doesn't matter.
-  // Any instruction can be in the delay slot that's not a jump.
+  JumpIfOOM(masm, v0, t0, throw_out_of_memory_exception);
 
   // Retrieve the pending exception and clear the variable.
   __ LoadRoot(a3, Heap::kTheHoleValueRootIndex);
@@ -4170,8 +4168,11 @@ void CEntryStub::Generate(MacroAssembler* masm) {
   __ sw(a0, MemOperand(a2));
 
   // Set pending exception and v0 to out of memory exception.
-  Failure* out_of_memory = Failure::OutOfMemoryException();
+  Label already_have_failure;
+  JumpIfOOM(masm, v0, t0, &already_have_failure);
+  Failure* out_of_memory = Failure::OutOfMemoryException(0x1);
   __ li(v0, Operand(reinterpret_cast<int32_t>(out_of_memory)));
+  __ bind(&already_have_failure);
   __ li(a2, Operand(ExternalReference(Isolate::kPendingExceptionAddress,
                                       isolate)));
   __ sw(v0, MemOperand(a2));
@@ -6684,6 +6685,11 @@ void StringAddStub::Generate(MacroAssembler* masm) {
   __ And(at, t0, Operand(kAsciiDataHintMask));
   __ and_(at, at, t1);
   __ Branch(&ascii_data, ne, at, Operand(zero_reg));
+  __ Xor(t0, t0, Operand(t1));
+  STATIC_ASSERT(kOneByteStringTag != 0 && kAsciiDataHintTag != 0);
+  __ And(t0, t0, Operand(kOneByteStringTag | kAsciiDataHintTag));
+  __ Branch(&ascii_data, eq, t0,
+      Operand(kOneByteStringTag | kAsciiDataHintTag));
 
   // Allocate a two byte cons string.
   __ AllocateTwoByteConsString(v0, t2, t0, t1, &call_runtime);

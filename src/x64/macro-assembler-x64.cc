@@ -2218,19 +2218,16 @@ void MacroAssembler::JumpIfNotBothSequentialAsciiStrings(
   // Check that both are flat ASCII strings.
   ASSERT(kNotStringTag != 0);
   const int kFlatAsciiStringMask =
-      kIsNotStringMask | kStringEncodingMask | kAsciiDataHintMask |
-      kStringRepresentationMask;
+      kIsNotStringMask | kStringRepresentationMask | kStringEncodingMask;
   const int kFlatAsciiStringTag = ASCII_STRING_TYPE;
 
   andl(scratch1, Immediate(kFlatAsciiStringMask));
   andl(scratch2, Immediate(kFlatAsciiStringMask));
   // Interleave the bits to check both scratch1 and scratch2 in one test.
-  ASSERT_EQ(0, kFlatAsciiStringMask & (kFlatAsciiStringMask << 8));
-  ASSERT_EQ(ASCII_STRING_TYPE, ASCII_STRING_TYPE & kFlatAsciiStringMask);
-  shl(scratch1, Immediate(8));
-  orl(scratch1, scratch2);
+  ASSERT_EQ(0, kFlatAsciiStringMask & (kFlatAsciiStringMask << 3));
+  lea(scratch1, Operand(scratch1, scratch2, times_8, 0));
   cmpl(scratch1,
-       Immediate(kFlatAsciiStringTag + (kFlatAsciiStringTag << 8)));
+       Immediate(kFlatAsciiStringTag + (kFlatAsciiStringTag << 3)));
   j(not_equal, on_fail, near_jump);
 }
 
@@ -2266,19 +2263,17 @@ void MacroAssembler::JumpIfBothInstanceTypesAreNotSequentialAscii(
 
   // Check that both are flat ASCII strings.
   ASSERT(kNotStringTag != 0);
-  const int kFlatAsciiStringMask = kIsNotStringMask | kStringRepresentationMask
-          | kStringEncodingMask | kAsciiDataHintTag;
+  const int kFlatAsciiStringMask =
+      kIsNotStringMask | kStringRepresentationMask | kStringEncodingMask;
   const int kFlatAsciiStringTag = ASCII_STRING_TYPE;
 
   andl(scratch1, Immediate(kFlatAsciiStringMask));
   andl(scratch2, Immediate(kFlatAsciiStringMask));
   // Interleave the bits to check both scratch1 and scratch2 in one test.
-  ASSERT_EQ(0, kFlatAsciiStringMask & (kFlatAsciiStringMask << 8));
-  ASSERT_EQ(ASCII_STRING_TYPE, ASCII_STRING_TYPE & kFlatAsciiStringMask);
-  shl(scratch1, Immediate(8));
-  orl(scratch1, scratch2);
+  ASSERT_EQ(0, kFlatAsciiStringMask & (kFlatAsciiStringMask << 3));
+  lea(scratch1, Operand(scratch1, scratch2, times_8, 0));
   cmpl(scratch1,
-       Immediate(kFlatAsciiStringTag + (kFlatAsciiStringTag << 8)));
+       Immediate(kFlatAsciiStringTag + (kFlatAsciiStringTag << 3)));
   j(not_equal, on_fail, near_jump);
 }
 
@@ -4620,13 +4615,13 @@ void MacroAssembler::TestJSArrayForAllocationSiteInfo(
       ExternalReference::new_space_allocation_top_address(isolate());
 
   lea(scratch_reg, Operand(receiver_reg,
-                           JSArray::kSize + AllocationSiteInfo::kSize));
+      JSArray::kSize + AllocationSiteInfo::kSize - kHeapObjectTag));
   movq(kScratchRegister, new_space_start);
   cmpq(scratch_reg, kScratchRegister);
   j(less, &no_info_available);
   cmpq(scratch_reg, ExternalOperand(new_space_allocation_top));
-  j(greater_equal, &no_info_available);
-  CompareRoot(MemOperand(scratch_reg, 0),
+  j(greater, &no_info_available);
+  CompareRoot(MemOperand(scratch_reg, -AllocationSiteInfo::kSize),
               Heap::kAllocationSiteInfoMapRootIndex);
   j(equal, allocation_info_present);
   bind(&no_info_available);
