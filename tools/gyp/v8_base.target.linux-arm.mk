@@ -76,7 +76,6 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen.cc \
 	v8/src/ic.cc \
 	v8/src/incremental-marking.cc \
-	v8/src/inspector.cc \
 	v8/src/interface.cc \
 	v8/src/interpreter-irregexp.cc \
 	v8/src/isolate.cc \
@@ -84,7 +83,6 @@ LOCAL_SRC_FILES := \
 	v8/src/lithium-allocator.cc \
 	v8/src/lithium.cc \
 	v8/src/liveedit.cc \
-	v8/src/liveobjectlist.cc \
 	v8/src/log-utils.cc \
 	v8/src/log.cc \
 	v8/src/mark-compact.cc \
