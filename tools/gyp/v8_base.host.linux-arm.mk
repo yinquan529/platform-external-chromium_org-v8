@@ -87,6 +87,7 @@ LOCAL_SRC_FILES := \
 	v8/src/log-utils.cc \
 	v8/src/log.cc \
 	v8/src/mark-compact.cc \
+	v8/src/marking-thread.cc \
 	v8/src/messages.cc \
 	v8/src/objects-debug.cc \
 	v8/src/objects-printer.cc \
@@ -120,6 +121,7 @@ LOCAL_SRC_FILES := \
 	v8/src/string-stream.cc \
 	v8/src/strtod.cc \
 	v8/src/stub-cache.cc \
+	v8/src/sweeper-thread.cc \
 	v8/src/token.cc \
 	v8/src/transitions.cc \
 	v8/src/type-info.cc \
