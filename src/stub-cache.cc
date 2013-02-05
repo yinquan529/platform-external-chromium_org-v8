@@ -102,7 +102,6 @@ Code* StubCache::Set(String* name, Map* map, Code* code) {
 
 Handle<Code> StubCache::ComputeLoadNonexistent(Handle<String> name,
                                                Handle<JSObject> receiver) {
-  ASSERT(receiver->IsGlobalObject() || receiver->HasFastProperties());
   // If no global objects are present in the prototype chain, the load
   // nonexistent IC stub can be shared for all names for a given map
   // and we use the empty string for the map cache in that case.  If
@@ -110,12 +109,20 @@ Handle<Code> StubCache::ComputeLoadNonexistent(Handle<String> name,
   // property cells in the stub and therefore the stub will be
   // specific to the name.
   Handle<String> cache_name = factory()->empty_string();
-  if (receiver->IsGlobalObject()) cache_name = name;
-  Handle<JSObject> last = receiver;
-  while (last->GetPrototype() != heap()->null_value()) {
-    last = Handle<JSObject>(JSObject::cast(last->GetPrototype()));
-    if (last->IsGlobalObject()) cache_name = name;
-  }
+  Handle<JSObject> current;
+  Handle<Object> next = receiver;
+  Handle<GlobalObject> global;
+  do {
+    current = Handle<JSObject>::cast(next);
+    next = Handle<Object>(current->GetPrototype());
+    if (current->IsGlobalObject()) {
+      global = Handle<GlobalObject>::cast(current);
+      cache_name = name;
+    } else if (!current->HasFastProperties()) {
+      cache_name = name;
+    }
+  } while (!next->IsNull());
+
   // Compile the stub that is either shared for all names or
   // name specific if there are global objects involved.
   Code::Flags flags =
@@ -126,7 +133,7 @@ Handle<Code> StubCache::ComputeLoadNonexistent(Handle<String> name,
 
   LoadStubCompiler compiler(isolate_);
   Handle<Code> code =
-      compiler.CompileLoadNonexistent(cache_name, receiver, last);
+      compiler.CompileLoadNonexistent(receiver, current, cache_name, global);
   PROFILE(isolate_, CodeCreateEvent(Logger::LOAD_IC_TAG, *code, *cache_name));
   GDBJIT(AddCode(GDBJITInterface::LOAD_IC, *cache_name, *code));
   JSObject::UpdateMapCodeCache(receiver, cache_name, code);
@@ -137,19 +144,20 @@ Handle<Code> StubCache::ComputeLoadNonexistent(Handle<String> name,
 Handle<Code> StubCache::ComputeLoadField(Handle<String> name,
                                          Handle<JSObject> receiver,
                                          Handle<JSObject> holder,
-                                         PropertyIndex field_index) {
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+                                         PropertyIndex field) {
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags = Code::ComputeMonomorphicFlags(Code::LOAD_IC, Code::FIELD);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
   LoadStubCompiler compiler(isolate_);
-  Handle<Code> code =
-      compiler.CompileLoadField(receiver, holder, field_index, name);
+  Handle<Code> code = compiler.CompileLoadField(receiver, holder, name, field);
   PROFILE(isolate_, CodeCreateEvent(Logger::LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -159,19 +167,21 @@ Handle<Code> StubCache::ComputeLoadCallback(Handle<String> name,
                                             Handle<JSObject> holder,
                                             Handle<AccessorInfo> callback) {
   ASSERT(v8::ToCData<Address>(callback->getter()) != 0);
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags =
       Code::ComputeMonomorphicFlags(Code::LOAD_IC, Code::CALLBACKS);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
   LoadStubCompiler compiler(isolate_);
   Handle<Code> code =
-      compiler.CompileLoadCallback(name, receiver, holder, callback);
+      compiler.CompileLoadCallback(receiver, holder, name, callback);
   PROFILE(isolate_, CodeCreateEvent(Logger::LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -180,19 +190,21 @@ Handle<Code> StubCache::ComputeLoadViaGetter(Handle<String> name,
                                              Handle<JSObject> receiver,
                                              Handle<JSObject> holder,
                                              Handle<JSFunction> getter) {
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags =
       Code::ComputeMonomorphicFlags(Code::LOAD_IC, Code::CALLBACKS);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
   LoadStubCompiler compiler(isolate_);
   Handle<Code> code =
-      compiler.CompileLoadViaGetter(name, receiver, holder, getter);
+      compiler.CompileLoadViaGetter(receiver, holder, name, getter);
   PROFILE(isolate_, CodeCreateEvent(Logger::LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -201,19 +213,21 @@ Handle<Code> StubCache::ComputeLoadConstant(Handle<String> name,
                                             Handle<JSObject> receiver,
                                             Handle<JSObject> holder,
                                             Handle<JSFunction> value) {
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags =
       Code::ComputeMonomorphicFlags(Code::LOAD_IC, Code::CONSTANT_FUNCTION);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
   LoadStubCompiler compiler(isolate_);
   Handle<Code> code =
-        compiler.CompileLoadConstant(receiver, holder, value, name);
+        compiler.CompileLoadConstant(receiver, holder, name, value);
   PROFILE(isolate_, CodeCreateEvent(Logger::LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -221,10 +235,12 @@ Handle<Code> StubCache::ComputeLoadConstant(Handle<String> name,
 Handle<Code> StubCache::ComputeLoadInterceptor(Handle<String> name,
                                                Handle<JSObject> receiver,
                                                Handle<JSObject> holder) {
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags =
       Code::ComputeMonomorphicFlags(Code::LOAD_IC, Code::INTERCEPTOR);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
@@ -233,7 +249,7 @@ Handle<Code> StubCache::ComputeLoadInterceptor(Handle<String> name,
         compiler.CompileLoadInterceptor(receiver, holder, name);
   PROFILE(isolate_, CodeCreateEvent(Logger::LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -248,10 +264,12 @@ Handle<Code> StubCache::ComputeLoadGlobal(Handle<String> name,
                                           Handle<GlobalObject> holder,
                                           Handle<JSGlobalPropertyCell> cell,
                                           bool is_dont_delete) {
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags =
       Code::ComputeMonomorphicFlags(Code::LOAD_IC, Code::NORMAL);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
@@ -260,7 +278,7 @@ Handle<Code> StubCache::ComputeLoadGlobal(Handle<String> name,
       compiler.CompileLoadGlobal(receiver, holder, cell, name, is_dont_delete);
   PROFILE(isolate_, CodeCreateEvent(Logger::LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -268,20 +286,21 @@ Handle<Code> StubCache::ComputeLoadGlobal(Handle<String> name,
 Handle<Code> StubCache::ComputeKeyedLoadField(Handle<String> name,
                                               Handle<JSObject> receiver,
                                               Handle<JSObject> holder,
-                                              PropertyIndex field_index) {
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+                                              PropertyIndex field) {
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags =
       Code::ComputeMonomorphicFlags(Code::KEYED_LOAD_IC, Code::FIELD);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
   KeyedLoadStubCompiler compiler(isolate_);
-  Handle<Code> code =
-      compiler.CompileLoadField(name, receiver, holder, field_index);
+  Handle<Code> code = compiler.CompileLoadField(receiver, holder, name, field);
   PROFILE(isolate_, CodeCreateEvent(Logger::KEYED_LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::KEYED_LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -290,19 +309,21 @@ Handle<Code> StubCache::ComputeKeyedLoadConstant(Handle<String> name,
                                                  Handle<JSObject> receiver,
                                                  Handle<JSObject> holder,
                                                  Handle<JSFunction> value) {
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags = Code::ComputeMonomorphicFlags(Code::KEYED_LOAD_IC,
                                                     Code::CONSTANT_FUNCTION);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
   KeyedLoadStubCompiler compiler(isolate_);
   Handle<Code> code =
-      compiler.CompileLoadConstant(name, receiver, holder, value);
+      compiler.CompileLoadConstant(receiver, holder, name, value);
   PROFILE(isolate_, CodeCreateEvent(Logger::KEYED_LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::KEYED_LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -310,10 +331,12 @@ Handle<Code> StubCache::ComputeKeyedLoadConstant(Handle<String> name,
 Handle<Code> StubCache::ComputeKeyedLoadInterceptor(Handle<String> name,
                                                     Handle<JSObject> receiver,
                                                     Handle<JSObject> holder) {
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags =
       Code::ComputeMonomorphicFlags(Code::KEYED_LOAD_IC, Code::INTERCEPTOR);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
@@ -321,7 +344,7 @@ Handle<Code> StubCache::ComputeKeyedLoadInterceptor(Handle<String> name,
   Handle<Code> code = compiler.CompileLoadInterceptor(receiver, holder, name);
   PROFILE(isolate_, CodeCreateEvent(Logger::KEYED_LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::KEYED_LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -331,19 +354,21 @@ Handle<Code> StubCache::ComputeKeyedLoadCallback(
     Handle<JSObject> receiver,
     Handle<JSObject> holder,
     Handle<AccessorInfo> callback) {
-  ASSERT(IC::GetCodeCacheForObject(*receiver, *holder) == OWN_MAP);
+  InlineCacheHolderFlag cache_holder =
+      IC::GetCodeCacheForObject(*receiver, *holder);
+  Handle<JSObject> map_holder(IC::GetCodeCacheHolder(*receiver, cache_holder));
   Code::Flags flags =
       Code::ComputeMonomorphicFlags(Code::KEYED_LOAD_IC, Code::CALLBACKS);
-  Handle<Object> probe(receiver->map()->FindInCodeCache(*name, flags),
+  Handle<Object> probe(map_holder->map()->FindInCodeCache(*name, flags),
                        isolate_);
   if (probe->IsCode()) return Handle<Code>::cast(probe);
 
   KeyedLoadStubCompiler compiler(isolate_);
   Handle<Code> code =
-      compiler.CompileLoadCallback(name, receiver, holder, callback);
+      compiler.CompileLoadCallback(receiver, holder, name, callback);
   PROFILE(isolate_, CodeCreateEvent(Logger::KEYED_LOAD_IC_TAG, *code, *name));
   GDBJIT(AddCode(GDBJITInterface::KEYED_LOAD_IC, *name, *code));
-  JSObject::UpdateMapCodeCache(receiver, name, code);
+  JSObject::UpdateMapCodeCache(map_holder, name, code);
   return code;
 }
 
@@ -1357,8 +1382,95 @@ void StubCompiler::LookupPostInterceptor(Handle<JSObject> holder,
 }
 
 
+#define __ ACCESS_MASM(masm())
+
+
+Handle<Code> BaseLoadStubCompiler::CompileLoadField(Handle<JSObject> object,
+                                                    Handle<JSObject> holder,
+                                                    Handle<String> name,
+                                                    PropertyIndex index) {
+  Label miss;
+
+  GenerateNameCheck(name, this->name(), &miss);
+  GenerateLoadField(object, holder, receiver(),
+                    scratch1(), scratch2(), scratch3(),
+                    index, name, &miss);
+  __ bind(&miss);
+  GenerateLoadMiss(masm(), kind());
+
+  // Return the generated code.
+  return GetCode(Code::FIELD, name);
+}
+
+
+Handle<Code> BaseLoadStubCompiler::CompileLoadCallback(
+    Handle<JSObject> object,
+    Handle<JSObject> holder,
+    Handle<String> name,
+    Handle<AccessorInfo> callback) {
+  Label miss;
+
+  GenerateNameCheck(name, this->name(), &miss);
+  GenerateLoadCallback(object, holder, receiver(), this->name(),
+                       scratch1(), scratch2(), scratch3(), scratch4(),
+                       callback, name, &miss);
+  __ bind(&miss);
+  GenerateLoadMiss(masm(), kind());
+
+  // Return the generated code.
+  return GetCode(Code::CALLBACKS, name);
+}
+
+
+Handle<Code> BaseLoadStubCompiler::CompileLoadConstant(
+    Handle<JSObject> object,
+    Handle<JSObject> holder,
+    Handle<String> name,
+    Handle<JSFunction> value) {
+  Label miss;
+
+  GenerateNameCheck(name, this->name(), &miss);
+  GenerateLoadConstant(object, holder, receiver(),
+                       scratch1(), scratch2(), scratch3(),
+                       value, name, &miss);
+  __ bind(&miss);
+  GenerateLoadMiss(masm(), kind());
+
+  // Return the generated code.
+  return GetCode(Code::CONSTANT_FUNCTION, name);
+}
+
+
+Handle<Code> BaseLoadStubCompiler::CompileLoadInterceptor(
+    Handle<JSObject> object,
+    Handle<JSObject> holder,
+    Handle<String> name) {
+  Label miss;
+
+  LookupResult lookup(isolate());
+  LookupPostInterceptor(holder, name, &lookup);
+
+  GenerateNameCheck(name, this->name(), &miss);
+  // TODO(368): Compile in the whole chain: all the interceptors in
+  // prototypes and ultimate answer.
+  GenerateLoadInterceptor(object, holder, &lookup, receiver(), this->name(),
+                          scratch1(), scratch2(), scratch3(),
+                          name, &miss);
+
+  __ bind(&miss);
+  GenerateLoadMiss(masm(), kind());
+
+  // Return the generated code.
+  return GetCode(Code::INTERCEPTOR, name);
+}
+
+
+#undef __
+
+
 Handle<Code> LoadStubCompiler::GetCode(Code::StubType type,
-                                       Handle<String> name) {
+                                       Handle<String> name,
+                                       InlineCacheState state) {
   Code::Flags flags = Code::ComputeMonomorphicFlags(Code::LOAD_IC, type);
   Handle<Code> code = GetCodeWithFlags(flags, name);
   PROFILE(isolate(), CodeCreateEvent(Logger::LOAD_IC_TAG, *code, *name));

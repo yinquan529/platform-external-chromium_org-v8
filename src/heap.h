@@ -224,6 +224,9 @@ namespace internal {
   V(illegal_execution_state_symbol, "illegal execution state")           \
   V(get_symbol, "get")                                                   \
   V(set_symbol, "set")                                                   \
+  V(map_field_symbol, "%map")                                            \
+  V(elements_field_symbol, "%elements")                                  \
+  V(length_field_symbol, "%length")                                      \
   V(function_class_symbol, "Function")                                   \
   V(illegal_argument_symbol, "illegal argument")                         \
   V(MakeReferenceError_symbol, "MakeReferenceError")                     \
@@ -1322,6 +1325,11 @@ class Heap {
 #ifdef VERIFY_HEAP
   // Verify the heap is in its normal state before or after a GC.
   void Verify();
+
+
+  bool weak_embedded_maps_verification_enabled() {
+    return no_weak_embedded_maps_verification_scope_depth_ == 0;
+  }
 #endif
 
 #ifdef DEBUG
@@ -1596,6 +1604,24 @@ class Heap {
   // Returns minimal interval between two subsequent collections.
   int get_min_in_mutator() { return min_in_mutator_; }
 
+  // TODO(hpayer): remove, should be handled by GCTracer
+  void AddMarkingTime(double marking_time) {
+    marking_time_ += marking_time;
+  }
+
+  double marking_time() const {
+    return marking_time_;
+  }
+
+  // TODO(hpayer): remove, should be handled by GCTracer
+  void AddSweepingTime(double sweeping_time) {
+    sweeping_time_ += sweeping_time;
+  }
+
+  double sweeping_time() const {
+    return sweeping_time_;
+  }
+
   MarkCompactCollector* mark_compact_collector() {
     return &mark_compact_collector_;
   }
@@ -1618,6 +1644,7 @@ class Heap {
   }
 
   bool AdvanceSweepers(int step_size) {
+    ASSERT(!FLAG_parallel_sweeping && !FLAG_concurrent_sweeping);
     bool sweeping_complete = old_data_space()->AdvanceSweeper(step_size);
     sweeping_complete &= old_pointer_space()->AdvanceSweeper(step_size);
     return sweeping_complete;
@@ -2035,7 +2062,6 @@ class Heap {
 
   GCTracer* tracer_;
 
-
   // Allocates a small number to string cache.
   MUST_USE_RESULT MaybeObject* AllocateInitialNumberStringCache();
   // Creates and installs the full-sized number string cache.
@@ -2173,6 +2199,12 @@ class Heap {
 
   double last_gc_end_timestamp_;
 
+  // Cumulative GC time spent in marking
+  double marking_time_;
+
+  // Cumulative GC time spent in sweeping
+  double sweeping_time_;
+
   MarkCompactCollector mark_compact_collector_;
 
   StoreBuffer store_buffer_;
@@ -2189,6 +2221,10 @@ class Heap {
   int ms_count_at_last_idle_notification_;
   unsigned int gc_count_at_last_idle_gc_;
   int scavenges_since_last_idle_round_;
+
+#ifdef VERIFY_HEAP
+  int no_weak_embedded_maps_verification_scope_depth_;
+#endif
 
   static const int kMaxMarkSweepsInIdleRound = 7;
   static const int kIdleScavengeThreshold = 5;
@@ -2219,6 +2255,9 @@ class Heap {
   friend class MarkCompactCollector;
   friend class MarkCompactMarkingVisitor;
   friend class MapCompact;
+#ifdef VERIFY_HEAP
+  friend class NoWeakEmbeddedMapsVerificationScope;
+#endif
 
   DISALLOW_COPY_AND_ASSIGN(Heap);
 };
@@ -2278,6 +2317,14 @@ class AlwaysAllocateScope {
   // Implicitly disable artificial allocation failures.
   DisallowAllocationFailure disallow_allocation_failure_;
 };
+
+#ifdef VERIFY_HEAP
+class NoWeakEmbeddedMapsVerificationScope {
+ public:
+  inline NoWeakEmbeddedMapsVerificationScope();
+  inline ~NoWeakEmbeddedMapsVerificationScope();
+};
+#endif
 
 
 // Visitor class to verify interior pointers in spaces that do not contain

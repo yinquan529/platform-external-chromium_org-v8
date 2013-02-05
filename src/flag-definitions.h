@@ -158,6 +158,8 @@ DEFINE_implication(harmony_observation, harmony_collections)
 // Flags for experimental implementation features.
 DEFINE_bool(packed_arrays, true, "optimizes arrays that have no holes")
 DEFINE_bool(smi_only_arrays, true, "tracks arrays with only smi values")
+DEFINE_bool(compiled_transitions, false, "use optimizing compiler to "
+            "generate array elements transition stubs")
 DEFINE_bool(clever_optimizations,
             true,
             "Optimize object size, Array shift, DOM strings and string +")
@@ -205,6 +207,7 @@ DEFINE_bool(trap_on_deopt, false, "put a break point before deoptimizing")
 DEFINE_bool(deoptimize_uncommon_cases, true, "deoptimize uncommon cases")
 DEFINE_bool(polymorphic_inlining, true, "polymorphic inlining")
 DEFINE_bool(use_osr, true, "use on-stack replacement")
+DEFINE_bool(idefs, false, "use informative definitions")
 DEFINE_bool(array_bounds_checks_elimination, true,
             "perform array bounds checks elimination")
 DEFINE_bool(array_index_dehoisting, true,
@@ -417,6 +420,12 @@ DEFINE_bool(trace_incremental_marking, false,
             "trace progress of the incremental marking")
 DEFINE_bool(track_gc_object_stats, false,
             "track object counts and memory usage")
+DEFINE_bool(parallel_sweeping, false, "enable parallel sweeping")
+DEFINE_bool(concurrent_sweeping, false, "enable concurrent sweeping")
+DEFINE_int(sweeper_threads, 1,
+           "number of parallel and concurrent sweeping threads")
+DEFINE_bool(parallel_marking, false, "enable parallel marking")
+DEFINE_int(marking_threads, 1, "number of parallel marking threads")
 #ifdef VERIFY_HEAP
 DEFINE_bool(verify_heap, false, "verify heap pointers before and after GC")
 #endif

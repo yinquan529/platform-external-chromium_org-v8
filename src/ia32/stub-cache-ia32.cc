@@ -2964,9 +2964,11 @@ Handle<Code> KeyedStoreStubCompiler::CompileStorePolymorphic(
 }
 
 
-Handle<Code> LoadStubCompiler::CompileLoadNonexistent(Handle<String> name,
-                                                      Handle<JSObject> object,
-                                                      Handle<JSObject> last) {
+Handle<Code> LoadStubCompiler::CompileLoadNonexistent(
+    Handle<JSObject> object,
+    Handle<JSObject> last,
+    Handle<String> name,
+    Handle<GlobalObject> global) {
   // ----------- S t a t e -------------
   //  -- ecx    : name
   //  -- edx    : receiver
@@ -2977,18 +2979,25 @@ Handle<Code> LoadStubCompiler::CompileLoadNonexistent(Handle<String> name,
   // Check that the receiver isn't a smi.
   __ JumpIfSmi(edx, &miss);
 
-  ASSERT(last->IsGlobalObject() || last->HasFastProperties());
+  Register scratch = eax;
 
   // Check the maps of the full prototype chain. Also check that
   // global property cells up to (but not including) the last object
   // in the prototype chain are empty.
-  CheckPrototypes(object, edx, last, ebx, eax, edi, name, &miss);
+  Register result =
+      CheckPrototypes(object, edx, last, ebx, scratch, edi, name, &miss);
 
   // If the last object in the prototype chain is a global object,
   // check that the global property cell is empty.
-  if (last->IsGlobalObject()) {
-    GenerateCheckPropertyCell(
-        masm(), Handle<GlobalObject>::cast(last), name, eax, &miss);
+  if (!global.is_null()) {
+    GenerateCheckPropertyCell(masm(), global, name, scratch, &miss);
+  }
+
+  if (!last->HasFastProperties()) {
+    __ mov(scratch, FieldOperand(result, HeapObject::kMapOffset));
+    __ mov(scratch, FieldOperand(scratch, Map::kPrototypeOffset));
+    __ cmp(scratch, isolate()->factory()->null_value());
+    __ j(not_equal, &miss);
   }
 
   // Return undefined if maps of the full prototype chain are still the
@@ -3004,45 +3013,25 @@ Handle<Code> LoadStubCompiler::CompileLoadNonexistent(Handle<String> name,
 }
 
 
-Handle<Code> LoadStubCompiler::CompileLoadField(Handle<JSObject> object,
-                                                Handle<JSObject> holder,
-                                                PropertyIndex index,
-                                                Handle<String> name) {
-  // ----------- S t a t e -------------
-  //  -- ecx    : name
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  Label miss;
-
-  GenerateLoadField(object, holder, edx, ebx, eax, edi, index, name, &miss);
-  __ bind(&miss);
-  GenerateLoadMiss(masm(), Code::LOAD_IC);
-
-  // Return the generated code.
-  return GetCode(Code::FIELD, name);
+Register* LoadStubCompiler::registers() {
+  // receiver, name, scratch1, scratch2, scratch3, scratch4.
+  static Register registers[] = { edx, ecx, ebx, eax, edi, no_reg };
+  return registers;
 }
 
 
-Handle<Code> LoadStubCompiler::CompileLoadCallback(
-    Handle<String> name,
-    Handle<JSObject> object,
-    Handle<JSObject> holder,
-    Handle<AccessorInfo> callback) {
-  // ----------- S t a t e -------------
-  //  -- ecx    : name
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  Label miss;
+Register* KeyedLoadStubCompiler::registers() {
+  // receiver, name, scratch1, scratch2, scratch3, scratch4.
+  static Register registers[] = { edx, ecx, ebx, eax, edi, no_reg };
+  return registers;
+}
 
-  GenerateLoadCallback(object, holder, edx, ecx, ebx, eax, edi, no_reg,
-                       callback, name, &miss);
-  __ bind(&miss);
-  GenerateLoadMiss(masm(), Code::LOAD_IC);
 
-  // Return the generated code.
-  return GetCode(Code::CALLBACKS, name);
+void KeyedLoadStubCompiler::GenerateNameCheck(Handle<String> name,
+                                              Register name_reg,
+                                              Label* miss) {
+  __ cmp(name_reg, Immediate(name));
+  __ j(not_equal, miss);
 }
 
 
@@ -3084,9 +3073,9 @@ void LoadStubCompiler::GenerateLoadViaGetter(MacroAssembler* masm,
 
 
 Handle<Code> LoadStubCompiler::CompileLoadViaGetter(
-    Handle<String> name,
     Handle<JSObject> receiver,
     Handle<JSObject> holder,
+    Handle<String> name,
     Handle<JSFunction> getter) {
   // ----------- S t a t e -------------
   //  -- ecx    : name
@@ -3106,52 +3095,6 @@ Handle<Code> LoadStubCompiler::CompileLoadViaGetter(
 
   // Return the generated code.
   return GetCode(Code::CALLBACKS, name);
-}
-
-
-Handle<Code> LoadStubCompiler::CompileLoadConstant(Handle<JSObject> object,
-                                                   Handle<JSObject> holder,
-                                                   Handle<JSFunction> value,
-                                                   Handle<String> name) {
-  // ----------- S t a t e -------------
-  //  -- ecx    : name
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  Label miss;
-
-  GenerateLoadConstant(object, holder, edx, ebx, eax, edi, value, name, &miss);
-  __ bind(&miss);
-  GenerateLoadMiss(masm(), Code::LOAD_IC);
-
-  // Return the generated code.
-  return GetCode(Code::CONSTANT_FUNCTION, name);
-}
-
-
-Handle<Code> LoadStubCompiler::CompileLoadInterceptor(Handle<JSObject> receiver,
-                                                      Handle<JSObject> holder,
-                                                      Handle<String> name) {
-  // ----------- S t a t e -------------
-  //  -- ecx    : name
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  Label miss;
-
-  LookupResult lookup(isolate());
-  LookupPostInterceptor(holder, name, &lookup);
-
-  // TODO(368): Compile in the whole chain: all the interceptors in
-  // prototypes and ultimate answer.
-  GenerateLoadInterceptor(receiver, holder, &lookup, edx, ecx, eax, ebx, edi,
-                          name, &miss);
-
-  __ bind(&miss);
-  GenerateLoadMiss(masm(), Code::LOAD_IC);
-
-  // Return the generated code.
-  return GetCode(Code::INTERCEPTOR, name);
 }
 
 
@@ -3200,127 +3143,6 @@ Handle<Code> LoadStubCompiler::CompileLoadGlobal(
 
   // Return the generated code.
   return GetCode(Code::NORMAL, name);
-}
-
-
-Handle<Code> KeyedLoadStubCompiler::CompileLoadField(Handle<String> name,
-                                                     Handle<JSObject> receiver,
-                                                     Handle<JSObject> holder,
-                                                     PropertyIndex index) {
-  // ----------- S t a t e -------------
-  //  -- ecx    : key
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  Label miss;
-
-  Counters* counters = isolate()->counters();
-  __ IncrementCounter(counters->keyed_load_field(), 1);
-
-  // Check that the name has not changed.
-  __ cmp(ecx, Immediate(name));
-  __ j(not_equal, &miss);
-
-  GenerateLoadField(receiver, holder, edx, ebx, eax, edi, index, name, &miss);
-
-  __ bind(&miss);
-  __ DecrementCounter(counters->keyed_load_field(), 1);
-  GenerateLoadMiss(masm(), Code::KEYED_LOAD_IC);
-
-  // Return the generated code.
-  return GetCode(Code::FIELD, name);
-}
-
-
-Handle<Code> KeyedLoadStubCompiler::CompileLoadCallback(
-    Handle<String> name,
-    Handle<JSObject> receiver,
-    Handle<JSObject> holder,
-    Handle<AccessorInfo> callback) {
-  // ----------- S t a t e -------------
-  //  -- ecx    : key
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  Label miss;
-
-  Counters* counters = isolate()->counters();
-  __ IncrementCounter(counters->keyed_load_callback(), 1);
-
-  // Check that the name has not changed.
-  __ cmp(ecx, Immediate(name));
-  __ j(not_equal, &miss);
-
-  GenerateLoadCallback(receiver, holder, edx, ecx, ebx, eax, edi, no_reg,
-                       callback, name, &miss);
-
-  __ bind(&miss);
-  __ DecrementCounter(counters->keyed_load_callback(), 1);
-  GenerateLoadMiss(masm(), Code::KEYED_LOAD_IC);
-
-  // Return the generated code.
-  return GetCode(Code::CALLBACKS, name);
-}
-
-
-Handle<Code> KeyedLoadStubCompiler::CompileLoadConstant(
-    Handle<String> name,
-    Handle<JSObject> receiver,
-    Handle<JSObject> holder,
-    Handle<JSFunction> value) {
-  // ----------- S t a t e -------------
-  //  -- ecx    : key
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  Label miss;
-
-  Counters* counters = isolate()->counters();
-  __ IncrementCounter(counters->keyed_load_constant_function(), 1);
-
-  // Check that the name has not changed.
-  __ cmp(ecx, Immediate(name));
-  __ j(not_equal, &miss);
-
-  GenerateLoadConstant(
-      receiver, holder, edx, ebx, eax, edi, value, name, &miss);
-  __ bind(&miss);
-  __ DecrementCounter(counters->keyed_load_constant_function(), 1);
-  GenerateLoadMiss(masm(), Code::KEYED_LOAD_IC);
-
-  // Return the generated code.
-  return GetCode(Code::CONSTANT_FUNCTION, name);
-}
-
-
-Handle<Code> KeyedLoadStubCompiler::CompileLoadInterceptor(
-    Handle<JSObject> receiver,
-    Handle<JSObject> holder,
-    Handle<String> name) {
-  // ----------- S t a t e -------------
-  //  -- ecx    : key
-  //  -- edx    : receiver
-  //  -- esp[0] : return address
-  // -----------------------------------
-  Label miss;
-
-  Counters* counters = isolate()->counters();
-  __ IncrementCounter(counters->keyed_load_interceptor(), 1);
-
-  // Check that the name has not changed.
-  __ cmp(ecx, Immediate(name));
-  __ j(not_equal, &miss);
-
-  LookupResult lookup(isolate());
-  LookupPostInterceptor(holder, name, &lookup);
-  GenerateLoadInterceptor(receiver, holder, &lookup, edx, ecx, eax, ebx, edi,
-                          name, &miss);
-  __ bind(&miss);
-  __ DecrementCounter(counters->keyed_load_interceptor(), 1);
-  GenerateLoadMiss(masm(), Code::KEYED_LOAD_IC);
-
-  // Return the generated code.
-  return GetCode(Code::INTERCEPTOR, name);
 }
 
 

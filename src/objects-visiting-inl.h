@@ -175,8 +175,8 @@ void StaticMarkingVisitor<StaticVisitor>::VisitEmbeddedPointer(
   ASSERT(rinfo->rmode() == RelocInfo::EMBEDDED_OBJECT);
   ASSERT(!rinfo->target_object()->IsConsString());
   HeapObject* object = HeapObject::cast(rinfo->target_object());
-  if (!FLAG_weak_embedded_maps_in_optimized_code ||
-      !FLAG_collect_maps || rinfo->host()->kind() != Code::OPTIMIZED_FUNCTION ||
+  if (!FLAG_weak_embedded_maps_in_optimized_code || !FLAG_collect_maps ||
+      rinfo->host()->kind() != Code::OPTIMIZED_FUNCTION ||
       !object->IsMap() || !Map::cast(object)->CanTransition()) {
     heap->mark_compact_collector()->RecordRelocSlot(rinfo, object);
     StaticVisitor::MarkObject(heap, object);
@@ -394,6 +394,33 @@ void StaticMarkingVisitor<StaticVisitor>::MarkMapContents(
   } else {
     // Already marked by marking map->GetBackPointer() above.
     ASSERT(transitions->IsMap() || transitions->IsUndefined());
+  }
+
+  // Since descriptor arrays are potentially shared, ensure that only the
+  // descriptors that appeared for this map are marked. The first time a
+  // non-empty descriptor array is marked, its header is also visited. The slot
+  // holding the descriptor array will be implicitly recorded when the pointer
+  // fields of this map are visited.
+  DescriptorArray* descriptors = map->instance_descriptors();
+  if (StaticVisitor::MarkObjectWithoutPush(heap, descriptors) &&
+      descriptors->length() > 0) {
+    StaticVisitor::VisitPointers(heap,
+        descriptors->GetFirstElementAddress(),
+        descriptors->GetDescriptorEndSlot(0));
+  }
+  int start = 0;
+  int end = map->NumberOfOwnDescriptors();
+  Object* back_pointer = map->GetBackPointer();
+  if (!back_pointer->IsUndefined()) {
+    Map* parent_map = Map::cast(back_pointer);
+    if (descriptors == parent_map->instance_descriptors()) {
+      start = parent_map->NumberOfOwnDescriptors();
+    }
+  }
+  if (start < end) {
+    StaticVisitor::VisitPointers(heap,
+        descriptors->GetDescriptorStartSlot(start),
+        descriptors->GetDescriptorEndSlot(end));
   }
 
   // Mark prototype dependent codes array but do not push it onto marking
