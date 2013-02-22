@@ -71,6 +71,7 @@ LOCAL_SRC_FILES := \
 	v8/src/global-handles.cc \
 	v8/src/handles.cc \
 	v8/src/heap-profiler.cc \
+	v8/src/heap-snapshot-generator.cc \
 	v8/src/heap.cc \
 	v8/src/hydrogen-instructions.cc \
 	v8/src/hydrogen.cc \
