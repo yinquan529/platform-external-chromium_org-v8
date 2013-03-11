@@ -190,11 +190,8 @@ MY_CFLAGS := \
 	-Wno-extra \
 	-Wno-ignored-qualifiers \
 	-Wno-type-limits \
-	-Wno-non-virtual-dtor \
-	-Wno-sign-promo \
 	-Wno-address \
 	-Wno-format-security \
-	-Wno-non-virtual-dtor \
 	-Wno-return-type \
 	-Wno-sequence-point \
 	-Os \
@@ -259,7 +256,10 @@ LOCAL_CPPFLAGS := \
 	-fvisibility-inlines-hidden \
 	-Wno-deprecated \
 	-Wno-abi \
-	-Wno-error=c++0x-compat
+	-Wno-error=c++0x-compat \
+	-Wno-non-virtual-dtor \
+	-Wno-sign-promo \
+	-Wno-non-virtual-dtor
 
 ### Rules for final target.
 
