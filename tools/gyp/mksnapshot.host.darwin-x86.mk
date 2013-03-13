@@ -99,8 +99,6 @@ LOCAL_CPPFLAGS := \
 ### Rules for final target.
 
 LOCAL_LDFLAGS := \
-	-Wl,-z,now \
-	-Wl,-z,relro \
 	-pthread \
 	-fPIC \
 	-m32
