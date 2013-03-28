@@ -55,6 +55,15 @@ JSBuiltinsObject* Context::builtins() {
 }
 
 
+Context* Context::global_context() {
+  Context* current = this;
+  while (!current->IsGlobalContext()) {
+    current = current->previous();
+  }
+  return current;
+}
+
+
 Context* Context::native_context() {
   // Fast case: the global object for this context has been set.  In
   // that case, the global object has a direct pointer to the global
@@ -182,6 +191,10 @@ Handle<Object> Context::Lookup(Handle<String> name,
             *binding_flags = (init_flag == kNeedsInitialization)
                 ? IMMUTABLE_CHECK_INITIALIZED_HARMONY :
                 IMMUTABLE_IS_INITIALIZED_HARMONY;
+            break;
+          case MODULE:
+            *attributes = READ_ONLY;
+            *binding_flags = IMMUTABLE_IS_INITIALIZED_HARMONY;
             break;
           case DYNAMIC:
           case DYNAMIC_GLOBAL:
@@ -314,14 +327,11 @@ void Context::ClearOptimizedFunctions() {
 
 
 Handle<Object> Context::ErrorMessageForCodeGenerationFromStrings() {
-  Handle<Object> result(error_message_for_code_gen_from_strings());
-  if (result->IsUndefined()) {
-    const char* error =
-        "Code generation from strings disallowed for this context";
-    Isolate* isolate = Isolate::Current();
-    result = isolate->factory()->NewStringFromAscii(i::CStrVector(error));
-  }
-  return result;
+  Handle<Object> result(error_message_for_code_gen_from_strings(),
+                        GetIsolate());
+  if (!result->IsUndefined()) return result;
+  return GetIsolate()->factory()->NewStringFromAscii(i::CStrVector(
+      "Code generation from strings disallowed for this context"));
 }
 
 
@@ -330,7 +340,7 @@ bool Context::IsBootstrappingOrValidParentContext(
     Object* object, Context* child) {
   // During bootstrapping we allow all objects to pass as
   // contexts. This is necessary to fix circular dependencies.
-  if (Isolate::Current()->bootstrapper()->IsActive()) return true;
+  if (child->GetIsolate()->bootstrapper()->IsActive()) return true;
   if (!object->IsContext()) return false;
   Context* context = Context::cast(object);
   return context->IsNativeContext() || context->IsGlobalContext() ||

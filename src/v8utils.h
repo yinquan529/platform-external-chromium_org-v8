@@ -111,6 +111,7 @@ int WriteAsCFile(const char* filename, const char* varname,
                  const char* str, int size, bool verbose = true);
 
 
+// ----------------------------------------------------------------------------
 // Data structures
 
 template <typename T>
@@ -120,23 +121,50 @@ inline Vector< Handle<Object> > HandleVector(v8::internal::Handle<T>* elms,
       reinterpret_cast<v8::internal::Handle<Object>*>(elms), length);
 }
 
+
+// ----------------------------------------------------------------------------
 // Memory
 
-// Copies data from |src| to |dst|.  The data spans MUST not overlap.
+// Copies data from |src| to |dst|.  The data spans must not overlap.
 template <typename T>
 inline void CopyWords(T* dst, T* src, int num_words) {
   STATIC_ASSERT(sizeof(T) == kPointerSize);
   ASSERT(Min(dst, src) + num_words <= Max(dst, src));
   ASSERT(num_words > 0);
 
-  // Use block copying memcpy if the segment we're copying is
+  // Use block copying OS::MemCopy if the segment we're copying is
   // enough to justify the extra call/setup overhead.
   static const int kBlockCopyLimit = 16;
+  STATIC_ASSERT(kBlockCopyLimit * kPointerSize >= OS::kMinComplexMemCopy);
 
   if (num_words >= kBlockCopyLimit) {
-    memcpy(dst, src, num_words * kPointerSize);
+    OS::MemCopy(dst, src, num_words * kPointerSize);
   } else {
     int remaining = num_words;
+    do {
+      remaining--;
+      *dst++ = *src++;
+    } while (remaining > 0);
+  }
+}
+
+
+// Copies data from |src| to |dst|.  The data spans must not overlap.
+template <typename T>
+inline void CopyBytes(T* dst, T* src, int num_bytes) {
+  STATIC_ASSERT(sizeof(T) == 1);
+  ASSERT(Min(dst, src) + num_bytes <= Max(dst, src));
+  ASSERT(num_bytes >= 0);
+  if (num_bytes == 0) return;
+
+  // Use block copying OS::MemCopy if the segment we're copying is
+  // enough to justify the extra call/setup overhead.
+  static const int kBlockCopyLimit = OS::kMinComplexMemCopy;
+
+  if (num_bytes >= kBlockCopyLimit) {
+    OS::MemCopy(dst, src, num_bytes);
+  } else {
+    int remaining = num_bytes;
     do {
       remaining--;
       *dst++ = *src++;
@@ -202,13 +230,44 @@ Vector<const char> ReadFile(FILE* file,
                             bool verbose = true);
 
 
+template <typename sourcechar, typename sinkchar>
+INLINE(static void CopyCharsUnsigned(sinkchar* dest,
+                                     const sourcechar* src,
+                                     int chars));
+
 // Copy from ASCII/16bit chars to ASCII/16bit chars.
 template <typename sourcechar, typename sinkchar>
 INLINE(void CopyChars(sinkchar* dest, const sourcechar* src, int chars));
 
+template<typename sourcechar, typename sinkchar>
+void CopyChars(sinkchar* dest, const sourcechar* src, int chars) {
+  ASSERT(sizeof(sourcechar) <= 2);
+  ASSERT(sizeof(sinkchar) <= 2);
+  if (sizeof(sinkchar) == 1) {
+    if (sizeof(sourcechar) == 1) {
+      CopyCharsUnsigned(reinterpret_cast<uint8_t*>(dest),
+                        reinterpret_cast<const uint8_t*>(src),
+                        chars);
+    } else {
+      CopyCharsUnsigned(reinterpret_cast<uint8_t*>(dest),
+                        reinterpret_cast<const uint16_t*>(src),
+                        chars);
+    }
+  } else {
+    if (sizeof(sourcechar) == 1) {
+      CopyCharsUnsigned(reinterpret_cast<uint16_t*>(dest),
+                        reinterpret_cast<const uint8_t*>(src),
+                        chars);
+    } else {
+      CopyCharsUnsigned(reinterpret_cast<uint16_t*>(dest),
+                        reinterpret_cast<const uint16_t*>(src),
+                        chars);
+    }
+  }
+}
 
 template <typename sourcechar, typename sinkchar>
-void CopyChars(sinkchar* dest, const sourcechar* src, int chars) {
+void CopyCharsUnsigned(sinkchar* dest, const sourcechar* src, int chars) {
   sinkchar* limit = dest + chars;
 #ifdef V8_HOST_CAN_READ_UNALIGNED
   if (sizeof(*dest) == sizeof(*src)) {
@@ -218,7 +277,8 @@ void CopyChars(sinkchar* dest, const sourcechar* src, int chars) {
     }
     // Number of characters in a uintptr_t.
     static const int kStepSize = sizeof(uintptr_t) / sizeof(*dest);  // NOLINT
-    while (dest <= limit - kStepSize) {
+    ASSERT(dest + kStepSize > dest);  // Check for overflow.
+    while (dest + kStepSize <= limit) {
       *reinterpret_cast<uintptr_t*>(dest) =
           *reinterpret_cast<const uintptr_t*>(src);
       dest += kStepSize;
@@ -231,37 +291,6 @@ void CopyChars(sinkchar* dest, const sourcechar* src, int chars) {
   }
 }
 
-
-// A resource for using mmapped files to back external strings that are read
-// from files.
-class MemoryMappedExternalResource: public
-    v8::String::ExternalAsciiStringResource {
- public:
-  explicit MemoryMappedExternalResource(const char* filename);
-  MemoryMappedExternalResource(const char* filename,
-                               bool remove_file_on_cleanup);
-  virtual ~MemoryMappedExternalResource();
-
-  virtual const char* data() const { return data_; }
-  virtual size_t length() const { return length_; }
-
-  bool exists() const { return file_ != NULL; }
-  bool is_empty() const { return length_ == 0; }
-
-  bool EnsureIsAscii(bool abort_if_failed) const;
-  bool EnsureIsAscii() const { return EnsureIsAscii(true); }
-  bool IsAscii() const { return EnsureIsAscii(false); }
-
- private:
-  void Init(const char* filename);
-
-  char* filename_;
-  OS::MemoryMappedFile* file_;
-
-  const char* data_;
-  size_t length_;
-  bool remove_file_on_cleanup_;
-};
 
 class StringBuilder : public SimpleStringBuilder {
  public:

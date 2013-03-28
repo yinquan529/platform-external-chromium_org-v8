@@ -116,9 +116,8 @@ class V8EXPORT CpuProfileNode {
 
 
 /**
- * CpuProfile contains a CPU profile in a form of two call trees:
- *  - top-down (from main() down to functions that do all the work);
- *  - bottom-up call graph (in backward direction).
+ * CpuProfile contains a CPU profile in a form of top-down call tree
+ * (from main() down to functions that do all the work).
  */
 class V8EXPORT CpuProfile {
  public:
@@ -127,9 +126,6 @@ class V8EXPORT CpuProfile {
 
   /** Returns CPU profile title. */
   Handle<String> GetTitle() const;
-
-  /** Returns the root node of the bottom up call tree. */
-  const CpuProfileNode* GetBottomUpRoot() const;
 
   /** Returns the root node of the top down call tree. */
   const CpuProfileNode* GetTopDownRoot() const;
@@ -407,13 +403,28 @@ class V8EXPORT HeapProfiler {
   static const SnapshotObjectId kUnknownObjectId = 0;
 
   /**
+   * Callback interface for retrieving user friendly names of global objects.
+   */
+  class ObjectNameResolver {
+  public:
+    /**
+     * Returns name to be used in the heap snapshot for given node. Returned
+     * string must stay alive until snapshot collection is completed.
+     */
+    virtual const char* GetName(Handle<Object> object) = 0;
+  protected:
+    virtual ~ObjectNameResolver() {}
+  };
+
+  /**
    * Takes a heap snapshot and returns it. Title may be an empty string.
    * See HeapSnapshot::Type for types description.
    */
   static const HeapSnapshot* TakeSnapshot(
       Handle<String> title,
       HeapSnapshot::Type type = HeapSnapshot::kFull,
-      ActivityControl* control = NULL);
+      ActivityControl* control = NULL,
+      ObjectNameResolver* global_object_name_resolver = NULL);
 
   /**
    * Starts tracking of heap objects population statistics. After calling
