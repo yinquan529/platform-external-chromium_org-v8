@@ -172,6 +172,7 @@ MY_CFLAGS := \
 	-march=pentium4 \
 	-msse2 \
 	-mfpmath=sse \
+	-fuse-ld=gold \
 	-ffunction-sections \
 	-funwind-tables \
 	-g \
@@ -196,7 +197,6 @@ MY_CFLAGS := \
 MY_CFLAGS_C :=
 
 MY_DEFS := \
-	'-DUSE_SKIA' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DUSE_LINUX_BREAKPAD' \
 	'-DNO_TCMALLOC' \
@@ -204,7 +204,6 @@ MY_DEFS := \
 	'-DCHROMIUM_BUILD' \
 	'-DUSE_LIBJPEG_TURBO=1' \
 	'-DUSE_PROPRIETARY_CODECS' \
-	'-DENABLE_PEPPER_THREADING' \
 	'-DENABLE_GPU=1' \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
@@ -256,6 +255,7 @@ LOCAL_LDFLAGS := \
 	-Wl,-z,noexecstack \
 	-fPIC \
 	-m32 \
+	-fuse-ld=gold \
 	-nostdlib \
 	-Wl,--no-undefined \
 	-Wl,--exclude-libs=ALL \
