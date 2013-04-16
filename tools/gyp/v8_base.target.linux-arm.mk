@@ -266,9 +266,9 @@ LOCAL_LDFLAGS := \
 	-Wl,--no-undefined \
 	-Wl,--exclude-libs=ALL \
 	-Wl,--icf=safe \
+	-Wl,--gc-sections \
 	-Wl,-O1 \
-	-Wl,--as-needed \
-	-Wl,--gc-sections
+	-Wl,--as-needed
 
 
 LOCAL_STATIC_LIBRARIES :=
