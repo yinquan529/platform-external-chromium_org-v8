@@ -67,7 +67,7 @@ void CodeStub::RecordCodeGeneration(Code* code, Isolate* isolate) {
 }
 
 
-int CodeStub::GetCodeKind() {
+Code::Kind CodeStub::GetCodeKind() const {
   return Code::STUB;
 }
 
@@ -98,7 +98,7 @@ Handle<Code> PlatformCodeStub::GenerateCode() {
 
   // Copy the generated code into a heap object.
   Code::Flags flags = Code::ComputeFlags(
-      static_cast<Code::Kind>(GetCodeKind()),
+      GetCodeKind(),
       GetICState(),
       GetExtraICState(),
       GetStubType(),
@@ -308,7 +308,7 @@ void ICCompareStub::AddToSpecialCache(Handle<Code> new_object) {
 bool ICCompareStub::FindCodeInSpecialCache(Code** code_out, Isolate* isolate) {
   Factory* factory = isolate->factory();
   Code::Flags flags = Code::ComputeFlags(
-      static_cast<Code::Kind>(GetCodeKind()),
+      GetCodeKind(),
       UNINITIALIZED);
   ASSERT(op_ == Token::EQ || op_ == Token::EQ_STRICT);
   Handle<Object> probe(
@@ -619,8 +619,10 @@ void ElementsTransitionAndStoreStub::Generate(MacroAssembler* masm) {
 
 
 void StubFailureTrampolineStub::GenerateAheadOfTime(Isolate* isolate) {
-  StubFailureTrampolineStub(NOT_JS_FUNCTION_STUB_MODE).GetCode(isolate);
-  StubFailureTrampolineStub(JS_FUNCTION_STUB_MODE).GetCode(isolate);
+  StubFailureTrampolineStub stub1(NOT_JS_FUNCTION_STUB_MODE);
+  StubFailureTrampolineStub stub2(JS_FUNCTION_STUB_MODE);
+  stub1.GetCode(isolate)->set_is_pregenerated(true);
+  stub2.GetCode(isolate)->set_is_pregenerated(true);
 }
 
 

@@ -1,4 +1,4 @@
-# Copyright 2011 the V8 project authors. All rights reserved.
+# Copyright 2013 the V8 project authors. All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
 # met:
@@ -25,14 +25,25 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from os.path import join
-Import('context tools')
 
-def ConfigureObjectFiles():
-  env = Environment(tools=tools)
-  env.Replace(**context.flags['preparser'])
-  context.ApplyEnvOverrides(env)
-  return env.Object('preparser-process.cc')
+import xml.etree.ElementTree as xml
 
-preparser_object = ConfigureObjectFiles()
-Return('preparser_object')
+
+class JUnitTestOutput:
+  def __init__(self, test_suite_name):
+    self.root = xml.Element("testsuite")
+    self.root.attrib["name"] = test_suite_name
+
+  def HasRunTest(self, test_name, test_duration, test_failure):
+    testCaseElement = xml.Element("testcase")
+    testCaseElement.attrib["name"] = " ".join(test_name)
+    testCaseElement.attrib["time"] = str(round(test_duration, 3))
+    if len(test_failure):
+      failureElement = xml.Element("failure")
+      failureElement.text = test_failure
+      testCaseElement.append(failureElement)
+    self.root.append(testCaseElement)
+
+  def FinishAndWrite(self, file):
+    xml.ElementTree(self.root).write(file, "UTF-8")
+

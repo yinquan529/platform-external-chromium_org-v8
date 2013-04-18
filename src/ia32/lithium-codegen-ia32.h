@@ -32,9 +32,10 @@
 
 #include "checks.h"
 #include "deoptimizer.h"
+#include "ia32/lithium-gap-resolver-ia32.h"
 #include "safepoint-table.h"
 #include "scopes.h"
-#include "ia32/lithium-gap-resolver-ia32.h"
+#include "v8utils.h"
 
 namespace v8 {
 namespace internal {
@@ -68,6 +69,7 @@ class LCodeGen BASE_EMBEDDED {
         osr_pc_offset_(-1),
         last_lazy_deopt_pc_(0),
         frame_is_built_(false),
+        x87_stack_depth_(0),
         safepoints_(info->zone()),
         resolver_(this),
         expected_safepoint_kind_(Safepoint::kSimple) {
@@ -102,10 +104,17 @@ class LCodeGen BASE_EMBEDDED {
     return Immediate(ToInteger32(LConstantOperand::cast(op)));
   }
 
-  Handle<Object> ToHandle(LConstantOperand* op) const;
+  // Support for non-sse2 (x87) floating point stack handling.
+  // These functions maintain the depth of the stack (either 0 or 1)
+  void PushX87DoubleOperand(Operand src);
+  void PushX87FloatOperand(Operand src);
+  void ReadX87Operand(Operand dst);
+  bool X87StackNonEmpty() const { return x87_stack_depth_ > 0; }
+  void PopX87();
+  void CurrentInstructionReturnsX87Result();
+  void FlushX87StackIfNecessary(LInstruction* instr);
 
-  // A utility for instructions that return floating point values on X87.
-  void HandleX87FPReturnValue(LInstruction* instr);
+  Handle<Object> ToHandle(LConstantOperand* op) const;
 
   // The operand denoting the second word (the one with a higher address) of
   // a double stack slot.
@@ -129,7 +138,8 @@ class LCodeGen BASE_EMBEDDED {
                             IntegerSignedness signedness);
 
   void DoDeferredTaggedToI(LTaggedToI* instr);
-  void DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr);
+  void DoDeferredTaggedToINoSSE2(LTaggedToINoSSE2* instr);
+  void DoDeferredMathAbsTaggedHeapNumber(LMathAbs* instr);
   void DoDeferredStackCheck(LStackCheck* instr);
   void DoDeferredRandom(LRandom* instr);
   void DoDeferredStringCharCodeAt(LStringCharCodeAt* instr);
@@ -192,7 +202,7 @@ class LCodeGen BASE_EMBEDDED {
   int GetStackSlotCount() const { return chunk()->spill_slot_count(); }
 
   void Abort(const char* reason);
-  void Comment(const char* format, ...);
+  void FPRINTF_CHECKING Comment(const char* format, ...);
 
   void AddDeferredCode(LDeferredCode* code) { deferred_.Add(code, zone()); }
 
@@ -281,15 +291,7 @@ class LCodeGen BASE_EMBEDDED {
                                 uint32_t offset,
                                 uint32_t additional_index = 0);
 
-  // Specific math operations - used from DoUnaryMathOperation.
-  void EmitIntegerMathAbs(LUnaryMathOperation* instr);
-  void DoMathAbs(LUnaryMathOperation* instr);
-  void DoMathFloor(LUnaryMathOperation* instr);
-  void DoMathSqrt(LUnaryMathOperation* instr);
-  void DoMathLog(LUnaryMathOperation* instr);
-  void DoMathTan(LUnaryMathOperation* instr);
-  void DoMathCos(LUnaryMathOperation* instr);
-  void DoMathSin(LUnaryMathOperation* instr);
+  void EmitIntegerMathAbs(LMathAbs* instr);
 
   // Support for recording safepoint and position information.
   void RecordSafepoint(LPointerMap* pointers,
@@ -310,6 +312,14 @@ class LCodeGen BASE_EMBEDDED {
       Register input,
       Register temp,
       XMMRegister result,
+      bool deoptimize_on_undefined,
+      bool deoptimize_on_minus_zero,
+      LEnvironment* env,
+      NumberUntagDMode mode = NUMBER_CANDIDATE_IS_ANY_TAGGED);
+
+  void EmitNumberUntagDNoSSE2(
+      Register input,
+      Register temp,
       bool deoptimize_on_undefined,
       bool deoptimize_on_minus_zero,
       LEnvironment* env,
@@ -404,6 +414,7 @@ class LCodeGen BASE_EMBEDDED {
   int osr_pc_offset_;
   int last_lazy_deopt_pc_;
   bool frame_is_built_;
+  int x87_stack_depth_;
 
   // Builder that keeps track of safepoints in the code. The table
   // itself is emitted at the end of the generated code.

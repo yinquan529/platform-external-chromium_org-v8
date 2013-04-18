@@ -176,19 +176,19 @@ class CodeStub BASE_EMBEDDED {
   virtual Major MajorKey() = 0;
   virtual int MinorKey() = 0;
 
- protected:
-  static bool CanUseFPRegisters();
-
-  // Generates the assembler code for the stub.
-  virtual Handle<Code> GenerateCode() = 0;
-
-  // BinaryOpStub needs to override this.
   virtual InlineCacheState GetICState() {
     return UNINITIALIZED;
   }
   virtual Code::ExtraICState GetExtraICState() {
     return Code::kNoExtraICState;
   }
+
+ protected:
+  static bool CanUseFPRegisters();
+
+  // Generates the assembler code for the stub.
+  virtual Handle<Code> GenerateCode() = 0;
+
   virtual Code::StubType GetStubType() {
     return Code::NORMAL;
   }
@@ -210,7 +210,7 @@ class CodeStub BASE_EMBEDDED {
   virtual void Activate(Code* code) { }
 
   // BinaryOpStub needs to override this.
-  virtual int GetCodeKind();
+  virtual Code::Kind GetCodeKind() const;
 
   // Add the code to a specialized cache, specific to an individual
   // stub type. Please note, this method must add the code object to a
@@ -249,7 +249,7 @@ class PlatformCodeStub : public CodeStub {
   // Retrieve the code for the stub. Generate the code if needed.
   virtual Handle<Code> GenerateCode();
 
-  virtual int GetCodeKind() { return Code::STUB; }
+  virtual Code::Kind GetCodeKind() const { return Code::STUB; }
   virtual int GetStubFlags() { return -1; }
 
  protected:
@@ -286,7 +286,7 @@ class HydrogenCodeStub : public CodeStub {
   // Retrieve the code for the stub. Generate the code if needed.
   virtual Handle<Code> GenerateCode() = 0;
 
-  virtual int GetCodeKind() { return Code::COMPILED_STUB; }
+  virtual Code::Kind GetCodeKind() const { return Code::STUB; }
 
   CodeStubInterfaceDescriptor* GetInterfaceDescriptor(Isolate* isolate) {
     return isolate->code_stub_interface_descriptor(MajorKey());
@@ -393,17 +393,24 @@ class ToNumberStub: public PlatformCodeStub {
 
 class FastNewClosureStub : public PlatformCodeStub {
  public:
-  explicit FastNewClosureStub(LanguageMode language_mode)
-    : language_mode_(language_mode) { }
+  explicit FastNewClosureStub(LanguageMode language_mode, bool is_generator)
+    : language_mode_(language_mode),
+      is_generator_(is_generator) { }
 
   void Generate(MacroAssembler* masm);
 
  private:
+  class StrictModeBits: public BitField<bool, 0, 1> {};
+  class IsGeneratorBits: public BitField<bool, 1, 1> {};
+
   Major MajorKey() { return FastNewClosure; }
-  int MinorKey() { return language_mode_ == CLASSIC_MODE
-        ? kNonStrictMode : kStrictMode; }
+  int MinorKey() {
+    return StrictModeBits::encode(language_mode_ != CLASSIC_MODE) |
+      IsGeneratorBits::encode(is_generator_);
+  }
 
   LanguageMode language_mode_;
+  bool is_generator_;
 };
 
 
@@ -443,7 +450,7 @@ class FastNewBlockContextStub : public PlatformCodeStub {
 };
 
 
-class FastCloneShallowArrayStub : public PlatformCodeStub {
+class FastCloneShallowArrayStub : public HydrogenCodeStub {
  public:
   // Maximum length of copied elements array.
   static const int kMaximumClonedLength = 8;
@@ -467,7 +474,31 @@ class FastCloneShallowArrayStub : public PlatformCodeStub {
     ASSERT_LE(length_, kMaximumClonedLength);
   }
 
-  void Generate(MacroAssembler* masm);
+  Mode mode() const { return mode_; }
+  int length() const { return length_; }
+  AllocationSiteMode allocation_site_mode() const {
+    return allocation_site_mode_;
+  }
+
+  ElementsKind ComputeElementsKind() const {
+    switch (mode()) {
+      case CLONE_ELEMENTS:
+      case COPY_ON_WRITE_ELEMENTS:
+        return FAST_ELEMENTS;
+      case CLONE_DOUBLE_ELEMENTS:
+        return FAST_DOUBLE_ELEMENTS;
+      case CLONE_ANY_ELEMENTS:
+        /*fall-through*/;
+    }
+    UNREACHABLE();
+    return LAST_ELEMENTS_KIND;
+  }
+
+  virtual Handle<Code> GenerateCode();
+
+  virtual void InitializeInterfaceDescriptor(
+      Isolate* isolate,
+      CodeStubInterfaceDescriptor* descriptor);
 
  private:
   Mode mode_;
@@ -575,7 +606,7 @@ class MathPowStub: public PlatformCodeStub {
 class ICStub: public PlatformCodeStub {
  public:
   explicit ICStub(Code::Kind kind) : kind_(kind) { }
-  virtual int GetCodeKind() { return kind_; }
+  virtual Code::Kind GetCodeKind() const { return kind_; }
   virtual InlineCacheState GetICState() { return MONOMORPHIC; }
 
   bool Describes(Code* code) {
@@ -661,7 +692,7 @@ class StoreArrayLengthStub: public StoreICStub {
 class HandlerStub: public ICStub {
  public:
   explicit HandlerStub(Code::Kind kind) : ICStub(kind) { }
-  virtual int GetCodeKind() { return Code::STUB; }
+  virtual Code::Kind GetCodeKind() const { return Code::STUB; }
   virtual int GetStubFlags() { return kind(); }
 };
 
@@ -746,7 +777,7 @@ class BinaryOpStub: public PlatformCodeStub {
  private:
   Token::Value op_;
   OverwriteMode mode_;
-  bool platform_specific_bit_;  // Indicates SSE3 on IA32, VFP2 on ARM.
+  bool platform_specific_bit_;  // Indicates SSE3 on IA32.
 
   // Operand type information determined at runtime.
   BinaryOpIC::TypeInfo left_type_;
@@ -799,7 +830,7 @@ class BinaryOpStub: public PlatformCodeStub {
   // Entirely platform-specific methods are defined as static helper
   // functions in the <arch>/code-stubs-<arch>.cc files.
 
-  virtual int GetCodeKind() { return Code::BINARY_OP_IC; }
+  virtual Code::Kind GetCodeKind() const { return Code::BINARY_OP_IC; }
 
   virtual InlineCacheState GetICState() {
     return BinaryOpIC::ToState(Max(left_type_, right_type_));
@@ -853,7 +884,7 @@ class ICCompareStub: public PlatformCodeStub {
   virtual CodeStub::Major MajorKey() { return CompareIC; }
   virtual int MinorKey();
 
-  virtual int GetCodeKind() { return Code::COMPARE_IC; }
+  virtual Code::Kind GetCodeKind() const { return Code::COMPARE_IC; }
 
   void GenerateSmis(MacroAssembler* masm);
   void GenerateNumbers(MacroAssembler* masm);
@@ -1517,7 +1548,7 @@ class ToBooleanStub: public PlatformCodeStub {
       : tos_(tos), types_(types) { }
 
   void Generate(MacroAssembler* masm);
-  virtual int GetCodeKind() { return Code::TO_BOOLEAN_IC; }
+  virtual Code::Kind GetCodeKind() const { return Code::TO_BOOLEAN_IC; }
   virtual void PrintName(StringStream* stream);
 
   virtual bool SometimesSetsUpAFrame() { return false; }
@@ -1604,18 +1635,25 @@ class StoreArrayLiteralElementStub : public PlatformCodeStub {
 class StubFailureTrampolineStub : public PlatformCodeStub {
  public:
   explicit StubFailureTrampolineStub(StubFunctionMode function_mode)
-      : function_mode_(function_mode) {}
+      : fp_registers_(CanUseFPRegisters()), function_mode_(function_mode) {}
 
   virtual bool IsPregenerated() { return true; }
 
   static void GenerateAheadOfTime(Isolate* isolate);
 
  private:
+  class FPRegisters:       public BitField<bool,                0, 1> {};
+  class FunctionModeField: public BitField<StubFunctionMode,    1, 1> {};
+
   Major MajorKey() { return StubFailureTrampoline; }
-  int MinorKey() { return static_cast<int>(function_mode_); }
+  int MinorKey() {
+    return FPRegisters::encode(fp_registers_) |
+        FunctionModeField::encode(function_mode_);
+  }
 
   void Generate(MacroAssembler* masm);
 
+  bool fp_registers_;
   StubFunctionMode function_mode_;
 
   DISALLOW_COPY_AND_ASSIGN(StubFailureTrampolineStub);

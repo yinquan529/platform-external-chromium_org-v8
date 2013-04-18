@@ -1,4 +1,4 @@
-// Copyright 2009 the V8 project authors. All rights reserved.
+// Copyright 2013 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,50 +25,52 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-var global = this;
+// Flags: --allow-natives-syntax --nodead-code-elimination
+// Flags: --nofold-constants --nouse-gvn
 
-function ES5Error(ut) {
-  this.ut = ut;
+// Create a function to get a long series of removable simulates.
+// f() {
+//   var _0 = <random>, _1 = <random>, ... _1000 = <random>,
+//   _1001 = <random var> + <random var>,
+//   _1002 = <random var> + <random var>,
+//   ...
+//   _99999 = <random var> + <random var>,
+//   x = 1;
+//   return _0;
+// }
+
+var seed = 1;
+
+function rand() {
+  seed = seed * 171 % 1337 + 17;
+  return (seed % 1000) / 1000;
 }
 
-ES5Error.prototype.toString = function () {
-  return this.ut.res;
-};
-
-// The harness uses the IE specific .description property of exceptions but
-// that's nothing we can't hack our way around.
-Error.prototype.__defineGetter__('description', function () {
-  return this.message;
-});
-
-function TestHarness() {
-  sth.call(this, global);
-  this._testResults = []
+function randi(max) {
+  seed = seed * 131 % 1773 + 13;
+  return seed % max;
 }
 
-// Borrow sth's registerTest method.
-TestHarness.prototype.registerTest = sth.prototype.registerTest;
+function varname(i) {
+  return "_" + i;
+}
 
-// Drop the before/after stuff, just run the test.
-TestHarness.prototype.startTesting = function () {
-  sth.prototype.run.call(this);
-  this.report();
-};
+var source = "var ";
 
-TestHarness.prototype.report = function () {
-  for (var i = 0; i < this._testResults.length; i++) {
-    var ut = this._testResults[i];
-    // We don't fail on preconditions.  Yet.
-    if (ut.res == "Precondition failed")
-      continue;
-    if (ut.res != 'pass')
-      throw new ES5Error(ut);
-  }
-};
+for (var i = 0; i < 1000; i++) {
+  source += [varname(i), "=", rand(), ","].join("");
+}
 
-TestHarness.prototype.startingTest = function (ut) {
-  this.currentTest = ut;
-  this._testResults.push(ut);
-};
+for (var i = 1000; i < 100000; i++) {
+  source += [varname(i), "=",
+             varname(randi(i)), "+",
+             varname(randi(i)), ","].join("");
+}
 
-var ES5Harness = new TestHarness();
+source += "x=1; return _0;"
+var f = new Function(source);
+
+f();
+%OptimizeFunctionOnNextCall(f);
+f();
+

@@ -1,4 +1,4 @@
-# Copyright 2008 the V8 project authors. All rights reserved.
+# Copyright 2012 the V8 project authors. All rights reserved.
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
 # met:
@@ -25,14 +25,32 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from os.path import join
-Import('sample context tools')
-
-def ConfigureObjectFiles():
-  env = Environment(tools=tools)
-  env.Replace(**context.flags['sample'])
-  context.ApplyEnvOverrides(env)
-  return env.Object(sample + '.cc')
-
-sample_object = ConfigureObjectFiles()
-Return('sample_object')
+{
+  'includes': ['../../../build/common.gypi'],
+  'targets': [
+    {
+      'target_name': 'v8_vtune',
+      'type': 'static_library',
+      'dependencies': [
+        '../../../tools/gyp/v8.gyp:v8',
+      ],
+      'sources': [
+        'ittnotify_config.h',
+        'ittnotify_types.h',
+        'jitprofiling.cc',
+        'jitprofiling.h',
+        'v8-vtune.h',
+        'vtune-jit.cc',
+        'vtune-jit.h',
+      ],
+      'direct_dependent_settings': {
+        'defines': ['ENABLE_VTUNE_JIT_INTERFACE',],
+        'conditions': [
+          ['OS != "win"', {
+            'libraries': ['-ldl',],
+          }],   
+        ],
+      },
+    },
+  ],
+}
