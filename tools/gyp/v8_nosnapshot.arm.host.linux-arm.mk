@@ -3,7 +3,7 @@
 include $(CLEAR_VARS)
 
 LOCAL_MODULE_CLASS := STATIC_LIBRARIES
-LOCAL_MODULE := v8_tools_gyp_v8_nosnapshot_host_gyp
+LOCAL_MODULE := v8_tools_gyp_v8_nosnapshot_arm_host_gyp
 LOCAL_MODULE_SUFFIX := .a
 LOCAL_MODULE_TAGS := optional
 LOCAL_IS_HOST_MODULE := true
@@ -70,7 +70,12 @@ MY_DEFS := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
-	'-DV8_TARGET_ARCH_IA32' \
+	'-DV8_TARGET_ARCH_ARM' \
+	'-DCAN_USE_UNALIGNED_ACCESSES=0' \
+	'-DARM_TEST' \
+	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
+	'-DCAN_USE_VFP3_INSTRUCTIONS' \
+	'-DUSE_EABI_HARDFLOAT=0' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -100,6 +105,8 @@ LOCAL_CPPFLAGS := \
 ### Rules for final target.
 
 LOCAL_LDFLAGS := \
+	-Wl,-z,now \
+	-Wl,-z,relro \
 	-pthread \
 	-fPIC \
 	-m32
@@ -114,10 +121,10 @@ LOCAL_SHARED_LIBRARIES :=
 
 # Add target alias to "gyp_all_modules" target.
 .PHONY: gyp_all_modules
-gyp_all_modules: v8_tools_gyp_v8_nosnapshot_host_gyp
+gyp_all_modules: v8_tools_gyp_v8_nosnapshot_arm_host_gyp
 
 # Alias gyp target name.
-.PHONY: v8_nosnapshot
-v8_nosnapshot: v8_tools_gyp_v8_nosnapshot_host_gyp
+.PHONY: v8_nosnapshot.arm
+v8_nosnapshot.arm: v8_tools_gyp_v8_nosnapshot_arm_host_gyp
 
 include $(BUILD_HOST_STATIC_LIBRARY)

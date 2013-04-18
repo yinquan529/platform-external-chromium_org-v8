@@ -3,10 +3,9 @@
 include $(CLEAR_VARS)
 
 LOCAL_MODULE_CLASS := STATIC_LIBRARIES
-LOCAL_MODULE := v8_tools_gyp_v8_base_host_gyp
+LOCAL_MODULE := v8_tools_gyp_v8_base_arm_gyp
 LOCAL_MODULE_SUFFIX := .a
 LOCAL_MODULE_TAGS := optional
-LOCAL_IS_HOST_MODULE := true
 gyp_intermediate_dir := $(call local-intermediates-dir)
 gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 
@@ -110,6 +109,7 @@ LOCAL_SRC_FILES := \
 	v8/src/runtime-profiler.cc \
 	v8/src/runtime.cc \
 	v8/src/safepoint-table.cc \
+	v8/src/sampler.cc \
 	v8/src/scanner-character-streams.cc \
 	v8/src/scanner.cc \
 	v8/src/scopeinfo.cc \
@@ -156,14 +156,13 @@ LOCAL_SRC_FILES := \
 	v8/src/arm/simulator-arm.cc \
 	v8/src/arm/stub-cache-arm.cc \
 	v8/src/platform-posix.cc \
-	v8/src/platform-macos.cc
+	v8/src/platform-linux.cc
 
 
 # Flags passed to both C and C++ files.
 MY_CFLAGS := \
 	-fstack-protector \
 	--param=ssp-buffer-size=4 \
-	-pthread \
 	-fno-exceptions \
 	-fno-strict-aliasing \
 	-Wno-unused-parameter \
@@ -172,7 +171,24 @@ MY_CFLAGS := \
 	-pipe \
 	-fPIC \
 	-Wno-format \
-	-m32 \
+	-fno-tree-sra \
+	-fuse-ld=gold \
+	-Wno-psabi \
+	-ffunction-sections \
+	-funwind-tables \
+	-g \
+	-fstack-protector \
+	-fno-short-enums \
+	-finline-limit=64 \
+	-Wa,--noexecstack \
+	-U_FORTIFY_SOURCE \
+	-Wno-extra \
+	-Wno-ignored-qualifiers \
+	-Wno-type-limits \
+	-Wno-address \
+	-Wno-format-security \
+	-Wno-return-type \
+	-Wno-sequence-point \
 	-Os \
 	-g \
 	-fomit-frame-pointer \
@@ -195,11 +211,17 @@ MY_DEFS := \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_TARGET_ARCH_ARM' \
+	'-DCAN_USE_UNALIGNED_ACCESSES=0' \
+	'-DARM_TEST' \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
-	'-DCAN_USE_VFP2_INSTRUCTIONS' \
 	'-DCAN_USE_VFP3_INSTRUCTIONS' \
 	'-DUSE_EABI_HARDFLOAT=0' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
+	'-DANDROID' \
+	'-D__GNU_SOURCE=1' \
+	'-DUSE_STLPORT=1' \
+	'-D_STLP_USE_PTR_SPECIALIZATIONS=1' \
+	'-DCHROME_BUILD_ID=""' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -210,12 +232,13 @@ MY_DEFS := \
 	'-DENABLE_EXTRA_CHECKS'
 
 LOCAL_CFLAGS := $(MY_CFLAGS_C) $(MY_CFLAGS) $(MY_DEFS)
-# Undefine ANDROID for host modules
-LOCAL_CFLAGS += -UANDROID
 
 # Include paths placed before CFLAGS/CPPFLAGS
 LOCAL_C_INCLUDES := \
-	$(LOCAL_PATH)/v8/src
+	$(LOCAL_PATH)/v8/src \
+	$(GYP_ABS_ANDROID_TOP_DIR)/frameworks/wilhelm/include \
+	$(GYP_ABS_ANDROID_TOP_DIR)/bionic \
+	$(GYP_ABS_ANDROID_TOP_DIR)/external/stlport/stlport
 
 LOCAL_C_INCLUDES := $(GYP_COPIED_SOURCE_ORIGIN_DIRS) $(LOCAL_C_INCLUDES)
 
@@ -224,14 +247,30 @@ LOCAL_CPPFLAGS := \
 	-fno-rtti \
 	-fno-threadsafe-statics \
 	-fvisibility-inlines-hidden \
-	-Wno-deprecated
+	-Wno-deprecated \
+	-Wno-abi \
+	-Wno-error=c++0x-compat \
+	-Wno-non-virtual-dtor \
+	-Wno-sign-promo \
+	-Wno-non-virtual-dtor
 
 ### Rules for final target.
 
 LOCAL_LDFLAGS := \
-	-pthread \
+	-Wl,-z,now \
+	-Wl,-z,relro \
+	-Wl,-z,noexecstack \
 	-fPIC \
-	-m32
+	-Wl,-z,relro \
+	-Wl,-z,now \
+	-fuse-ld=gold \
+	-nostdlib \
+	-Wl,--no-undefined \
+	-Wl,--exclude-libs=ALL \
+	-Wl,--icf=safe \
+	-Wl,--gc-sections \
+	-Wl,-O1 \
+	-Wl,--as-needed
 
 
 LOCAL_STATIC_LIBRARIES :=
@@ -239,14 +278,16 @@ LOCAL_STATIC_LIBRARIES :=
 # Enable grouping to fix circular references
 LOCAL_GROUP_STATIC_LIBRARIES := true
 
-LOCAL_SHARED_LIBRARIES :=
+LOCAL_SHARED_LIBRARIES := \
+	libstlport \
+	libdl
 
 # Add target alias to "gyp_all_modules" target.
 .PHONY: gyp_all_modules
-gyp_all_modules: v8_tools_gyp_v8_base_host_gyp
+gyp_all_modules: v8_tools_gyp_v8_base_arm_gyp
 
 # Alias gyp target name.
-.PHONY: v8_base
-v8_base: v8_tools_gyp_v8_base_host_gyp
+.PHONY: v8_base.arm
+v8_base.arm: v8_tools_gyp_v8_base_arm_gyp
 
-include $(BUILD_HOST_STATIC_LIBRARY)
+include $(BUILD_STATIC_LIBRARY)

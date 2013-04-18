@@ -3,7 +3,7 @@
 include $(CLEAR_VARS)
 
 LOCAL_MODULE_CLASS := STATIC_LIBRARIES
-LOCAL_MODULE := v8_tools_gyp_v8_nosnapshot_host_gyp
+LOCAL_MODULE := v8_tools_gyp_v8_nosnapshot_ia32_host_gyp
 LOCAL_MODULE_SUFFIX := .a
 LOCAL_MODULE_TAGS := optional
 LOCAL_IS_HOST_MODULE := true
@@ -100,8 +100,6 @@ LOCAL_CPPFLAGS := \
 ### Rules for final target.
 
 LOCAL_LDFLAGS := \
-	-Wl,-z,now \
-	-Wl,-z,relro \
 	-pthread \
 	-fPIC \
 	-m32
@@ -116,10 +114,10 @@ LOCAL_SHARED_LIBRARIES :=
 
 # Add target alias to "gyp_all_modules" target.
 .PHONY: gyp_all_modules
-gyp_all_modules: v8_tools_gyp_v8_nosnapshot_host_gyp
+gyp_all_modules: v8_tools_gyp_v8_nosnapshot_ia32_host_gyp
 
 # Alias gyp target name.
-.PHONY: v8_nosnapshot
-v8_nosnapshot: v8_tools_gyp_v8_nosnapshot_host_gyp
+.PHONY: v8_nosnapshot.ia32
+v8_nosnapshot.ia32: v8_tools_gyp_v8_nosnapshot_ia32_host_gyp
 
 include $(BUILD_HOST_STATIC_LIBRARY)

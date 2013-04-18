@@ -3,8 +3,8 @@
 include $(CLEAR_VARS)
 
 LOCAL_MODULE_CLASS := EXECUTABLES
-LOCAL_MODULE := v8_tools_gyp_mksnapshot_host_gyp
-LOCAL_MODULE_STEM := mksnapshot
+LOCAL_MODULE := v8_tools_gyp_mksnapshot_ia32_host_gyp
+LOCAL_MODULE_STEM := mksnapshot.ia32
 LOCAL_MODULE_SUFFIX := 
 LOCAL_MODULE_TAGS := optional
 LOCAL_IS_HOST_MODULE := true
@@ -13,8 +13,8 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 
 # Make sure our deps are built first.
 GYP_TARGET_DEPENDENCIES := \
-	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_base_host_gyp,true)/v8_tools_gyp_v8_base_host_gyp.a \
-	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_nosnapshot_host_gyp,true)/v8_tools_gyp_v8_nosnapshot_host_gyp.a \
+	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_base_ia32_host_gyp,true)/v8_tools_gyp_v8_base_ia32_host_gyp.a \
+	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_nosnapshot_ia32_host_gyp,true)/v8_tools_gyp_v8_nosnapshot_ia32_host_gyp.a \
 	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
 
 GYP_GENERATED_OUTPUTS :=
@@ -66,11 +66,7 @@ MY_DEFS := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
-	'-DV8_TARGET_ARCH_ARM' \
-	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
-	'-DCAN_USE_VFP2_INSTRUCTIONS' \
-	'-DCAN_USE_VFP3_INSTRUCTIONS' \
-	'-DUSE_EABI_HARDFLOAT=0' \
+	'-DV8_TARGET_ARCH_IA32' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -106,8 +102,8 @@ LOCAL_LDFLAGS := \
 
 
 LOCAL_STATIC_LIBRARIES := \
-	v8_tools_gyp_v8_base_host_gyp \
-	v8_tools_gyp_v8_nosnapshot_host_gyp
+	v8_tools_gyp_v8_base_ia32_host_gyp \
+	v8_tools_gyp_v8_nosnapshot_ia32_host_gyp
 
 # Enable grouping to fix circular references
 LOCAL_GROUP_STATIC_LIBRARIES := true
@@ -116,11 +112,11 @@ LOCAL_SHARED_LIBRARIES :=
 
 # Add target alias to "gyp_all_modules" target.
 .PHONY: gyp_all_modules
-gyp_all_modules: v8_tools_gyp_mksnapshot_host_gyp
+gyp_all_modules: v8_tools_gyp_mksnapshot_ia32_host_gyp
 
 # Alias gyp target name.
-.PHONY: mksnapshot
-mksnapshot: v8_tools_gyp_mksnapshot_host_gyp
+.PHONY: mksnapshot.ia32
+mksnapshot.ia32: v8_tools_gyp_mksnapshot_ia32_host_gyp
 
 LOCAL_MODULE_PATH := $(gyp_shared_intermediate_dir)
 include $(BUILD_HOST_EXECUTABLE)

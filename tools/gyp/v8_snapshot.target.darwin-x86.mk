@@ -11,7 +11,7 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 
 # Make sure our deps are built first.
 GYP_TARGET_DEPENDENCIES := \
-	$(gyp_shared_intermediate_dir)/mksnapshot \
+	$(gyp_shared_intermediate_dir)/mksnapshot.ia32 \
 	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
 
 ### Rules for action "run_mksnapshot":
@@ -19,9 +19,9 @@ $(gyp_intermediate_dir)/snapshot.cc: gyp_local_path := $(LOCAL_PATH)
 $(gyp_intermediate_dir)/snapshot.cc: gyp_intermediate_dir := $(GYP_ABS_ANDROID_TOP_DIR)/$(gyp_intermediate_dir)
 $(gyp_intermediate_dir)/snapshot.cc: gyp_shared_intermediate_dir := $(GYP_ABS_ANDROID_TOP_DIR)/$(gyp_shared_intermediate_dir)
 $(gyp_intermediate_dir)/snapshot.cc: export PATH := $(subst $(ANDROID_BUILD_PATHS),,$(PATH))
-$(gyp_intermediate_dir)/snapshot.cc: $(gyp_shared_intermediate_dir)/mksnapshot $(GYP_TARGET_DEPENDENCIES)
+$(gyp_intermediate_dir)/snapshot.cc: $(gyp_shared_intermediate_dir)/mksnapshot.ia32 $(GYP_TARGET_DEPENDENCIES)
 	@echo "Gyp action: v8_tools_gyp_v8_gyp_v8_snapshot_target_run_mksnapshot ($@)"
-	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_intermediate_dir); "$(gyp_shared_intermediate_dir)/mksnapshot" --log-snapshot-positions --logfile "$(gyp_intermediate_dir)/snapshot.log" "$(gyp_intermediate_dir)/snapshot.cc"
+	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_intermediate_dir); "$(gyp_shared_intermediate_dir)/mksnapshot.ia32" --log-snapshot-positions --logfile "$(gyp_intermediate_dir)/snapshot.log" "$(gyp_intermediate_dir)/snapshot.cc"
 
 
 

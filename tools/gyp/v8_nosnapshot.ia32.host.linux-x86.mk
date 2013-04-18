@@ -2,10 +2,9 @@
 
 include $(CLEAR_VARS)
 
-LOCAL_MODULE_CLASS := EXECUTABLES
-LOCAL_MODULE := v8_tools_gyp_mksnapshot_host_gyp
-LOCAL_MODULE_STEM := mksnapshot
-LOCAL_MODULE_SUFFIX := 
+LOCAL_MODULE_CLASS := STATIC_LIBRARIES
+LOCAL_MODULE := v8_tools_gyp_v8_nosnapshot_ia32_host_gyp
+LOCAL_MODULE_SUFFIX := .a
 LOCAL_MODULE_TAGS := optional
 LOCAL_IS_HOST_MODULE := true
 gyp_intermediate_dir := $(call local-intermediates-dir)
@@ -13,8 +12,6 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 
 # Make sure our deps are built first.
 GYP_TARGET_DEPENDENCIES := \
-	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_base_host_gyp,true)/v8_tools_gyp_v8_base_host_gyp.a \
-	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_nosnapshot_host_gyp,true)/v8_tools_gyp_v8_nosnapshot_host_gyp.a \
 	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
 
 GYP_GENERATED_OUTPUTS :=
@@ -23,12 +20,19 @@ GYP_GENERATED_OUTPUTS :=
 LOCAL_ADDITIONAL_DEPENDENCIES := $(GYP_TARGET_DEPENDENCIES) $(GYP_GENERATED_OUTPUTS)
 
 LOCAL_CPP_EXTENSION := .cc
-LOCAL_GENERATED_SOURCES :=
+$(gyp_intermediate_dir)/libraries.cc: $(gyp_shared_intermediate_dir)/libraries.cc
+	mkdir -p $(@D); cp $< $@
+$(gyp_intermediate_dir)/experimental-libraries.cc: $(gyp_shared_intermediate_dir)/experimental-libraries.cc
+	mkdir -p $(@D); cp $< $@
+LOCAL_GENERATED_SOURCES := \
+	$(gyp_intermediate_dir)/libraries.cc \
+	$(gyp_intermediate_dir)/experimental-libraries.cc
 
-GYP_COPIED_SOURCE_ORIGIN_DIRS :=
+GYP_COPIED_SOURCE_ORIGIN_DIRS := \
+	$(gyp_shared_intermediate_dir)
 
 LOCAL_SRC_FILES := \
-	v8/src/mksnapshot.cc
+	v8/src/snapshot-empty.cc
 
 
 # Flags passed to both C and C++ files.
@@ -66,11 +70,7 @@ MY_DEFS := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
-	'-DV8_TARGET_ARCH_ARM' \
-	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
-	'-DCAN_USE_VFP2_INSTRUCTIONS' \
-	'-DCAN_USE_VFP3_INSTRUCTIONS' \
-	'-DUSE_EABI_HARDFLOAT=0' \
+	'-DV8_TARGET_ARCH_IA32' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -107,9 +107,7 @@ LOCAL_LDFLAGS := \
 	-m32
 
 
-LOCAL_STATIC_LIBRARIES := \
-	v8_tools_gyp_v8_base_host_gyp \
-	v8_tools_gyp_v8_nosnapshot_host_gyp
+LOCAL_STATIC_LIBRARIES :=
 
 # Enable grouping to fix circular references
 LOCAL_GROUP_STATIC_LIBRARIES := true
@@ -118,11 +116,10 @@ LOCAL_SHARED_LIBRARIES :=
 
 # Add target alias to "gyp_all_modules" target.
 .PHONY: gyp_all_modules
-gyp_all_modules: v8_tools_gyp_mksnapshot_host_gyp
+gyp_all_modules: v8_tools_gyp_v8_nosnapshot_ia32_host_gyp
 
 # Alias gyp target name.
-.PHONY: mksnapshot
-mksnapshot: v8_tools_gyp_mksnapshot_host_gyp
+.PHONY: v8_nosnapshot.ia32
+v8_nosnapshot.ia32: v8_tools_gyp_v8_nosnapshot_ia32_host_gyp
 
-LOCAL_MODULE_PATH := $(gyp_shared_intermediate_dir)
-include $(BUILD_HOST_EXECUTABLE)
+include $(BUILD_HOST_STATIC_LIBRARY)

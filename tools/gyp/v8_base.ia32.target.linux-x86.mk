@@ -3,7 +3,7 @@
 include $(CLEAR_VARS)
 
 LOCAL_MODULE_CLASS := STATIC_LIBRARIES
-LOCAL_MODULE := v8_tools_gyp_v8_base_gyp
+LOCAL_MODULE := v8_tools_gyp_v8_base_ia32_gyp
 LOCAL_MODULE_SUFFIX := .a
 LOCAL_MODULE_TAGS := optional
 gyp_intermediate_dir := $(call local-intermediates-dir)
@@ -109,6 +109,7 @@ LOCAL_SRC_FILES := \
 	v8/src/runtime-profiler.cc \
 	v8/src/runtime.cc \
 	v8/src/safepoint-table.cc \
+	v8/src/sampler.cc \
 	v8/src/scanner-character-streams.cc \
 	v8/src/scanner.cc \
 	v8/src/scopeinfo.cc \
@@ -135,32 +136,29 @@ LOCAL_SRC_FILES := \
 	v8/src/variables.cc \
 	v8/src/version.cc \
 	v8/src/zone.cc \
-	v8/src/arm/assembler-arm.cc \
-	v8/src/arm/builtins-arm.cc \
-	v8/src/arm/code-stubs-arm.cc \
-	v8/src/arm/codegen-arm.cc \
-	v8/src/arm/constants-arm.cc \
-	v8/src/arm/cpu-arm.cc \
-	v8/src/arm/debug-arm.cc \
-	v8/src/arm/deoptimizer-arm.cc \
-	v8/src/arm/disasm-arm.cc \
-	v8/src/arm/frames-arm.cc \
-	v8/src/arm/full-codegen-arm.cc \
-	v8/src/arm/ic-arm.cc \
-	v8/src/arm/lithium-arm.cc \
-	v8/src/arm/lithium-codegen-arm.cc \
-	v8/src/arm/lithium-gap-resolver-arm.cc \
-	v8/src/arm/macro-assembler-arm.cc \
-	v8/src/arm/regexp-macro-assembler-arm.cc \
-	v8/src/arm/simulator-arm.cc \
-	v8/src/arm/stub-cache-arm.cc \
+	v8/src/ia32/assembler-ia32.cc \
+	v8/src/ia32/builtins-ia32.cc \
+	v8/src/ia32/code-stubs-ia32.cc \
+	v8/src/ia32/codegen-ia32.cc \
+	v8/src/ia32/cpu-ia32.cc \
+	v8/src/ia32/debug-ia32.cc \
+	v8/src/ia32/deoptimizer-ia32.cc \
+	v8/src/ia32/disasm-ia32.cc \
+	v8/src/ia32/frames-ia32.cc \
+	v8/src/ia32/full-codegen-ia32.cc \
+	v8/src/ia32/ic-ia32.cc \
+	v8/src/ia32/lithium-codegen-ia32.cc \
+	v8/src/ia32/lithium-gap-resolver-ia32.cc \
+	v8/src/ia32/lithium-ia32.cc \
+	v8/src/ia32/macro-assembler-ia32.cc \
+	v8/src/ia32/regexp-macro-assembler-ia32.cc \
+	v8/src/ia32/stub-cache-ia32.cc \
 	v8/src/platform-posix.cc \
 	v8/src/platform-linux.cc
 
 
 # Flags passed to both C and C++ files.
 MY_CFLAGS := \
-	-fstack-protector \
 	--param=ssp-buffer-size=4 \
 	-fno-exceptions \
 	-fno-strict-aliasing \
@@ -170,13 +168,15 @@ MY_CFLAGS := \
 	-pipe \
 	-fPIC \
 	-Wno-format \
-	-fno-tree-sra \
+	-m32 \
+	-mmmx \
+	-march=pentium4 \
+	-msse2 \
+	-mfpmath=sse \
 	-fuse-ld=gold \
-	-Wno-psabi \
 	-ffunction-sections \
 	-funwind-tables \
 	-g \
-	-fstack-protector \
 	-fno-short-enums \
 	-finline-limit=64 \
 	-Wa,--noexecstack \
@@ -188,6 +188,7 @@ MY_CFLAGS := \
 	-Wno-format-security \
 	-Wno-return-type \
 	-Wno-sequence-point \
+	-fno-stack-protector \
 	-Os \
 	-g \
 	-fomit-frame-pointer \
@@ -209,11 +210,7 @@ MY_DEFS := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
-	'-DV8_TARGET_ARCH_ARM' \
-	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
-	'-DCAN_USE_VFP2_INSTRUCTIONS' \
-	'-DCAN_USE_VFP3_INSTRUCTIONS' \
-	'-DUSE_EABI_HARDFLOAT=0' \
+	'-DV8_TARGET_ARCH_IA32' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DANDROID' \
 	'-D__GNU_SOURCE=1' \
@@ -246,7 +243,6 @@ LOCAL_CPPFLAGS := \
 	-fno-threadsafe-statics \
 	-fvisibility-inlines-hidden \
 	-Wno-deprecated \
-	-Wno-abi \
 	-Wno-error=c++0x-compat \
 	-Wno-non-virtual-dtor \
 	-Wno-sign-promo \
@@ -259,13 +255,11 @@ LOCAL_LDFLAGS := \
 	-Wl,-z,relro \
 	-Wl,-z,noexecstack \
 	-fPIC \
-	-Wl,-z,relro \
-	-Wl,-z,now \
+	-m32 \
 	-fuse-ld=gold \
 	-nostdlib \
 	-Wl,--no-undefined \
 	-Wl,--exclude-libs=ALL \
-	-Wl,--icf=safe \
 	-Wl,--gc-sections \
 	-Wl,-O1 \
 	-Wl,--as-needed
@@ -282,10 +276,10 @@ LOCAL_SHARED_LIBRARIES := \
 
 # Add target alias to "gyp_all_modules" target.
 .PHONY: gyp_all_modules
-gyp_all_modules: v8_tools_gyp_v8_base_gyp
+gyp_all_modules: v8_tools_gyp_v8_base_ia32_gyp
 
 # Alias gyp target name.
-.PHONY: v8_base
-v8_base: v8_tools_gyp_v8_base_gyp
+.PHONY: v8_base.ia32
+v8_base.ia32: v8_tools_gyp_v8_base_ia32_gyp
 
 include $(BUILD_STATIC_LIBRARY)

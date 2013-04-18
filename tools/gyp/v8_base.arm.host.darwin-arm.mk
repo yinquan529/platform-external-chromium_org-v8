@@ -3,7 +3,7 @@
 include $(CLEAR_VARS)
 
 LOCAL_MODULE_CLASS := STATIC_LIBRARIES
-LOCAL_MODULE := v8_tools_gyp_v8_base_host_gyp
+LOCAL_MODULE := v8_tools_gyp_v8_base_arm_host_gyp
 LOCAL_MODULE_SUFFIX := .a
 LOCAL_MODULE_TAGS := optional
 LOCAL_IS_HOST_MODULE := true
@@ -110,6 +110,7 @@ LOCAL_SRC_FILES := \
 	v8/src/runtime-profiler.cc \
 	v8/src/runtime.cc \
 	v8/src/safepoint-table.cc \
+	v8/src/sampler.cc \
 	v8/src/scanner-character-streams.cc \
 	v8/src/scanner.cc \
 	v8/src/scopeinfo.cc \
@@ -136,23 +137,25 @@ LOCAL_SRC_FILES := \
 	v8/src/variables.cc \
 	v8/src/version.cc \
 	v8/src/zone.cc \
-	v8/src/ia32/assembler-ia32.cc \
-	v8/src/ia32/builtins-ia32.cc \
-	v8/src/ia32/code-stubs-ia32.cc \
-	v8/src/ia32/codegen-ia32.cc \
-	v8/src/ia32/cpu-ia32.cc \
-	v8/src/ia32/debug-ia32.cc \
-	v8/src/ia32/deoptimizer-ia32.cc \
-	v8/src/ia32/disasm-ia32.cc \
-	v8/src/ia32/frames-ia32.cc \
-	v8/src/ia32/full-codegen-ia32.cc \
-	v8/src/ia32/ic-ia32.cc \
-	v8/src/ia32/lithium-codegen-ia32.cc \
-	v8/src/ia32/lithium-gap-resolver-ia32.cc \
-	v8/src/ia32/lithium-ia32.cc \
-	v8/src/ia32/macro-assembler-ia32.cc \
-	v8/src/ia32/regexp-macro-assembler-ia32.cc \
-	v8/src/ia32/stub-cache-ia32.cc \
+	v8/src/arm/assembler-arm.cc \
+	v8/src/arm/builtins-arm.cc \
+	v8/src/arm/code-stubs-arm.cc \
+	v8/src/arm/codegen-arm.cc \
+	v8/src/arm/constants-arm.cc \
+	v8/src/arm/cpu-arm.cc \
+	v8/src/arm/debug-arm.cc \
+	v8/src/arm/deoptimizer-arm.cc \
+	v8/src/arm/disasm-arm.cc \
+	v8/src/arm/frames-arm.cc \
+	v8/src/arm/full-codegen-arm.cc \
+	v8/src/arm/ic-arm.cc \
+	v8/src/arm/lithium-arm.cc \
+	v8/src/arm/lithium-codegen-arm.cc \
+	v8/src/arm/lithium-gap-resolver-arm.cc \
+	v8/src/arm/macro-assembler-arm.cc \
+	v8/src/arm/regexp-macro-assembler-arm.cc \
+	v8/src/arm/simulator-arm.cc \
+	v8/src/arm/stub-cache-arm.cc \
 	v8/src/platform-posix.cc \
 	v8/src/platform-macos.cc
 
@@ -192,7 +195,12 @@ MY_DEFS := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
-	'-DV8_TARGET_ARCH_IA32' \
+	'-DV8_TARGET_ARCH_ARM' \
+	'-DCAN_USE_UNALIGNED_ACCESSES=0' \
+	'-DARM_TEST' \
+	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
+	'-DCAN_USE_VFP3_INSTRUCTIONS' \
+	'-DUSE_EABI_HARDFLOAT=0' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
@@ -237,10 +245,10 @@ LOCAL_SHARED_LIBRARIES :=
 
 # Add target alias to "gyp_all_modules" target.
 .PHONY: gyp_all_modules
-gyp_all_modules: v8_tools_gyp_v8_base_host_gyp
+gyp_all_modules: v8_tools_gyp_v8_base_arm_host_gyp
 
 # Alias gyp target name.
-.PHONY: v8_base
-v8_base: v8_tools_gyp_v8_base_host_gyp
+.PHONY: v8_base.arm
+v8_base.arm: v8_tools_gyp_v8_base_arm_host_gyp
 
 include $(BUILD_HOST_STATIC_LIBRARY)
