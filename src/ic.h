@@ -59,6 +59,8 @@ namespace internal {
   ICU(UnaryOp_Patch)                                  \
   ICU(BinaryOp_Patch)                                 \
   ICU(CompareIC_Miss)                                 \
+  ICU(CompareNilIC_Miss)                              \
+  ICU(Unreachable)                                    \
   ICU(ToBoolean_Patch)
 //
 // IC is the base class for LoadIC, StoreIC, CallIC, KeyedLoadIC,
@@ -176,6 +178,7 @@ class IC {
                            Handle<String> name,
                            Handle<Code> code);
   void CopyICToMegamorphicCache(Handle<String> name);
+  bool IsTransitionedMapOfMonomorphicTarget(Map* receiver_map);
   void PatchCache(State state,
                   StrictModeFlag strict_mode,
                   Handle<JSObject> receiver,
@@ -774,6 +777,26 @@ class CompareIC: public IC {
 };
 
 
+class CompareNilIC: public IC {
+ public:
+  explicit CompareNilIC(Isolate* isolate) : IC(EXTRA_CALL_FRAME, isolate) {}
+
+  MUST_USE_RESULT MaybeObject* CompareNil(Handle<Object> object);
+
+  static Handle<Code> GetUninitialized();
+
+  static Code* GetRawUninitialized(EqualityKind kind, NilValue nil);
+
+  static void Clear(Address address, Code* target);
+
+  void patch(Code* code);
+
+  static MUST_USE_RESULT MaybeObject* DoCompareNilSlow(EqualityKind kind,
+                                                       NilValue nil,
+                                                       Handle<Object> object);
+};
+
+
 class ToBooleanIC: public IC {
  public:
   explicit ToBooleanIC(Isolate* isolate) : IC(NO_EXTRA_FRAME, isolate) { }
@@ -788,6 +811,8 @@ void PatchInlinedSmiCode(Address address, InlinedSmiCheck check);
 
 DECLARE_RUNTIME_FUNCTION(MaybeObject*, KeyedLoadIC_MissFromStubFailure);
 DECLARE_RUNTIME_FUNCTION(MaybeObject*, KeyedStoreIC_MissFromStubFailure);
+DECLARE_RUNTIME_FUNCTION(MaybeObject*, CompareNilIC_Miss);
+
 
 } }  // namespace v8::internal
 

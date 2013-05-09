@@ -30,6 +30,7 @@
 
 #include "allocation.h"
 #include "arguments.h"
+#include "code-stubs.h"
 #include "ic-inl.h"
 #include "macro-assembler.h"
 #include "objects.h"
@@ -78,6 +79,12 @@ class StubCache {
                               Handle<JSObject> holder);
 
   Handle<Code> FindIC(Handle<Name> name,
+                      Handle<Map> stub_holder_map,
+                      Code::Kind kind,
+                      Code::StubType type,
+                      Code::ExtraICState extra_state = Code::kNoExtraICState);
+
+  Handle<Code> FindIC(Handle<Name> name,
                       Handle<JSObject> stub_holder,
                       Code::Kind kind,
                       Code::StubType type,
@@ -85,10 +92,10 @@ class StubCache {
 
   Handle<Code> FindHandler(
       Handle<Name> name,
+      Handle<JSObject> receiver,
       Handle<JSObject> stub_holder,
       Code::Kind kind,
-      Code::StubType type,
-      Code::ExtraICState extra_state = Code::kNoExtraICState);
+      Code::StubType type);
 
   Handle<Code> ComputeMonomorphicIC(Handle<JSObject> receiver,
                                     Handle<Code> handler,
@@ -161,9 +168,14 @@ class StubCache {
 
   Handle<Code> ComputeStoreField(Handle<Name> name,
                                  Handle<JSObject> object,
-                                 int field_index,
-                                 Handle<Map> transition,
+                                 LookupResult* lookup,
                                  StrictModeFlag strict_mode);
+
+  Handle<Code> ComputeStoreTransition(Handle<Name> name,
+                                      Handle<JSObject> object,
+                                      LookupResult* lookup,
+                                      Handle<Map> transition,
+                                      StrictModeFlag strict_mode);
 
   Handle<Code> ComputeStoreNormal(StrictModeFlag strict_mode);
 
@@ -192,9 +204,13 @@ class StubCache {
 
   Handle<Code> ComputeKeyedStoreField(Handle<Name> name,
                                       Handle<JSObject> object,
-                                      int field_index,
-                                      Handle<Map> transition,
+                                      LookupResult* lookup,
                                       StrictModeFlag strict_mode);
+  Handle<Code> ComputeKeyedStoreTransition(Handle<Name> name,
+                                           Handle<JSObject> object,
+                                           LookupResult* lookup,
+                                           Handle<Map> transition,
+                                           StrictModeFlag strict_mode);
 
   Handle<Code> ComputeKeyedLoadElement(Handle<Map> receiver_map);
 
@@ -262,6 +278,12 @@ class StubCache {
 
   // ---
 
+  Handle<Code> ComputeCompareNil(Handle<Map> receiver_map,
+                                 NilValue nil,
+                                 CompareNilICStub::Types types);
+
+  // ---
+
   Handle<Code> ComputeLoadElementPolymorphic(MapHandleList* receiver_maps);
   Handle<Code> ComputeStoreElementPolymorphic(MapHandleList* receiver_maps,
                                               KeyedAccessStoreMode store_mode,
@@ -269,6 +291,7 @@ class StubCache {
 
   Handle<Code> ComputePolymorphicIC(MapHandleList* receiver_maps,
                                     CodeHandleList* handlers,
+                                    int number_of_valid_maps,
                                     Handle<Name> name);
 
   // Finds the Code object stored in the Heap::non_monomorphic_cache().
@@ -509,18 +532,28 @@ class StubCompiler BASE_EMBEDDED {
                                             Register scratch2,
                                             Label* miss_label);
 
+  void GenerateStoreTransition(MacroAssembler* masm,
+                               Handle<JSObject> object,
+                               LookupResult* lookup,
+                               Handle<Map> transition,
+                               Handle<Name> name,
+                               Register receiver_reg,
+                               Register name_reg,
+                               Register value_reg,
+                               Register scratch1,
+                               Register scratch2,
+                               Label* miss_label,
+                               Label* miss_restore_name);
+
   void GenerateStoreField(MacroAssembler* masm,
                           Handle<JSObject> object,
-                          int index,
-                          Handle<Map> transition,
-                          Handle<Name> name,
+                          LookupResult* lookup,
                           Register receiver_reg,
                           Register name_reg,
                           Register value_reg,
                           Register scratch1,
                           Register scratch2,
-                          Label* miss_label,
-                          Label* miss_restore_name);
+                          Label* miss_label);
 
   static Builtins::Name MissBuiltin(Code::Kind kind) {
     switch (kind) {
@@ -781,9 +814,13 @@ class BaseStoreStubCompiler: public StubCompiler {
 
   virtual ~BaseStoreStubCompiler() { }
 
+  Handle<Code> CompileStoreTransition(Handle<JSObject> object,
+                                      LookupResult* lookup,
+                                      Handle<Map> transition,
+                                      Handle<Name> name);
+
   Handle<Code> CompileStoreField(Handle<JSObject> object,
-                                 int index,
-                                 Handle<Map> transition,
+                                 LookupResult* lookup,
                                  Handle<Name> name);
 
  protected:

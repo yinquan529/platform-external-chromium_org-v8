@@ -65,7 +65,6 @@ bool LCodeGen::GenerateCode() {
   HPhase phase("Z_Code generation", chunk());
   ASSERT(is_unused());
   status_ = GENERATING;
-  CpuFeatureScope scope(masm(), FPU);
 
   // Open a frame scope to indicate that there is a frame on the stack.  The
   // NONE indicates that the scope shouldn't actually generate code to set up
@@ -92,6 +91,10 @@ void LCodeGen::FinishCode(Handle<Code> code) {
     prototype_maps_.at(i)->AddDependentCode(
         DependentCode::kPrototypeCheckGroup, code);
   }
+  for (int i = 0 ; i < transition_maps_.length(); i++) {
+    transition_maps_.at(i)->AddDependentCode(
+        DependentCode::kTransitionGroup, code);
+  }
 }
 
 
@@ -114,7 +117,7 @@ void LCodeGen::Comment(const char* format, ...) {
   // issues when the stack allocated buffer goes out of scope.
   size_t length = builder.position();
   Vector<char> copy = Vector<char>::New(length + 1);
-  memcpy(copy.start(), builder.Finalize(), copy.length());
+  OS::MemCopy(copy.start(), builder.Finalize(), copy.length());
   masm()->RecordComment(copy.start());
 }
 
@@ -193,8 +196,7 @@ bool LCodeGen::GeneratePrologue() {
     }
   }
 
-  if (info()->saves_caller_doubles() && CpuFeatures::IsSupported(FPU)) {
-    CpuFeatureScope scope(masm(), FPU);
+  if (info()->saves_caller_doubles()) {
     Comment(";;; Save clobbered callee double registers");
     int count = 0;
     BitVector* doubles = chunk()->allocated_double_registers();
@@ -259,38 +261,21 @@ bool LCodeGen::GenerateBody() {
        !is_aborted() && current_instruction_ < instructions_->length();
        current_instruction_++) {
     LInstruction* instr = instructions_->at(current_instruction_);
+
+    // Don't emit code for basic blocks with a replacement.
     if (instr->IsLabel()) {
-      LLabel* label = LLabel::cast(instr);
-      emit_instructions = !label->HasReplacement();
+      emit_instructions = !LLabel::cast(instr)->HasReplacement();
+    }
+    if (!emit_instructions) continue;
+
+    if (FLAG_code_comments && instr->HasInterestingComment(this)) {
+      Comment(";;; <@%d,#%d> %s",
+              current_instruction_,
+              instr->hydrogen_value()->id(),
+              instr->Mnemonic());
     }
 
-    if (emit_instructions) {
-      if (FLAG_code_comments) {
-        HValue* hydrogen = instr->hydrogen_value();
-        if (hydrogen != NULL) {
-          if (hydrogen->IsChange()) {
-            HValue* changed_value = HChange::cast(hydrogen)->value();
-            int use_id = 0;
-            const char* use_mnemo = "dead";
-            if (hydrogen->UseCount() >= 1) {
-              HValue* use_value = hydrogen->uses().value();
-              use_id = use_value->id();
-              use_mnemo = use_value->Mnemonic();
-            }
-            Comment(";;; @%d: %s. <of #%d %s for #%d %s>",
-                    current_instruction_, instr->Mnemonic(),
-                    changed_value->id(), changed_value->Mnemonic(),
-                    use_id, use_mnemo);
-          } else {
-            Comment(";;; @%d: %s. <#%d>", current_instruction_,
-                    instr->Mnemonic(), hydrogen->id());
-          }
-        } else {
-          Comment(";;; @%d: %s.", current_instruction_, instr->Mnemonic());
-        }
-      }
-      instr->CompileToNative(this);
-    }
+    instr->CompileToNative(this);
   }
   return !is_aborted();
 }
@@ -301,11 +286,14 @@ bool LCodeGen::GenerateDeferredCode() {
   if (deferred_.length() > 0) {
     for (int i = 0; !is_aborted() && i < deferred_.length(); i++) {
       LDeferredCode* code = deferred_[i];
+      Comment(";;; <@%d,#%d> "
+              "-------------------- Deferred %s --------------------",
+              code->instruction_index(),
+              code->instr()->hydrogen_value()->id(),
+              code->instr()->Mnemonic());
       __ bind(code->entry());
       if (NeedsDeferredFrame()) {
-        Comment(";;; Deferred build frame",
-                code->instruction_index(),
-                code->instr()->Mnemonic());
+        Comment(";;; Build frame");
         ASSERT(!frame_is_built_);
         ASSERT(info()->IsStub());
         frame_is_built_ = true;
@@ -313,15 +301,11 @@ bool LCodeGen::GenerateDeferredCode() {
         __ li(scratch0(), Operand(Smi::FromInt(StackFrame::STUB)));
         __ push(scratch0());
         __ Addu(fp, sp, Operand(2 * kPointerSize));
+        Comment(";;; Deferred code");
       }
-      Comment(";;; Deferred code @%d: %s.",
-              code->instruction_index(),
-              code->instr()->Mnemonic());
       code->Generate();
       if (NeedsDeferredFrame()) {
-        Comment(";;; Deferred destroy frame",
-                code->instruction_index(),
-                code->instr()->Mnemonic());
+        Comment(";;; Destroy frame");
         ASSERT(frame_is_built_);
         __ pop(at);
         __ MultiPop(cp.bit() | fp.bit() | ra.bit());
@@ -348,8 +332,10 @@ bool LCodeGen::GenerateDeoptJumpTable() {
     Abort("Generated code is too large");
   }
 
+  if (deopt_jump_table_.length() > 0) {
+    Comment(";;; -------------------- Jump table --------------------");
+  }
   Assembler::BlockTrampolinePoolScope block_trampoline_pool(masm_);
-  __ RecordComment("[ Deoptimization jump table");
   Label table_start;
   __ bind(&table_start);
   Label needs_frame_not_call;
@@ -594,7 +580,7 @@ void LCodeGen::WriteTranslation(LEnvironment* environment,
                    pushed_arguments_index,
                    pushed_arguments_count);
   bool has_closure_id = !info()->closure().is_null() &&
-      *info()->closure() != *environment->closure();
+      !info()->closure().is_identical_to(environment->closure());
   int closure_id = has_closure_id
       ? DefineDeoptimizationLiteral(environment->closure())
       : Translation::kSelfLiteralId;
@@ -829,7 +815,9 @@ void LCodeGen::DeoptimizeIf(Condition cc,
   }
 
   ASSERT(FLAG_deopt_every_n_times < 2);  // Other values not supported on MIPS.
-  if (FLAG_deopt_every_n_times == 1 && info_->opt_count() == id) {
+  if (FLAG_deopt_every_n_times == 1 &&
+      !info()->IsStub() &&
+      info()->opt_count() == id) {
     __ Jump(entry, RelocInfo::RUNTIME_ENTRY);
     return;
   }
@@ -904,10 +892,13 @@ void LCodeGen::PopulateDeoptimizationData(Handle<Code> code) {
 
   Handle<FixedArray> literals =
       factory()->NewFixedArray(deoptimization_literals_.length(), TENURED);
-  for (int i = 0; i < deoptimization_literals_.length(); i++) {
-    literals->set(i, *deoptimization_literals_[i]);
+  { ALLOW_HANDLE_DEREF(isolate(),
+                       "copying a ZoneList of handles into a FixedArray");
+    for (int i = 0; i < deoptimization_literals_.length(); i++) {
+      literals->set(i, *deoptimization_literals_[i]);
+    }
+    data->SetLiteralArray(*literals);
   }
-  data->SetLiteralArray(*literals);
 
   data->SetOsrAstId(Smi::FromInt(info_->osr_ast_id().ToInt()));
   data->SetOsrPcOffset(Smi::FromInt(osr_pc_offset_));
@@ -1023,12 +1014,19 @@ void LCodeGen::RecordPosition(int position) {
 }
 
 
+static const char* LabelType(LLabel* label) {
+  if (label->is_loop_header()) return " (loop header)";
+  if (label->is_osr_entry()) return " (OSR entry)";
+  return "";
+}
+
+
 void LCodeGen::DoLabel(LLabel* label) {
-  if (label->is_loop_header()) {
-    Comment(";;; B%d - LOOP entry", label->block_id());
-  } else {
-    Comment(";;; B%d", label->block_id());
-  }
+  Comment(";;; <@%d,#%d> -------------------- B%d%s --------------------",
+          current_instruction_,
+          label->hydrogen_value()->id(),
+          label->block_id(),
+          LabelType(label));
   __ bind(label->label());
   current_block_ = label->block_id();
   DoGap(label);
@@ -1475,7 +1473,6 @@ void LCodeGen::DoConstantI(LConstantI* instr) {
 void LCodeGen::DoConstantD(LConstantD* instr) {
   ASSERT(instr->result()->IsDoubleRegister());
   DoubleRegister result = ToDoubleRegister(instr->result());
-  CpuFeatureScope scope(masm(), FPU);
   double v = instr->value();
   __ Move(result, v);
 }
@@ -1483,19 +1480,13 @@ void LCodeGen::DoConstantD(LConstantD* instr) {
 
 void LCodeGen::DoConstantT(LConstantT* instr) {
   Handle<Object> value = instr->value();
+  ALLOW_HANDLE_DEREF(isolate(), "smi check");
   if (value->IsSmi()) {
     __ li(ToRegister(instr->result()), Operand(value));
   } else {
     __ LoadHeapObject(ToRegister(instr->result()),
                       Handle<HeapObject>::cast(value));
   }
-}
-
-
-void LCodeGen::DoJSArrayLength(LJSArrayLength* instr) {
-  Register result = ToRegister(instr->result());
-  Register array = ToRegister(instr->value());
-  __ lw(result, FieldMemOperand(array, JSArray::kLengthOffset));
 }
 
 
@@ -1673,7 +1664,6 @@ void LCodeGen::DoMathMinMax(LMathMinMax* instr) {
     __ bind(&done);
   } else {
     ASSERT(instr->hydrogen()->representation().IsDouble());
-    CpuFeatureScope scope(masm(), FPU);
     FPURegister left_reg = ToDoubleRegister(left);
     FPURegister right_reg = ToDoubleRegister(right);
     FPURegister result_reg = ToDoubleRegister(instr->result());
@@ -1714,7 +1704,6 @@ void LCodeGen::DoMathMinMax(LMathMinMax* instr) {
 
 
 void LCodeGen::DoArithmeticD(LArithmeticD* instr) {
-  CpuFeatureScope scope(masm(), FPU);
   DoubleRegister left = ToDoubleRegister(instr->left());
   DoubleRegister right = ToDoubleRegister(instr->right());
   DoubleRegister result = ToDoubleRegister(instr->result());
@@ -1768,10 +1757,9 @@ void LCodeGen::DoArithmeticT(LArithmeticT* instr) {
 }
 
 
-int LCodeGen::GetNextEmittedBlock(int block) {
-  for (int i = block + 1; i < graph()->blocks()->length(); ++i) {
-    LLabel* label = chunk_->GetLabel(i);
-    if (!label->HasReplacement()) return i;
+int LCodeGen::GetNextEmittedBlock() const {
+  for (int i = current_block_ + 1; i < graph()->blocks()->length(); ++i) {
+    if (!chunk_->GetLabel(i)->HasReplacement()) return i;
   }
   return -1;
 }
@@ -1779,7 +1767,7 @@ int LCodeGen::GetNextEmittedBlock(int block) {
 
 void LCodeGen::EmitBranch(int left_block, int right_block,
                           Condition cc, Register src1, const Operand& src2) {
-  int next_block = GetNextEmittedBlock(current_block_);
+  int next_block = GetNextEmittedBlock();
   right_block = chunk_->LookupDestination(right_block);
   left_block = chunk_->LookupDestination(left_block);
   if (right_block == left_block) {
@@ -1798,7 +1786,7 @@ void LCodeGen::EmitBranch(int left_block, int right_block,
 
 void LCodeGen::EmitBranchF(int left_block, int right_block,
                            Condition cc, FPURegister src1, FPURegister src2) {
-  int next_block = GetNextEmittedBlock(current_block_);
+  int next_block = GetNextEmittedBlock();
   right_block = chunk_->LookupDestination(right_block);
   left_block = chunk_->LookupDestination(left_block);
   if (right_block == left_block) {
@@ -1824,7 +1812,6 @@ void LCodeGen::DoBranch(LBranch* instr) {
     Register reg = ToRegister(instr->value());
     EmitBranch(true_block, false_block, ne, reg, Operand(zero_reg));
   } else if (r.IsDouble()) {
-    CpuFeatureScope scope(masm(), FPU);
     DoubleRegister reg = ToDoubleRegister(instr->value());
     // Test the double value. Zero and NaN are false.
     EmitBranchF(true_block, false_block, nue, reg, kDoubleRegZero);
@@ -1901,8 +1888,14 @@ void LCodeGen::DoBranch(LBranch* instr) {
         __ bind(&not_string);
       }
 
+      if (expected.Contains(ToBooleanStub::SYMBOL)) {
+        // Symbol value -> true.
+        const Register scratch = scratch1();
+        __ lbu(scratch, FieldMemOperand(map, Map::kInstanceTypeOffset));
+        __ Branch(true_label, eq, scratch, Operand(SYMBOL_TYPE));
+      }
+
       if (expected.Contains(ToBooleanStub::HEAP_NUMBER)) {
-        CpuFeatureScope scope(masm(), FPU);
         // heap number -> false iff +0, -0, or NaN.
         DoubleRegister dbl_scratch = double_scratch0();
         Label not_heap_number;
@@ -1923,10 +1916,8 @@ void LCodeGen::DoBranch(LBranch* instr) {
 
 
 void LCodeGen::EmitGoto(int block) {
-  block = chunk_->LookupDestination(block);
-  int next_block = GetNextEmittedBlock(current_block_);
-  if (block != next_block) {
-    __ jmp(chunk_->GetAssemblyLabel(block));
+  if (!IsNextEmittedBlock(block)) {
+    __ jmp(chunk_->GetAssemblyLabel(chunk_->LookupDestination(block)));
   }
 }
 
@@ -1982,7 +1973,6 @@ void LCodeGen::DoCmpIDAndBranch(LCmpIDAndBranch* instr) {
     EmitGoto(next_block);
   } else {
     if (instr->is_double()) {
-      CpuFeatureScope scope(masm(), FPU);
       // Compare left and right as doubles and load the
       // resulting flags into the normal status register.
       FPURegister left_reg = ToDoubleRegister(left);
@@ -2545,8 +2535,7 @@ void LCodeGen::DoReturn(LReturn* instr) {
     __ push(v0);
     __ CallRuntime(Runtime::kTraceExit, 1);
   }
-  if (info()->saves_caller_doubles() && CpuFeatures::IsSupported(FPU)) {
-    CpuFeatureScope scope(masm(), FPU);
+  if (info()->saves_caller_doubles()) {
     ASSERT(NeedsEagerFrame());
     BitVector* doubles = chunk()->allocated_double_registers();
     BitVector::Iterator save_iterator(doubles);
@@ -2561,20 +2550,21 @@ void LCodeGen::DoReturn(LReturn* instr) {
   if (NeedsEagerFrame()) {
     __ mov(sp, fp);
     __ Pop(ra, fp);
-
-    if (instr->has_constant_parameter_count()) {
-      int parameter_count = ToInteger32(instr->constant_parameter_count());
-      int32_t sp_delta = (parameter_count + 1) * kPointerSize;
-      if (sp_delta != 0) {
-        __ Addu(sp, sp, Operand(sp_delta));
-      }
-    } else {
-      Register reg = ToRegister(instr->parameter_count());
-      __ Addu(reg, reg, Operand(1));
-      __ sll(at, reg, kPointerSizeLog2);
-      __ Addu(sp, sp, at);
-    }
   }
+  if (instr->has_constant_parameter_count()) {
+    int parameter_count = ToInteger32(instr->constant_parameter_count());
+    int32_t sp_delta = (parameter_count + 1) * kPointerSize;
+    if (sp_delta != 0) {
+      __ Addu(sp, sp, Operand(sp_delta));
+    }
+  } else {
+    Register reg = ToRegister(instr->parameter_count());
+    // The argument count parameter is a smi
+    __ SmiUntag(reg);
+    __ sll(at, reg, kPointerSizeLog2);
+    __ Addu(sp, sp, at);
+  }
+
   __ Jump(ra);
 }
 
@@ -2699,12 +2689,30 @@ void LCodeGen::DoStoreContextSlot(LStoreContextSlot* instr) {
 
 void LCodeGen::DoLoadNamedField(LLoadNamedField* instr) {
   Register object = ToRegister(instr->object());
-  Register result = ToRegister(instr->result());
+  if (!FLAG_track_double_fields) {
+    ASSERT(!instr->hydrogen()->representation().IsDouble());
+  }
+  Register temp = instr->hydrogen()->representation().IsDouble()
+      ? scratch0() : ToRegister(instr->result());
   if (instr->hydrogen()->is_in_object()) {
-    __ lw(result, FieldMemOperand(object, instr->hydrogen()->offset()));
+    __ lw(temp, FieldMemOperand(object, instr->hydrogen()->offset()));
   } else {
-    __ lw(result, FieldMemOperand(object, JSObject::kPropertiesOffset));
-    __ lw(result, FieldMemOperand(result, instr->hydrogen()->offset()));
+    __ lw(temp, FieldMemOperand(object, JSObject::kPropertiesOffset));
+    __ lw(temp, FieldMemOperand(temp, instr->hydrogen()->offset()));
+  }
+
+  if (instr->hydrogen()->representation().IsDouble()) {
+    Label load_from_heap_number, done;
+    DoubleRegister result = ToDoubleRegister(instr->result());
+    FPURegister flt_scratch = double_scratch0().low();
+    __ JumpIfNotSmi(temp, &load_from_heap_number);
+    __ SmiUntag(temp);
+    __ mtc1(temp, flt_scratch);
+    __ cvt_d_w(result, flt_scratch);
+    __ Branch(&done);
+    __ bind(&load_from_heap_number);
+    __ ldc1(result, FieldMemOperand(temp, HeapNumber::kValueOffset));
+    __ bind(&done);
   }
 }
 
@@ -2892,16 +2900,24 @@ void LCodeGen::DoLoadExternalArrayPointer(
 
 void LCodeGen::DoAccessArgumentsAt(LAccessArgumentsAt* instr) {
   Register arguments = ToRegister(instr->arguments());
-  Register length = ToRegister(instr->length());
-  Register index = ToRegister(instr->index());
   Register result = ToRegister(instr->result());
-  // There are two words between the frame pointer and the last argument.
-  // Subtracting from length accounts for one of them, add one more.
-  __ subu(length, length, index);
-  __ Addu(length, length, Operand(1));
-  __ sll(length, length, kPointerSizeLog2);
-  __ Addu(at, arguments, Operand(length));
-  __ lw(result, MemOperand(at, 0));
+  if (instr->length()->IsConstantOperand() &&
+      instr->index()->IsConstantOperand()) {
+    int const_index = ToInteger32(LConstantOperand::cast(instr->index()));
+    int const_length = ToInteger32(LConstantOperand::cast(instr->length()));
+    int index = (const_length - const_index) + 1;
+    __ lw(result, MemOperand(arguments, index * kPointerSize));
+  } else {
+    Register length = ToRegister(instr->length());
+    Register index = ToRegister(instr->index());
+    // There are two words between the frame pointer and the last argument.
+    // Subtracting from length accounts for one of them, add one more.
+    __ subu(length, length, index);
+    __ Addu(length, length, Operand(1));
+    __ sll(length, length, kPointerSizeLog2);
+    __ Addu(at, arguments, Operand(length));
+    __ lw(result, MemOperand(at, 0));
+  }
 }
 
 
@@ -2933,61 +2949,11 @@ void LCodeGen::DoLoadKeyedExternalArray(LLoadKeyed* instr) {
       __ sll(scratch0(), key, shift_size);
       __ Addu(scratch0(), scratch0(), external_pointer);
     }
-    if (CpuFeatures::IsSupported(FPU)) {
-      CpuFeatureScope scope(masm(), FPU);
-      if (elements_kind == EXTERNAL_FLOAT_ELEMENTS) {
-        __ lwc1(result, MemOperand(scratch0(), additional_offset));
-        __ cvt_d_s(result, result);
-      } else  {  // i.e. elements_kind == EXTERNAL_DOUBLE_ELEMENTS
-        __ ldc1(result, MemOperand(scratch0(), additional_offset));
-      }
-    } else {
-      if (elements_kind == EXTERNAL_FLOAT_ELEMENTS) {
-        Register value = external_pointer;
-        __ lw(value, MemOperand(scratch0(), additional_offset));
-        __ And(sfpd_lo, value, Operand(kBinary32MantissaMask));
-
-        __ srl(scratch0(), value, kBinary32MantissaBits);
-        __ And(scratch0(), scratch0(),
-                Operand(kBinary32ExponentMask >> kBinary32MantissaBits));
-
-        Label exponent_rebiased;
-        __ Xor(at, scratch0(), Operand(0x00));
-        __ Branch(&exponent_rebiased, eq, at, Operand(zero_reg));
-
-        __ Xor(at, scratch0(), Operand(0xff));
-        Label skip;
-        __ Branch(&skip, ne, at, Operand(zero_reg));
-        __ li(scratch0(), Operand(0x7ff));
-        __ bind(&skip);
-        __ Branch(&exponent_rebiased, eq, at, Operand(zero_reg));
-
-        // Rebias exponent.
-        __ Addu(scratch0(),
-                scratch0(),
-                Operand(-kBinary32ExponentBias + HeapNumber::kExponentBias));
-
-        __ bind(&exponent_rebiased);
-        __ And(sfpd_hi, value, Operand(kBinary32SignMask));
-        __ sll(at, scratch0(), HeapNumber::kMantissaBitsInTopWord);
-        __ Or(sfpd_hi, sfpd_hi, at);
-
-        // Shift mantissa.
-        static const int kMantissaShiftForHiWord =
-            kBinary32MantissaBits - HeapNumber::kMantissaBitsInTopWord;
-
-        static const int kMantissaShiftForLoWord =
-            kBitsPerInt - kMantissaShiftForHiWord;
-
-        __ srl(at, sfpd_lo, kMantissaShiftForHiWord);
-        __ Or(sfpd_hi, sfpd_hi, at);
-        __ sll(sfpd_lo, sfpd_lo, kMantissaShiftForLoWord);
-
-      } else {
-        __ lw(sfpd_lo, MemOperand(scratch0(), additional_offset));
-        __ lw(sfpd_hi, MemOperand(scratch0(),
-                                   additional_offset + kPointerSize));
-      }
+    if (elements_kind == EXTERNAL_FLOAT_ELEMENTS) {
+      __ lwc1(result, MemOperand(scratch0(), additional_offset));
+      __ cvt_d_s(result, result);
+    } else  {  // i.e. elements_kind == EXTERNAL_DOUBLE_ELEMENTS
+      __ ldc1(result, MemOperand(scratch0(), additional_offset));
     }
   } else {
     Register result = ToRegister(instr->result());
@@ -3062,21 +3028,11 @@ void LCodeGen::DoLoadKeyedFixedDoubleArray(LLoadKeyed* instr) {
     __ sll(scratch, key, shift_size);
     __ Addu(elements, elements, scratch);
   }
-  if (CpuFeatures::IsSupported(FPU)) {
-    CpuFeatureScope scope(masm(), FPU);
-    __ Addu(elements, elements, Operand(base_offset));
-    __ ldc1(result, MemOperand(elements));
-    if (instr->hydrogen()->RequiresHoleCheck()) {
-      __ lw(scratch, MemOperand(elements, sizeof(kHoleNanLower32)));
-      DeoptimizeIf(eq, instr->environment(), scratch, Operand(kHoleNanUpper32));
-    }
-  } else {
-      __ lw(sfpd_hi, MemOperand(elements, base_offset + kPointerSize));
-      __ lw(sfpd_lo, MemOperand(elements, base_offset));
-    if (instr->hydrogen()->RequiresHoleCheck()) {
-      ASSERT(kPointerSize == sizeof(kHoleNanLower32));
-      DeoptimizeIf(eq, instr->environment(), sfpd_hi, Operand(kHoleNanUpper32));
-    }
+  __ Addu(elements, elements, Operand(base_offset));
+  __ ldc1(result, MemOperand(elements));
+  if (instr->hydrogen()->RequiresHoleCheck()) {
+    __ lw(scratch, MemOperand(elements, sizeof(kHoleNanLower32)));
+    DeoptimizeIf(eq, instr->environment(), scratch, Operand(kHoleNanUpper32));
   }
 }
 
@@ -3392,12 +3348,15 @@ void LCodeGen::DoGlobalReceiver(LGlobalReceiver* instr) {
 
 
 void LCodeGen::CallKnownFunction(Handle<JSFunction> function,
+                                 int formal_parameter_count,
                                  int arity,
                                  LInstruction* instr,
                                  CallKind call_kind,
                                  A1State a1_state) {
-  bool can_invoke_directly = !function->NeedsArgumentsAdaption() ||
-      function->shared()->formal_parameter_count() == arity;
+  bool dont_adapt_arguments =
+      formal_parameter_count == SharedFunctionInfo::kDontAdaptArgumentsSentinel;
+  bool can_invoke_directly =
+      dont_adapt_arguments || formal_parameter_count == arity;
 
   LPointerMap* pointers = instr->pointer_map();
   RecordPosition(pointers->position());
@@ -3412,7 +3371,7 @@ void LCodeGen::CallKnownFunction(Handle<JSFunction> function,
 
     // Set r0 to arguments count if adaption is not needed. Assumes that r0
     // is available to write to at this point.
-    if (!function->NeedsArgumentsAdaption()) {
+    if (dont_adapt_arguments) {
       __ li(a0, Operand(arity));
     }
 
@@ -3426,7 +3385,9 @@ void LCodeGen::CallKnownFunction(Handle<JSFunction> function,
   } else {
     SafepointGenerator generator(this, pointers, Safepoint::kLazyDeopt);
     ParameterCount count(arity);
-    __ InvokeFunction(function, count, CALL_FUNCTION, generator, call_kind);
+    ParameterCount expected(formal_parameter_count);
+    __ InvokeFunction(
+        function, expected, count, CALL_FUNCTION, generator, call_kind);
   }
 
   // Restore context.
@@ -3437,7 +3398,8 @@ void LCodeGen::CallKnownFunction(Handle<JSFunction> function,
 void LCodeGen::DoCallConstantFunction(LCallConstantFunction* instr) {
   ASSERT(ToRegister(instr->result()).is(v0));
   __ mov(a0, v0);
-  CallKnownFunction(instr->function(),
+  CallKnownFunction(instr->hydrogen()->function(),
+                    instr->hydrogen()->formal_parameter_count(),
                     instr->arity(),
                     instr,
                     CALL_AS_METHOD,
@@ -3445,7 +3407,7 @@ void LCodeGen::DoCallConstantFunction(LCallConstantFunction* instr) {
 }
 
 
-void LCodeGen::DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr) {
+void LCodeGen::DoDeferredMathAbsTaggedHeapNumber(LMathAbs* instr) {
   Register input = ToRegister(instr->value());
   Register result = ToRegister(instr->result());
   Register scratch = scratch0();
@@ -3510,7 +3472,7 @@ void LCodeGen::DoDeferredMathAbsTaggedHeapNumber(LUnaryMathOperation* instr) {
 }
 
 
-void LCodeGen::EmitIntegerMathAbs(LUnaryMathOperation* instr) {
+void LCodeGen::EmitIntegerMathAbs(LMathAbs* instr) {
   Register input = ToRegister(instr->value());
   Register result = ToRegister(instr->result());
   Assembler::BlockTrampolinePoolScope block_trampoline_pool(masm_);
@@ -3523,20 +3485,18 @@ void LCodeGen::EmitIntegerMathAbs(LUnaryMathOperation* instr) {
 }
 
 
-void LCodeGen::DoMathAbs(LUnaryMathOperation* instr) {
-  CpuFeatureScope scope(masm(), FPU);
+void LCodeGen::DoMathAbs(LMathAbs* instr) {
   // Class for deferred case.
   class DeferredMathAbsTaggedHeapNumber: public LDeferredCode {
    public:
-    DeferredMathAbsTaggedHeapNumber(LCodeGen* codegen,
-                                    LUnaryMathOperation* instr)
+    DeferredMathAbsTaggedHeapNumber(LCodeGen* codegen, LMathAbs* instr)
         : LDeferredCode(codegen), instr_(instr) { }
     virtual void Generate() {
       codegen()->DoDeferredMathAbsTaggedHeapNumber(instr_);
     }
     virtual LInstruction* instr() { return instr_; }
    private:
-    LUnaryMathOperation* instr_;
+    LMathAbs* instr_;
   };
 
   Representation r = instr->hydrogen()->value()->representation();
@@ -3560,8 +3520,7 @@ void LCodeGen::DoMathAbs(LUnaryMathOperation* instr) {
 }
 
 
-void LCodeGen::DoMathFloor(LUnaryMathOperation* instr) {
-  CpuFeatureScope scope(masm(), FPU);
+void LCodeGen::DoMathFloor(LMathFloor* instr) {
   DoubleRegister input = ToDoubleRegister(instr->value());
   Register result = ToRegister(instr->result());
   Register scratch1 = scratch0();
@@ -3589,8 +3548,7 @@ void LCodeGen::DoMathFloor(LUnaryMathOperation* instr) {
 }
 
 
-void LCodeGen::DoMathRound(LUnaryMathOperation* instr) {
-  CpuFeatureScope scope(masm(), FPU);
+void LCodeGen::DoMathRound(LMathRound* instr) {
   DoubleRegister input = ToDoubleRegister(instr->value());
   Register result = ToRegister(instr->result());
   DoubleRegister double_scratch1 = ToDoubleRegister(instr->temp());
@@ -3666,16 +3624,14 @@ void LCodeGen::DoMathRound(LUnaryMathOperation* instr) {
 }
 
 
-void LCodeGen::DoMathSqrt(LUnaryMathOperation* instr) {
-  CpuFeatureScope scope(masm(), FPU);
+void LCodeGen::DoMathSqrt(LMathSqrt* instr) {
   DoubleRegister input = ToDoubleRegister(instr->value());
   DoubleRegister result = ToDoubleRegister(instr->result());
   __ sqrt_d(result, input);
 }
 
 
-void LCodeGen::DoMathPowHalf(LUnaryMathOperation* instr) {
-  CpuFeatureScope scope(masm(), FPU);
+void LCodeGen::DoMathPowHalf(LMathPowHalf* instr) {
   DoubleRegister input = ToDoubleRegister(instr->value());
   DoubleRegister result = ToDoubleRegister(instr->result());
   DoubleRegister temp = ToDoubleRegister(instr->temp());
@@ -3700,7 +3656,6 @@ void LCodeGen::DoMathPowHalf(LUnaryMathOperation* instr) {
 
 
 void LCodeGen::DoPower(LPower* instr) {
-  CpuFeatureScope scope(masm(), FPU);
   Representation exponent_type = instr->hydrogen()->right()->representation();
   // Having marked this as a call, we can use any registers.
   // Just make sure that the input/output registers are the expected ones.
@@ -3731,7 +3686,6 @@ void LCodeGen::DoPower(LPower* instr) {
 
 
 void LCodeGen::DoRandom(LRandom* instr) {
-  CpuFeatureScope scope(masm(), FPU);
   class DeferredDoRandom: public LDeferredCode {
    public:
     DeferredDoRandom(LCodeGen* codegen, LRandom* instr)
@@ -3808,7 +3762,6 @@ void LCodeGen::DoDeferredRandom(LRandom* instr) {
 
 
 void LCodeGen::DoMathExp(LMathExp* instr) {
-  CpuFeatureScope scope(masm(), FPU);
   DoubleRegister input = ToDoubleRegister(instr->value());
   DoubleRegister result = ToDoubleRegister(instr->result());
   DoubleRegister double_scratch1 = ToDoubleRegister(instr->double_temp());
@@ -3822,7 +3775,7 @@ void LCodeGen::DoMathExp(LMathExp* instr) {
 }
 
 
-void LCodeGen::DoMathLog(LUnaryMathOperation* instr) {
+void LCodeGen::DoMathLog(LMathLog* instr) {
   ASSERT(ToDoubleRegister(instr->result()).is(f4));
   TranscendentalCacheStub stub(TranscendentalCache::LOG,
                                TranscendentalCacheStub::UNTAGGED);
@@ -3830,7 +3783,7 @@ void LCodeGen::DoMathLog(LUnaryMathOperation* instr) {
 }
 
 
-void LCodeGen::DoMathTan(LUnaryMathOperation* instr) {
+void LCodeGen::DoMathTan(LMathTan* instr) {
   ASSERT(ToDoubleRegister(instr->result()).is(f4));
   TranscendentalCacheStub stub(TranscendentalCache::TAN,
                                TranscendentalCacheStub::UNTAGGED);
@@ -3838,7 +3791,7 @@ void LCodeGen::DoMathTan(LUnaryMathOperation* instr) {
 }
 
 
-void LCodeGen::DoMathCos(LUnaryMathOperation* instr) {
+void LCodeGen::DoMathCos(LMathCos* instr) {
   ASSERT(ToDoubleRegister(instr->result()).is(f4));
   TranscendentalCacheStub stub(TranscendentalCache::COS,
                                TranscendentalCacheStub::UNTAGGED);
@@ -3846,7 +3799,7 @@ void LCodeGen::DoMathCos(LUnaryMathOperation* instr) {
 }
 
 
-void LCodeGen::DoMathSin(LUnaryMathOperation* instr) {
+void LCodeGen::DoMathSin(LMathSin* instr) {
   ASSERT(ToDoubleRegister(instr->result()).is(f4));
   TranscendentalCacheStub stub(TranscendentalCache::SIN,
                                TranscendentalCacheStub::UNTAGGED);
@@ -3854,47 +3807,12 @@ void LCodeGen::DoMathSin(LUnaryMathOperation* instr) {
 }
 
 
-void LCodeGen::DoUnaryMathOperation(LUnaryMathOperation* instr) {
-  switch (instr->op()) {
-    case kMathAbs:
-      DoMathAbs(instr);
-      break;
-    case kMathFloor:
-      DoMathFloor(instr);
-      break;
-    case kMathRound:
-      DoMathRound(instr);
-      break;
-    case kMathSqrt:
-      DoMathSqrt(instr);
-      break;
-    case kMathPowHalf:
-      DoMathPowHalf(instr);
-      break;
-    case kMathCos:
-      DoMathCos(instr);
-      break;
-    case kMathSin:
-      DoMathSin(instr);
-      break;
-    case kMathTan:
-      DoMathTan(instr);
-      break;
-    case kMathLog:
-      DoMathLog(instr);
-      break;
-    default:
-      Abort("Unimplemented type of LUnaryMathOperation.");
-      UNREACHABLE();
-  }
-}
-
-
 void LCodeGen::DoInvokeFunction(LInvokeFunction* instr) {
   ASSERT(ToRegister(instr->function()).is(a1));
   ASSERT(instr->HasPointerMap());
 
-  if (instr->known_function().is_null()) {
+  Handle<JSFunction> known_function = instr->hydrogen()->known_function();
+  if (known_function.is_null()) {
     LPointerMap* pointers = instr->pointer_map();
     RecordPosition(pointers->position());
     SafepointGenerator generator(this, pointers, Safepoint::kLazyDeopt);
@@ -3902,7 +3820,8 @@ void LCodeGen::DoInvokeFunction(LInvokeFunction* instr) {
     __ InvokeFunction(a1, count, CALL_FUNCTION, generator, CALL_AS_METHOD);
     __ lw(cp, MemOperand(fp, StandardFrameConstants::kContextOffset));
   } else {
-    CallKnownFunction(instr->known_function(),
+    CallKnownFunction(known_function,
+                      instr->hydrogen()->formal_parameter_count(),
                       instr->arity(),
                       instr,
                       CALL_AS_METHOD,
@@ -3962,7 +3881,8 @@ void LCodeGen::DoCallGlobal(LCallGlobal* instr) {
 
 void LCodeGen::DoCallKnownGlobal(LCallKnownGlobal* instr) {
   ASSERT(ToRegister(instr->result()).is(v0));
-  CallKnownFunction(instr->target(),
+  CallKnownFunction(instr->hydrogen()->target(),
+                    instr->hydrogen()->formal_parameter_count(),
                     instr->arity(),
                     instr,
                     CALL_AS_FUNCTION,
@@ -3993,10 +3913,18 @@ void LCodeGen::DoCallNewArray(LCallNewArray* instr) {
 
   __ li(a0, Operand(instr->arity()));
   __ li(a2, Operand(instr->hydrogen()->property_cell()));
-  Handle<Code> array_construct_code =
-      isolate()->builtins()->ArrayConstructCode();
-
-  CallCode(array_construct_code, RelocInfo::CONSTRUCT_CALL, instr);
+  Object* cell_value = instr->hydrogen()->property_cell()->value();
+  ElementsKind kind = static_cast<ElementsKind>(Smi::cast(cell_value)->value());
+  if (instr->arity() == 0) {
+    ArrayNoArgumentConstructorStub stub(kind);
+    CallCode(stub.GetCode(isolate()), RelocInfo::CONSTRUCT_CALL, instr);
+  } else if (instr->arity() == 1) {
+    ArraySingleArgumentConstructorStub stub(kind);
+    CallCode(stub.GetCode(isolate()), RelocInfo::CONSTRUCT_CALL, instr);
+  } else {
+    ArrayNArgumentsConstructorStub stub(kind);
+    CallCode(stub.GetCode(isolate()), RelocInfo::CONSTRUCT_CALL, instr);
+  }
 }
 
 
@@ -4013,15 +3941,37 @@ void LCodeGen::DoInnerAllocatedObject(LInnerAllocatedObject* instr) {
 
 
 void LCodeGen::DoStoreNamedField(LStoreNamedField* instr) {
+  Representation representation = instr->representation();
+
   Register object = ToRegister(instr->object());
   Register value = ToRegister(instr->value());
+  ASSERT(!object.is(value));
   Register scratch = scratch0();
   int offset = instr->offset();
 
-  ASSERT(!object.is(value));
+  if (FLAG_track_fields && representation.IsSmi()) {
+    __ SmiTagCheckOverflow(value, value, scratch);
+    if (!instr->hydrogen()->value()->range()->IsInSmiRange()) {
+      DeoptimizeIf(lt, instr->environment(), scratch, Operand(zero_reg));
+    }
+  } else if (FLAG_track_double_fields && representation.IsDouble() &&
+             !instr->hydrogen()->value()->type().IsSmi() &&
+             !instr->hydrogen()->value()->type().IsHeapNumber()) {
+    Label do_store;
+    __ JumpIfSmi(value, &do_store);
+    Handle<Map> map(isolate()->factory()->heap_number_map());
 
-  if (!instr->transition().is_null()) {
-    __ li(scratch, Operand(instr->transition()));
+    __ lw(scratch, FieldMemOperand(value, HeapObject::kMapOffset));
+    DoCheckMapCommon(scratch, map, REQUIRE_EXACT_MAP, instr->environment());
+    __ bind(&do_store);
+  }
+
+  Handle<Map> transition = instr->transition();
+  if (!transition.is_null()) {
+    if (transition->CanBeDeprecated()) {
+      transition_maps_.Add(transition, info()->zone());
+    }
+    __ li(scratch, Operand(transition));
     __ sw(scratch, FieldMemOperand(object, HeapObject::kMapOffset));
     if (instr->hydrogen()->NeedsWriteBarrierForMap()) {
       Register temp = ToRegister(instr->temp());
@@ -4111,7 +4061,6 @@ void LCodeGen::DoBoundsCheck(LBoundsCheck* instr) {
 
 
 void LCodeGen::DoStoreKeyedExternalArray(LStoreKeyed* instr) {
-  CpuFeatureScope scope(masm(), FPU);
   Register external_pointer = ToRegister(instr->elements());
   Register key = no_reg;
   ElementsKind elements_kind = instr->elements_kind();
@@ -4185,7 +4134,6 @@ void LCodeGen::DoStoreKeyedExternalArray(LStoreKeyed* instr) {
 
 
 void LCodeGen::DoStoreKeyedFixedDoubleArray(LStoreKeyed* instr) {
-  CpuFeatureScope scope(masm(), FPU);
   DoubleRegister value = ToDoubleRegister(instr->value());
   Register elements = ToRegister(instr->elements());
   Register key = no_reg;
@@ -4489,7 +4437,6 @@ void LCodeGen::DoStringLength(LStringLength* instr) {
 
 
 void LCodeGen::DoInteger32ToDouble(LInteger32ToDouble* instr) {
-  CpuFeatureScope scope(masm(), FPU);
   LOperand* input = instr->value();
   ASSERT(input->IsRegister() || input->IsStackSlot());
   LOperand* output = instr->result();
@@ -4507,7 +4454,6 @@ void LCodeGen::DoInteger32ToDouble(LInteger32ToDouble* instr) {
 
 
 void LCodeGen::DoUint32ToDouble(LUint32ToDouble* instr) {
-  CpuFeatureScope scope(masm(), FPU);
   LOperand* input = instr->value();
   LOperand* output = instr->result();
 
@@ -4569,44 +4515,6 @@ void LCodeGen::DoNumberTagU(LNumberTagU* instr) {
 }
 
 
-// Convert unsigned integer with specified number of leading zeroes in binary
-// representation to IEEE 754 double.
-// Integer to convert is passed in register hiword.
-// Resulting double is returned in registers hiword:loword.
-// This functions does not work correctly for 0.
-static void GenerateUInt2Double(MacroAssembler* masm,
-                                Register hiword,
-                                Register loword,
-                                Register scratch,
-                                int leading_zeroes) {
-  const int meaningful_bits = kBitsPerInt - leading_zeroes - 1;
-  const int biased_exponent = HeapNumber::kExponentBias + meaningful_bits;
-
-  const int mantissa_shift_for_hi_word =
-      meaningful_bits - HeapNumber::kMantissaBitsInTopWord;
-  const int mantissa_shift_for_lo_word =
-      kBitsPerInt - mantissa_shift_for_hi_word;
-  masm->li(scratch, Operand(biased_exponent << HeapNumber::kExponentShift));
-  if (mantissa_shift_for_hi_word > 0) {
-    masm->sll(loword, hiword, mantissa_shift_for_lo_word);
-    masm->srl(hiword, hiword, mantissa_shift_for_hi_word);
-    masm->Or(hiword, scratch, hiword);
-  } else {
-    masm->mov(loword, zero_reg);
-    masm->sll(hiword, hiword, mantissa_shift_for_hi_word);
-    masm->Or(hiword, scratch, hiword);
-  }
-
-  // If least significant bit of biased exponent was not 1 it was corrupted
-  // by most significant bit of mantissa so we should fix that.
-  if (!(biased_exponent & 1)) {
-    masm->li(scratch, 1 << HeapNumber::kExponentShift);
-    masm->nor(scratch, scratch, scratch);
-    masm->and_(hiword, hiword, scratch);
-  }
-}
-
-
 void LCodeGen::DoDeferredNumberTagI(LInstruction* instr,
                                     LOperand* value,
                                     IntegerSignedness signedness) {
@@ -4627,35 +4535,11 @@ void LCodeGen::DoDeferredNumberTagI(LInstruction* instr,
       __ SmiUntag(src, dst);
       __ Xor(src, src, Operand(0x80000000));
     }
-    if (CpuFeatures::IsSupported(FPU)) {
-      CpuFeatureScope scope(masm(), FPU);
-      __ mtc1(src, dbl_scratch);
-      __ cvt_d_w(dbl_scratch, dbl_scratch);
-    } else {
-      FloatingPointHelper::Destination dest =
-          FloatingPointHelper::kCoreRegisters;
-      FloatingPointHelper::ConvertIntToDouble(masm(), src, dest, f0,
-                                              sfpd_lo, sfpd_hi,
-                                              scratch0(), f2);
-    }
+    __ mtc1(src, dbl_scratch);
+    __ cvt_d_w(dbl_scratch, dbl_scratch);
   } else {
-    if (CpuFeatures::IsSupported(FPU)) {
-      CpuFeatureScope scope(masm(), FPU);
-      __ mtc1(src, dbl_scratch);
-      __ Cvt_d_uw(dbl_scratch, dbl_scratch, f22);
-    } else {
-      Label no_leading_zero, done;
-      __ And(at, src, Operand(0x80000000));
-      __ Branch(&no_leading_zero, ne, at, Operand(zero_reg));
-
-      // Integer has one leading zeros.
-      GenerateUInt2Double(masm(), sfpd_hi, sfpd_lo, t0, 1);
-      __ Branch(&done);
-
-      __ bind(&no_leading_zero);
-      GenerateUInt2Double(masm(), sfpd_hi, sfpd_lo, t0, 0);
-      __ Branch(&done);
-    }
+    __ mtc1(src, dbl_scratch);
+    __ Cvt_d_uw(dbl_scratch, dbl_scratch, f22);
   }
 
   if (FLAG_inline_new) {
@@ -4679,13 +4563,7 @@ void LCodeGen::DoDeferredNumberTagI(LInstruction* instr,
   // Done. Put the value in dbl_scratch into the value of the allocated heap
   // number.
   __ bind(&done);
-  if (CpuFeatures::IsSupported(FPU)) {
-    CpuFeatureScope scope(masm(), FPU);
-    __ sdc1(dbl_scratch, MemOperand(dst, HeapNumber::kValueOffset));
-  } else {
-    __ sw(sfpd_lo, MemOperand(dst, HeapNumber::kMantissaOffset));
-    __ sw(sfpd_hi, MemOperand(dst, HeapNumber::kExponentOffset));
-  }
+  __ sdc1(dbl_scratch, MemOperand(dst, HeapNumber::kValueOffset));
   __ Addu(dst, dst, kHeapObjectTag);
   __ StoreToSafepointRegisterSlot(dst, dst);
 }
@@ -4718,39 +4596,16 @@ void LCodeGen::DoNumberTagD(LNumberTagD* instr) {
   Label no_special_nan_handling;
   Label done;
   if (convert_hole) {
-    if (CpuFeatures::IsSupported(FPU)) {
-      CpuFeatureScope scope(masm(), FPU);
-      DoubleRegister input_reg = ToDoubleRegister(instr->value());
-      __ BranchF(&no_special_nan_handling, NULL, eq, input_reg, input_reg);
-      __ Move(reg, scratch0(), input_reg);
-      Label canonicalize;
-      __ Branch(&canonicalize, ne, scratch0(), Operand(kHoleNanUpper32));
-      __ li(reg, factory()->the_hole_value());
-      __ Branch(&done);
-      __ bind(&canonicalize);
-      __ Move(input_reg,
-              FixedDoubleArray::canonical_not_the_hole_nan_as_double());
-    } else {
-      Label not_hole;
-      __ Branch(&not_hole, ne, sfpd_hi, Operand(kHoleNanUpper32));
-      __ li(reg, factory()->the_hole_value());
-      __ Branch(&done);
-      __ bind(&not_hole);
-      __ And(scratch, sfpd_hi, Operand(0x7ff00000));
-      __ Branch(&no_special_nan_handling, ne, scratch, Operand(0x7ff00000));
-      Label special_nan_handling;
-      __ And(at, sfpd_hi, Operand(0x000FFFFF));
-      __ Branch(&special_nan_handling, ne, at, Operand(zero_reg));
-      __ Branch(&no_special_nan_handling, eq, sfpd_lo, Operand(zero_reg));
-      __ bind(&special_nan_handling);
-      double canonical_nan =
-          FixedDoubleArray::canonical_not_the_hole_nan_as_double();
-      uint64_t casted_nan = BitCast<uint64_t>(canonical_nan);
-      __ li(sfpd_lo,
-            Operand(static_cast<uint32_t>(casted_nan & 0xFFFFFFFF)));
-      __ li(sfpd_hi,
-            Operand(static_cast<uint32_t>(casted_nan >> 32)));
-    }
+    DoubleRegister input_reg = ToDoubleRegister(instr->value());
+    __ BranchF(&no_special_nan_handling, NULL, eq, input_reg, input_reg);
+    __ Move(reg, scratch0(), input_reg);
+    Label canonicalize;
+    __ Branch(&canonicalize, ne, scratch0(), Operand(kHoleNanUpper32));
+    __ li(reg, factory()->the_hole_value());
+    __ Branch(&done);
+    __ bind(&canonicalize);
+    __ Move(input_reg,
+            FixedDoubleArray::canonical_not_the_hole_nan_as_double());
   }
 
   __ bind(&no_special_nan_handling);
@@ -4764,13 +4619,7 @@ void LCodeGen::DoNumberTagD(LNumberTagD* instr) {
     __ Branch(deferred->entry());
   }
   __ bind(deferred->exit());
-  if (CpuFeatures::IsSupported(FPU)) {
-    CpuFeatureScope scope(masm(), FPU);
-    __ sdc1(input_reg, MemOperand(reg, HeapNumber::kValueOffset));
-  } else {
-    __ sw(sfpd_lo, MemOperand(reg, HeapNumber::kValueOffset));
-    __ sw(sfpd_hi, MemOperand(reg, HeapNumber::kValueOffset + kPointerSize));
-  }
+  __ sdc1(input_reg, MemOperand(reg, HeapNumber::kValueOffset));
   // Now that we have finished with the object's real address tag it
   __ Addu(reg, reg, kHeapObjectTag);
   __ bind(&done);
@@ -4820,7 +4669,6 @@ void LCodeGen::EmitNumberUntagD(Register input_reg,
                                 LEnvironment* env,
                                 NumberUntagDMode mode) {
   Register scratch = scratch0();
-  CpuFeatureScope scope(masm(), FPU);
 
   Label load_smi, heap_number, done;
 
@@ -4898,7 +4746,6 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
   // of the if.
 
   if (instr->truncating()) {
-    CpuFeatureScope scope(masm(), FPU);
     Register scratch3 = ToRegister(instr->temp2());
     FPURegister single_scratch = double_scratch.low();
     ASSERT(!scratch3.is(input_reg) &&
@@ -5107,6 +4954,7 @@ void LCodeGen::DoCheckInstanceType(LCheckInstanceType* instr) {
 void LCodeGen::DoCheckFunction(LCheckFunction* instr) {
   Register reg = ToRegister(instr->value());
   Handle<JSFunction> target = instr->hydrogen()->target();
+  ALLOW_HANDLE_DEREF(isolate(), "smi check");
   if (isolate()->heap()->InNewSpace(*target)) {
     Register reg = ToRegister(instr->value());
     Handle<JSGlobalPropertyCell> cell =
@@ -5153,7 +5001,6 @@ void LCodeGen::DoCheckMaps(LCheckMaps* instr) {
 
 
 void LCodeGen::DoClampDToUint8(LClampDToUint8* instr) {
-  CpuFeatureScope vfp_scope(masm(), FPU);
   DoubleRegister value_reg = ToDoubleRegister(instr->unclamped());
   Register result_reg = ToRegister(instr->result());
   DoubleRegister temp_reg = ToDoubleRegister(instr->temp());
@@ -5162,7 +5009,6 @@ void LCodeGen::DoClampDToUint8(LClampDToUint8* instr) {
 
 
 void LCodeGen::DoClampIToUint8(LClampIToUint8* instr) {
-  CpuFeatureScope vfp_scope(masm(), FPU);
   Register unclamped_reg = ToRegister(instr->unclamped());
   Register result_reg = ToRegister(instr->result());
   __ ClampUint8(result_reg, unclamped_reg);
@@ -5170,7 +5016,6 @@ void LCodeGen::DoClampIToUint8(LClampIToUint8* instr) {
 
 
 void LCodeGen::DoClampTToUint8(LClampTToUint8* instr) {
-  CpuFeatureScope vfp_scope(masm(), FPU);
   Register scratch = scratch0();
   Register input_reg = ToRegister(instr->unclamped());
   Register result_reg = ToRegister(instr->result());
@@ -5206,7 +5051,6 @@ void LCodeGen::DoClampTToUint8(LClampTToUint8* instr) {
 
 
 void LCodeGen::DoCheckPrototypeMaps(LCheckPrototypeMaps* instr) {
-  ASSERT(instr->temp()->Equals(instr->result()));
   Register prototype_reg = ToRegister(instr->temp());
   Register map_reg = ToRegister(instr->temp2());
 
@@ -5219,8 +5063,6 @@ void LCodeGen::DoCheckPrototypeMaps(LCheckPrototypeMaps* instr) {
     for (int i = 0; i < maps->length(); i++) {
       prototype_maps_.Add(maps->at(i), info()->zone());
     }
-    __ LoadHeapObject(prototype_reg,
-                      prototypes->at(prototypes->length() - 1));
   } else {
     for (int i = 0; i < prototypes->length(); i++) {
       __ LoadHeapObject(prototype_reg, prototypes->at(i));
@@ -5252,16 +5094,12 @@ void LCodeGen::DoAllocateObject(LAllocateObject* instr) {
   Register scratch = ToRegister(instr->temp());
   Register scratch2 = ToRegister(instr->temp2());
   Handle<JSFunction> constructor = instr->hydrogen()->constructor();
-  Handle<Map> initial_map(constructor->initial_map());
+  Handle<Map> initial_map = instr->hydrogen()->constructor_initial_map();
   int instance_size = initial_map->instance_size();
   ASSERT(initial_map->pre_allocated_property_fields() +
          initial_map->unused_property_fields() -
          initial_map->inobject_properties() == 0);
 
-  // Allocate memory for the object.  The initial map might change when
-  // the constructor's prototype changes, but instance size and property
-  // counts remain unchanged (if slack tracking finished).
-  ASSERT(!constructor->shared()->IsInobjectSlackTrackingInProgress());
   __ Allocate(instance_size, result, scratch, scratch2, deferred->entry(),
               TAG_OBJECT);
 
@@ -5296,8 +5134,7 @@ void LCodeGen::DoAllocateObject(LAllocateObject* instr) {
 
 void LCodeGen::DoDeferredAllocateObject(LAllocateObject* instr) {
   Register result = ToRegister(instr->result());
-  Handle<JSFunction> constructor = instr->hydrogen()->constructor();
-  Handle<Map> initial_map(constructor->initial_map());
+  Handle<Map> initial_map = instr->hydrogen()->constructor_initial_map();
   int instance_size = initial_map->instance_size();
 
   // TODO(3095996): Get rid of this. For now, we need to make the
@@ -5336,20 +5173,20 @@ void LCodeGen::DoAllocate(LAllocate* instr) {
   if (instr->hydrogen()->MustAllocateDoubleAligned()) {
     flags = static_cast<AllocationFlags>(flags | DOUBLE_ALIGNMENT);
   }
+  if (instr->hydrogen()->CanAllocateInOldPointerSpace()) {
+    flags = static_cast<AllocationFlags>(flags | PRETENURE_OLD_POINTER_SPACE);
+  }
   if (instr->size()->IsConstantOperand()) {
     int32_t size = ToInteger32(LConstantOperand::cast(instr->size()));
-    if (instr->hydrogen()->CanAllocateInOldPointerSpace()) {
-      flags = static_cast<AllocationFlags>(flags | PRETENURE_OLD_POINTER_SPACE);
-    }
     __ Allocate(size, result, scratch, scratch2, deferred->entry(), flags);
   } else {
     Register size = ToRegister(instr->size());
-    __ AllocateInNewSpace(size,
-                          result,
-                          scratch,
-                          scratch2,
-                          deferred->entry(),
-                          flags);
+    __ Allocate(size,
+                result,
+                scratch,
+                scratch2,
+                deferred->entry(),
+                flags);
   }
 
   __ bind(deferred->exit());
@@ -5357,7 +5194,6 @@ void LCodeGen::DoAllocate(LAllocate* instr) {
 
 
 void LCodeGen::DoDeferredAllocate(LAllocate* instr) {
-  Register size = ToRegister(instr->size());
   Register result = ToRegister(instr->result());
 
   // TODO(3095996): Get rid of this. For now, we need to make the
@@ -5366,15 +5202,29 @@ void LCodeGen::DoDeferredAllocate(LAllocate* instr) {
   __ mov(result, zero_reg);
 
   PushSafepointRegistersScope scope(this, Safepoint::kWithRegisters);
-  __ SmiTag(size, size);
-  __ push(size);
-  CallRuntimeFromDeferred(Runtime::kAllocateInNewSpace, 1, instr);
+  if (instr->size()->IsRegister()) {
+    Register size = ToRegister(instr->size());
+    ASSERT(!size.is(result));
+    __ SmiTag(size);
+    __ push(size);
+  } else {
+    int32_t size = ToInteger32(LConstantOperand::cast(instr->size()));
+    __ Push(Smi::FromInt(size));
+  }
+
+  if (instr->hydrogen()->CanAllocateInOldPointerSpace()) {
+    CallRuntimeFromDeferred(
+        Runtime::kAllocateInOldPointerSpace, 1, instr);
+  } else {
+    CallRuntimeFromDeferred(
+        Runtime::kAllocateInNewSpace, 1, instr);
+  }
   __ StoreToSafepointRegisterSlot(v0, result);
 }
 
 
 void LCodeGen::DoArrayLiteral(LArrayLiteral* instr) {
-  Handle<FixedArray> literals(instr->environment()->closure()->literals());
+  Handle<FixedArray> literals = instr->hydrogen()->literals();
   ElementsKind boilerplate_elements_kind =
       instr->hydrogen()->boilerplate_elements_kind();
   AllocationSiteMode allocation_site_mode =
@@ -5404,7 +5254,6 @@ void LCodeGen::DoArrayLiteral(LArrayLiteral* instr) {
   // Boilerplate already exists, constant elements are never accessed.
   // Pass an empty fixed array.
   __ li(a1, Operand(isolate()->factory()->empty_fixed_array()));
-  __ Push(a3, a2, a1);
 
   // Pick the right runtime function or stub to call.
   int length = instr->hydrogen()->length();
@@ -5415,8 +5264,10 @@ void LCodeGen::DoArrayLiteral(LArrayLiteral* instr) {
     FastCloneShallowArrayStub stub(mode, DONT_TRACK_ALLOCATION_SITE, length);
     CallCode(stub.GetCode(isolate()), RelocInfo::CODE_TARGET, instr);
   } else if (instr->hydrogen()->depth() > 1) {
+    __ Push(a3, a2, a1);
     CallRuntime(Runtime::kCreateArrayLiteral, 3, instr);
   } else if (length > FastCloneShallowArrayStub::kMaximumClonedLength) {
+    __ Push(a3, a2, a1);
     CallRuntime(Runtime::kCreateArrayLiteralShallow, 3, instr);
   } else {
     FastCloneShallowArrayStub::Mode mode =
@@ -5429,173 +5280,9 @@ void LCodeGen::DoArrayLiteral(LArrayLiteral* instr) {
 }
 
 
-void LCodeGen::EmitDeepCopy(Handle<JSObject> object,
-                            Register result,
-                            Register source,
-                            int* offset,
-                            AllocationSiteMode mode) {
-  ASSERT(!source.is(a2));
-  ASSERT(!result.is(a2));
-
-  bool create_allocation_site_info = mode == TRACK_ALLOCATION_SITE &&
-      object->map()->CanTrackAllocationSite();
-
-  // Only elements backing stores for non-COW arrays need to be copied.
-  Handle<FixedArrayBase> elements(object->elements());
-  bool has_elements = elements->length() > 0 &&
-      elements->map() != isolate()->heap()->fixed_cow_array_map();
-
-  // Increase the offset so that subsequent objects end up right after
-  // this object and its backing store.
-  int object_offset = *offset;
-  int object_size = object->map()->instance_size();
-  int elements_size = has_elements ? elements->Size() : 0;
-  int elements_offset = *offset + object_size;
-  if (create_allocation_site_info) {
-    elements_offset += AllocationSiteInfo::kSize;
-    *offset += AllocationSiteInfo::kSize;
-  }
-
-  *offset += object_size + elements_size;
-
-  // Copy object header.
-  ASSERT(object->properties()->length() == 0);
-  int inobject_properties = object->map()->inobject_properties();
-  int header_size = object_size - inobject_properties * kPointerSize;
-  for (int i = 0; i < header_size; i += kPointerSize) {
-    if (has_elements && i == JSObject::kElementsOffset) {
-      __ Addu(a2, result, Operand(elements_offset));
-    } else {
-      __ lw(a2, FieldMemOperand(source, i));
-    }
-    __ sw(a2, FieldMemOperand(result, object_offset + i));
-  }
-
-  // Copy in-object properties.
-  for (int i = 0; i < inobject_properties; i++) {
-    int total_offset = object_offset + object->GetInObjectPropertyOffset(i);
-    Handle<Object> value = Handle<Object>(object->InObjectPropertyAt(i),
-                                          isolate());
-    if (value->IsJSObject()) {
-      Handle<JSObject> value_object = Handle<JSObject>::cast(value);
-      __ Addu(a2, result, Operand(*offset));
-      __ sw(a2, FieldMemOperand(result, total_offset));
-      __ LoadHeapObject(source, value_object);
-      EmitDeepCopy(value_object, result, source, offset,
-                   DONT_TRACK_ALLOCATION_SITE);
-    } else if (value->IsHeapObject()) {
-      __ LoadHeapObject(a2, Handle<HeapObject>::cast(value));
-      __ sw(a2, FieldMemOperand(result, total_offset));
-    } else {
-      __ li(a2, Operand(value));
-      __ sw(a2, FieldMemOperand(result, total_offset));
-    }
-  }
-
-  // Build Allocation Site Info if desired
-  if (create_allocation_site_info) {
-    __ li(a2, Operand(Handle<Map>(isolate()->heap()->
-                                  allocation_site_info_map())));
-    __ sw(a2, FieldMemOperand(result, object_size));
-    __ sw(source, FieldMemOperand(result, object_size + kPointerSize));
-  }
-
-  if (has_elements) {
-    // Copy elements backing store header.
-    __ LoadHeapObject(source, elements);
-    for (int i = 0; i < FixedArray::kHeaderSize; i += kPointerSize) {
-      __ lw(a2, FieldMemOperand(source, i));
-      __ sw(a2, FieldMemOperand(result, elements_offset + i));
-    }
-
-    // Copy elements backing store content.
-    int elements_length = has_elements ? elements->length() : 0;
-    if (elements->IsFixedDoubleArray()) {
-      Handle<FixedDoubleArray> double_array =
-          Handle<FixedDoubleArray>::cast(elements);
-      for (int i = 0; i < elements_length; i++) {
-        int64_t value = double_array->get_representation(i);
-        // We only support little endian mode...
-        int32_t value_low = static_cast<int32_t>(value & 0xFFFFFFFF);
-        int32_t value_high = static_cast<int32_t>(value >> 32);
-        int total_offset =
-            elements_offset + FixedDoubleArray::OffsetOfElementAt(i);
-        __ li(a2, Operand(value_low));
-        __ sw(a2, FieldMemOperand(result, total_offset));
-        __ li(a2, Operand(value_high));
-        __ sw(a2, FieldMemOperand(result, total_offset + 4));
-      }
-    } else if (elements->IsFixedArray()) {
-      Handle<FixedArray> fast_elements = Handle<FixedArray>::cast(elements);
-      for (int i = 0; i < elements_length; i++) {
-        int total_offset = elements_offset + FixedArray::OffsetOfElementAt(i);
-        Handle<Object> value(fast_elements->get(i), isolate());
-        if (value->IsJSObject()) {
-          Handle<JSObject> value_object = Handle<JSObject>::cast(value);
-          __ Addu(a2, result, Operand(*offset));
-          __ sw(a2, FieldMemOperand(result, total_offset));
-          __ LoadHeapObject(source, value_object);
-          EmitDeepCopy(value_object, result, source, offset,
-                       DONT_TRACK_ALLOCATION_SITE);
-        } else if (value->IsHeapObject()) {
-          __ LoadHeapObject(a2, Handle<HeapObject>::cast(value));
-          __ sw(a2, FieldMemOperand(result, total_offset));
-        } else {
-          __ li(a2, Operand(value));
-          __ sw(a2, FieldMemOperand(result, total_offset));
-        }
-      }
-    } else {
-      UNREACHABLE();
-    }
-  }
-}
-
-
-void LCodeGen::DoFastLiteral(LFastLiteral* instr) {
-  int size = instr->hydrogen()->total_size();
-  ElementsKind boilerplate_elements_kind =
-      instr->hydrogen()->boilerplate()->GetElementsKind();
-
-  // Deopt if the array literal boilerplate ElementsKind is of a type different
-  // than the expected one. The check isn't necessary if the boilerplate has
-  // already been converted to TERMINAL_FAST_ELEMENTS_KIND.
-  if (CanTransitionToMoreGeneralFastElementsKind(
-          boilerplate_elements_kind, true)) {
-    __ LoadHeapObject(a1, instr->hydrogen()->boilerplate());
-    // Load map into a2.
-    __ lw(a2, FieldMemOperand(a1, HeapObject::kMapOffset));
-    // Load the map's "bit field 2".
-    __ lbu(a2, FieldMemOperand(a2, Map::kBitField2Offset));
-    // Retrieve elements_kind from bit field 2.
-    __ Ext(a2, a2, Map::kElementsKindShift, Map::kElementsKindBitCount);
-    DeoptimizeIf(ne, instr->environment(), a2,
-        Operand(boilerplate_elements_kind));
-  }
-
-  // Allocate all objects that are part of the literal in one big
-  // allocation. This avoids multiple limit checks.
-  Label allocated, runtime_allocate;
-  __ Allocate(size, v0, a2, a3, &runtime_allocate, TAG_OBJECT);
-  __ jmp(&allocated);
-
-  __ bind(&runtime_allocate);
-  __ li(a0, Operand(Smi::FromInt(size)));
-  __ push(a0);
-  CallRuntime(Runtime::kAllocateInNewSpace, 1, instr);
-
-  __ bind(&allocated);
-  int offset = 0;
-  __ LoadHeapObject(a1, instr->hydrogen()->boilerplate());
-  EmitDeepCopy(instr->hydrogen()->boilerplate(), v0, a1, &offset,
-               instr->hydrogen()->allocation_site_mode());
-  ASSERT_EQ(size, offset);
-}
-
-
 void LCodeGen::DoObjectLiteral(LObjectLiteral* instr) {
   ASSERT(ToRegister(instr->result()).is(v0));
-  Handle<FixedArray> literals(instr->environment()->closure()->literals());
+  Handle<FixedArray> literals = instr->hydrogen()->literals();
   Handle<FixedArray> constant_properties =
       instr->hydrogen()->constant_properties();
 
@@ -5609,7 +5296,7 @@ void LCodeGen::DoObjectLiteral(LObjectLiteral* instr) {
   __ li(a0, Operand(Smi::FromInt(flags)));
 
   // Pick the right runtime function or stub to call.
-  int properties_count = constant_properties->length() / 2;
+  int properties_count = instr->hydrogen()->constant_properties_length() / 2;
   if (instr->hydrogen()->depth() > 1) {
     __ Push(a3, a2, a1, a0);
     CallRuntime(Runtime::kCreateObjectLiteral, 4, instr);
@@ -5687,18 +5374,17 @@ void LCodeGen::DoRegExpLiteral(LRegExpLiteral* instr) {
 void LCodeGen::DoFunctionLiteral(LFunctionLiteral* instr) {
   // Use the fast case closure allocation code that allocates in new
   // space for nested functions that don't need literals cloning.
-  Handle<SharedFunctionInfo> shared_info = instr->shared_info();
   bool pretenure = instr->hydrogen()->pretenure();
-  if (!pretenure && shared_info->num_literals() == 0) {
-    FastNewClosureStub stub(shared_info->language_mode());
-    __ li(a1, Operand(shared_info));
+  if (!pretenure && instr->hydrogen()->has_no_literals()) {
+    FastNewClosureStub stub(instr->hydrogen()->language_mode(),
+                            instr->hydrogen()->is_generator());
+    __ li(a1, Operand(instr->hydrogen()->shared_info()));
     __ push(a1);
     CallCode(stub.GetCode(isolate()), RelocInfo::CODE_TARGET, instr);
   } else {
-    __ li(a2, Operand(shared_info));
-    __ li(a1, Operand(pretenure
-                       ? factory()->true_value()
-                       : factory()->false_value()));
+    __ li(a2, Operand(instr->hydrogen()->shared_info()));
+    __ li(a1, Operand(pretenure ? factory()->true_value()
+                                : factory()->false_value()));
     __ Push(cp, a2, a1);
     CallRuntime(Runtime::kNewClosure, 3, instr);
   }
@@ -5771,6 +5457,13 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
     cmp2 = Operand(zero_reg);
     final_branch_condition = eq;
 
+  } else if (type_name->Equals(heap()->symbol_string())) {
+    __ JumpIfSmi(input, false_label);
+    __ GetObjectType(input, input, scratch);
+    cmp1 = scratch;
+    cmp2 = Operand(SYMBOL_TYPE);
+    final_branch_condition = eq;
+
   } else if (type_name->Equals(heap()->boolean_string())) {
     __ LoadRoot(at, Heap::kTrueValueRootIndex);
     __ Branch(USE_DELAY_SLOT, true_label, eq, at, Operand(input));
@@ -5814,27 +5507,15 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
       __ LoadRoot(at, Heap::kNullValueRootIndex);
       __ Branch(USE_DELAY_SLOT, true_label, eq, at, Operand(input));
     }
-    if (FLAG_harmony_symbols) {
-      // input is an object, it is safe to use GetObjectType in the delay slot.
-      __ GetObjectType(input, input, scratch);
-      __ Branch(USE_DELAY_SLOT, true_label, eq, scratch, Operand(SYMBOL_TYPE));
-      // Still an object, so the InstanceType can be loaded.
-      __ lbu(scratch, FieldMemOperand(input, Map::kInstanceTypeOffset));
-      __ Branch(USE_DELAY_SLOT, false_label,
-                lt, scratch, Operand(FIRST_NONCALLABLE_SPEC_OBJECT_TYPE));
-    } else {
-      // input is an object, it is safe to use GetObjectType in the delay slot.
-      __ GetObjectType(input, input, scratch);
-      __ Branch(USE_DELAY_SLOT, false_label,
-                lt, scratch, Operand(FIRST_NONCALLABLE_SPEC_OBJECT_TYPE));
-    }
-    // Still an object, so the InstanceType can be loaded.
-    __ lbu(scratch, FieldMemOperand(input, Map::kInstanceTypeOffset));
+    Register map = input;
+    __ GetObjectType(input, map, scratch);
+    __ Branch(false_label,
+              lt, scratch, Operand(FIRST_NONCALLABLE_SPEC_OBJECT_TYPE));
     __ Branch(USE_DELAY_SLOT, false_label,
               gt, scratch, Operand(LAST_NONCALLABLE_SPEC_OBJECT_TYPE));
-    // Still an object, so the BitField can be loaded.
+    // map is still valid, so the BitField can be loaded in delay slot.
     // Check for undetectable objects => false.
-    __ lbu(at, FieldMemOperand(input, Map::kBitFieldOffset));
+    __ lbu(at, FieldMemOperand(map, Map::kBitFieldOffset));
     __ And(at, at, 1 << Map::kIsUndetectable);
     cmp1 = at;
     cmp2 = Operand(zero_reg);

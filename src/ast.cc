@@ -27,7 +27,7 @@
 
 #include "ast.h"
 
-#include <math.h>  // For isfinite.
+#include <cmath>  // For isfinite.
 #include "builtins.h"
 #include "code-stubs.h"
 #include "conversions.h"
@@ -67,6 +67,11 @@ bool Expression::IsStringLiteral() {
 
 bool Expression::IsNullLiteral() {
   return AsLiteral() != NULL && AsLiteral()->handle()->IsNull();
+}
+
+
+bool Expression::IsUndefinedLiteral() {
+  return AsLiteral() != NULL && AsLiteral()->handle()->IsUndefined();
 }
 
 
@@ -241,8 +246,8 @@ bool IsEqualNumber(void* first, void* second) {
   if (h2->IsSmi()) return false;
   Handle<HeapNumber> n1 = Handle<HeapNumber>::cast(h1);
   Handle<HeapNumber> n2 = Handle<HeapNumber>::cast(h2);
-  ASSERT(isfinite(n1->value()));
-  ASSERT(isfinite(n2->value()));
+  ASSERT(std::isfinite(n1->value()));
+  ASSERT(std::isfinite(n2->value()));
   return n1->value() == n2->value();
 }
 
@@ -352,12 +357,17 @@ static bool IsVoidOfLiteral(Expression* expr) {
 }
 
 
-// Check for the pattern: void <literal> equals <expression>
+// Check for the pattern: void <literal> equals <expression> or
+// undefined equals <expression>
 static bool MatchLiteralCompareUndefined(Expression* left,
                                          Token::Value op,
                                          Expression* right,
                                          Expression** expr) {
   if (IsVoidOfLiteral(left) && Token::IsEqualityOp(op)) {
+    *expr = right;
+    return true;
+  }
+  if (left->IsUndefinedLiteral() && Token::IsEqualityOp(op)) {
     *expr = right;
     return true;
   }
@@ -414,12 +424,9 @@ void Property::RecordTypeFeedback(TypeFeedbackOracle* oracle,
   is_monomorphic_ = oracle->LoadIsMonomorphicNormal(this);
   receiver_types_.Clear();
   if (key()->IsPropertyName()) {
-    ArrayLengthStub array_stub(Code::LOAD_IC);
     FunctionPrototypeStub proto_stub(Code::LOAD_IC);
     StringLengthStub string_stub(Code::LOAD_IC, false);
-    if (oracle->LoadIsStub(this, &array_stub)) {
-      is_array_length_ = true;
-    } else if (oracle->LoadIsStub(this, &string_stub)) {
+    if (oracle->LoadIsStub(this, &string_stub)) {
       is_string_length_ = true;
     } else if (oracle->LoadIsStub(this, &proto_stub)) {
       is_function_prototype_ = true;
@@ -512,6 +519,11 @@ bool Call::ComputeTarget(Handle<Map> type, Handle<String> name) {
   }
   LookupResult lookup(type->GetIsolate());
   while (true) {
+    // If a dictionary map is found in the prototype chain before the actual
+    // target, a new target can always appear. In that case, bail out.
+    // TODO(verwaest): Alternatively a runtime negative lookup on the normal
+    // receiver or prototype could be added.
+    if (type->is_dictionary_map()) return false;
     type->LookupDescriptor(NULL, *name, &lookup);
     if (lookup.IsFound()) {
       switch (lookup.type()) {
@@ -537,7 +549,6 @@ bool Call::ComputeTarget(Handle<Map> type, Handle<String> name) {
     if (!type->prototype()->IsJSObject()) return false;
     // Go up the prototype chain, recording where we are currently.
     holder_ = Handle<JSObject>(JSObject::cast(type->prototype()));
-    if (!holder_->HasFastProperties()) return false;
     type = Handle<Map>(holder()->map());
   }
 }
@@ -1065,6 +1076,7 @@ DONT_OPTIMIZE_NODE(ModuleVariable)
 DONT_OPTIMIZE_NODE(ModulePath)
 DONT_OPTIMIZE_NODE(ModuleUrl)
 DONT_OPTIMIZE_NODE(ModuleStatement)
+DONT_OPTIMIZE_NODE(Yield)
 DONT_OPTIMIZE_NODE(WithStatement)
 DONT_OPTIMIZE_NODE(TryCatchStatement)
 DONT_OPTIMIZE_NODE(TryFinallyStatement)

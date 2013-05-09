@@ -125,23 +125,31 @@ BUILTIN_LIST_C(DEF_ARG_TYPE)
 
 #ifdef DEBUG
 
-#define BUILTIN(name)                                      \
-  MUST_USE_RESULT static MaybeObject* Builtin_Impl_##name( \
-      name##ArgumentsType args, Isolate* isolate);         \
-  MUST_USE_RESULT static MaybeObject* Builtin_##name(      \
-      name##ArgumentsType args, Isolate* isolate) {        \
-    ASSERT(isolate == Isolate::Current());                 \
-    args.Verify();                                         \
-    return Builtin_Impl_##name(args, isolate);             \
-  }                                                        \
-  MUST_USE_RESULT static MaybeObject* Builtin_Impl_##name( \
+#define BUILTIN(name)                                            \
+  MUST_USE_RESULT static MaybeObject* Builtin_Impl_##name(       \
+      name##ArgumentsType args, Isolate* isolate);               \
+  MUST_USE_RESULT static MaybeObject* Builtin_##name(            \
+      int args_length, Object** args_object, Isolate* isolate) { \
+    name##ArgumentsType args(args_length, args_object);          \
+    ASSERT(isolate == Isolate::Current());                       \
+    args.Verify();                                               \
+    return Builtin_Impl_##name(args, isolate);                   \
+  }                                                              \
+  MUST_USE_RESULT static MaybeObject* Builtin_Impl_##name(       \
       name##ArgumentsType args, Isolate* isolate)
 
 #else  // For release mode.
 
-#define BUILTIN(name)                                      \
-  static MaybeObject* Builtin_##name(name##ArgumentsType args, Isolate* isolate)
-
+#define BUILTIN(name)                                            \
+  static MaybeObject* Builtin_impl##name(                        \
+      name##ArgumentsType args, Isolate* isolate);               \
+  static MaybeObject* Builtin_##name(                            \
+      int args_length, Object** args_object, Isolate* isolate) { \
+    name##ArgumentsType args(args_length, args_object);          \
+    return Builtin_impl##name(args, isolate);                    \
+  }                                                              \
+  static MaybeObject* Builtin_impl##name(                        \
+      name##ArgumentsType args, Isolate* isolate)
 #endif
 
 
@@ -192,9 +200,8 @@ BUILTIN(EmptyFunction) {
 
 RUNTIME_FUNCTION(MaybeObject*, ArrayConstructor_StubFailure) {
   CONVERT_ARG_STUB_CALLER_ARGS(caller_args);
-  // ASSERT(args.length() == 3);
-  Handle<JSFunction> function = args.at<JSFunction>(1);
-  Handle<Object> type_info = args.at<Object>(2);
+  ASSERT(args.length() == 2);
+  Handle<Object> type_info = args.at<Object>(1);
 
   JSArray* array = NULL;
   bool holey = false;
@@ -226,8 +233,7 @@ RUNTIME_FUNCTION(MaybeObject*, ArrayConstructor_StubFailure) {
     }
   }
 
-  ASSERT(function->has_initial_map());
-  ElementsKind kind = function->initial_map()->elements_kind();
+  ElementsKind kind = GetInitialFastElementsKind();
   if (holey) {
     kind = GetHoleyElementsKind(kind);
   }
@@ -323,9 +329,9 @@ static void MoveDoubleElements(FixedDoubleArray* dst,
                                int src_index,
                                int len) {
   if (len == 0) return;
-  memmove(dst->data_start() + dst_index,
-          src->data_start() + src_index,
-          len * kDoubleSize);
+  OS::MemMove(dst->data_start() + dst_index,
+              src->data_start() + src_index,
+              len * kDoubleSize);
 }
 
 
@@ -934,7 +940,7 @@ BUILTIN(ArraySplice) {
       if (start < kMinInt || start > kMaxInt) {
         return CallJsBuiltin(isolate, "ArraySplice", args);
       }
-      relative_start = static_cast<int>(start);
+      relative_start = std::isnan(start) ? 0 : static_cast<int>(start);
     } else if (!arg1->IsUndefined()) {
       return CallJsBuiltin(isolate, "ArraySplice", args);
     }
@@ -1321,7 +1327,7 @@ MUST_USE_RESULT static MaybeObject* HandleApiCallHelper(
     v8::Handle<v8::Value> value;
     {
       // Leaving JavaScript.
-      VMState state(isolate, EXTERNAL);
+      VMState<EXTERNAL> state(isolate);
       ExternalCallbackScope call_scope(isolate,
                                        v8::ToCData<Address>(callback_obj));
       value = callback(new_args);
@@ -1398,7 +1404,7 @@ MUST_USE_RESULT static MaybeObject* HandleApiCallAsFunctionOrConstructor(
     v8::Handle<v8::Value> value;
     {
       // Leaving JavaScript.
-      VMState state(isolate, EXTERNAL);
+      VMState<EXTERNAL> state(isolate);
       ExternalCallbackScope call_scope(isolate,
                                        v8::ToCData<Address>(callback_obj));
       value = callback(new_args);
@@ -1616,6 +1622,11 @@ static void Generate_KeyedLoadIC_DebugBreak(MacroAssembler* masm) {
 
 static void Generate_KeyedStoreIC_DebugBreak(MacroAssembler* masm) {
   Debug::GenerateKeyedStoreICDebugBreak(masm);
+}
+
+
+static void Generate_CompareNilIC_DebugBreak(MacroAssembler* masm) {
+  Debug::GenerateCompareNilICDebugBreak(masm);
 }
 
 

@@ -1,4 +1,4 @@
-// Copyright 2012 the V8 project authors. All rights reserved.
+// Copyright 2013 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -476,6 +476,8 @@ Handle<ExternalArray> Factory::NewExternalArray(int length,
 
 Handle<JSGlobalPropertyCell> Factory::NewJSGlobalPropertyCell(
     Handle<Object> value) {
+  ALLOW_HANDLE_DEREF(isolate(),
+                     "converting a handle into a global property cell");
   CALL_HEAP_FUNCTION(
       isolate(),
       isolate()->heap()->AllocateJSGlobalPropertyCell(*value),
@@ -578,15 +580,22 @@ Handle<JSFunction> Factory::BaseNewFunctionFromSharedFunctionInfo(
 }
 
 
+static Handle<Map> MapForNewFunction(Isolate *isolate,
+                                     Handle<SharedFunctionInfo> function_info) {
+  Context *context = isolate->context()->native_context();
+  int map_index = Context::FunctionMapIndex(function_info->language_mode(),
+                                            function_info->is_generator());
+  return Handle<Map>(Map::cast(context->get(map_index)));
+}
+
+
 Handle<JSFunction> Factory::NewFunctionFromSharedFunctionInfo(
     Handle<SharedFunctionInfo> function_info,
     Handle<Context> context,
     PretenureFlag pretenure) {
   Handle<JSFunction> result = BaseNewFunctionFromSharedFunctionInfo(
       function_info,
-      function_info->is_classic_mode()
-          ? isolate()->function_map()
-          : isolate()->strict_mode_function_map(),
+      MapForNewFunction(isolate(), function_info),
       pretenure);
 
   if (function_info->ic_age() != isolate()->heap()->global_ic_age()) {
@@ -874,14 +883,7 @@ Handle<JSFunction> Factory::NewFunctionWithPrototype(Handle<String> name,
     initial_map->set_constructor(*function);
   }
 
-  // Set function.prototype and give the prototype a constructor
-  // property that refers to the function.
   SetPrototypeProperty(function, prototype);
-  // Currently safe because it is only invoked from Genesis.
-  CHECK_NOT_EMPTY_HANDLE(isolate(),
-                         JSObject::SetLocalPropertyIgnoreAttributes(
-                             prototype, constructor_string(),
-                             function, DONT_ENUM));
   return function;
 }
 
@@ -916,10 +918,11 @@ Handle<JSObject> Factory::NewExternal(void* value) {
 Handle<Code> Factory::NewCode(const CodeDesc& desc,
                               Code::Flags flags,
                               Handle<Object> self_ref,
-                              bool immovable) {
+                              bool immovable,
+                              bool crankshafted) {
   CALL_HEAP_FUNCTION(isolate(),
                      isolate()->heap()->CreateCode(
-                         desc, flags, self_ref, immovable),
+                         desc, flags, self_ref, immovable, crankshafted),
                      Code);
 }
 
@@ -1043,6 +1046,64 @@ void Factory::EnsureCanContainElements(Handle<JSArray> array,
 }
 
 
+Handle<JSArrayBuffer> Factory::NewJSArrayBuffer() {
+  JSFunction* array_buffer_fun =
+      isolate()->context()->native_context()->array_buffer_fun();
+  CALL_HEAP_FUNCTION(
+      isolate(),
+      isolate()->heap()->AllocateJSObject(array_buffer_fun),
+      JSArrayBuffer);
+}
+
+
+Handle<JSTypedArray> Factory::NewJSTypedArray(ExternalArrayType type) {
+  JSFunction* typed_array_fun;
+  Context* native_context = isolate()->context()->native_context();
+  switch (type) {
+    case kExternalUnsignedByteArray:
+      typed_array_fun = native_context->uint8_array_fun();
+      break;
+
+    case kExternalByteArray:
+      typed_array_fun = native_context->int8_array_fun();
+      break;
+
+    case kExternalUnsignedShortArray:
+      typed_array_fun = native_context->uint16_array_fun();
+      break;
+
+    case kExternalShortArray:
+      typed_array_fun = native_context->int16_array_fun();
+      break;
+
+    case kExternalUnsignedIntArray:
+      typed_array_fun = native_context->uint32_array_fun();
+      break;
+
+    case kExternalIntArray:
+      typed_array_fun = native_context->int32_array_fun();
+      break;
+
+    case kExternalFloatArray:
+      typed_array_fun = native_context->float_array_fun();
+      break;
+
+    case kExternalDoubleArray:
+      typed_array_fun = native_context->double_array_fun();
+      break;
+
+    default:
+      UNREACHABLE();
+      return Handle<JSTypedArray>();
+  }
+
+  CALL_HEAP_FUNCTION(
+      isolate(),
+      isolate()->heap()->AllocateJSObject(typed_array_fun),
+      JSTypedArray);
+}
+
+
 Handle<JSProxy> Factory::NewJSProxy(Handle<Object> handler,
                                     Handle<Object> prototype) {
   CALL_HEAP_FUNCTION(
@@ -1078,6 +1139,7 @@ void Factory::SetIdentityHash(Handle<JSObject> object, Smi* hash) {
 Handle<SharedFunctionInfo> Factory::NewSharedFunctionInfo(
     Handle<String> name,
     int number_of_literals,
+    bool is_generator,
     Handle<Code> code,
     Handle<ScopeInfo> scope_info) {
   Handle<SharedFunctionInfo> shared = NewSharedFunctionInfo(name);
@@ -1091,6 +1153,9 @@ Handle<SharedFunctionInfo> Factory::NewSharedFunctionInfo(
     literals_array_size += JSFunction::kLiteralsPrefixSize;
   }
   shared->set_num_literals(literals_array_size);
+  if (is_generator) {
+    shared->set_instance_class_name(isolate()->heap()->Generator_string());
+  }
   return shared;
 }
 

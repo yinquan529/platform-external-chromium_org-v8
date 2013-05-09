@@ -112,45 +112,6 @@ class Profiler: public Thread {
 
 
 //
-// StackTracer implementation
-//
-DISABLE_ASAN void StackTracer::Trace(Isolate* isolate, TickSample* sample) {
-  ASSERT(isolate->IsInitialized());
-
-  // Avoid collecting traces while doing GC.
-  if (sample->state == GC) return;
-
-  const Address js_entry_sp =
-      Isolate::js_entry_sp(isolate->thread_local_top());
-  if (js_entry_sp == 0) {
-    // Not executing JS now.
-    return;
-  }
-
-  const Address callback = isolate->external_callback();
-  if (callback != NULL) {
-    sample->external_callback = callback;
-    sample->has_external_callback = true;
-  } else {
-    // Sample potential return address value for frameless invocation of
-    // stubs (we'll figure out later, if this value makes sense).
-    sample->tos = Memory::Address_at(sample->sp);
-    sample->has_external_callback = false;
-  }
-
-  SafeStackTraceFrameIterator it(isolate,
-                                 sample->fp, sample->sp,
-                                 sample->sp, js_entry_sp);
-  int i = 0;
-  while (!it.done() && i < TickSample::kMaxFramesCount) {
-    sample->stack[i++] = it.frame()->pc();
-    it.Advance();
-  }
-  sample->frames_count = i;
-}
-
-
-//
 // Ticker used to provide ticks to the profiler and the sliding state
 // window.
 //
@@ -177,11 +138,6 @@ class Ticker: public Sampler {
     DecreaseProfilingDepth();
     profiler_ = NULL;
     if (IsActive()) Stop();
-  }
-
- protected:
-  virtual void DoSampleStack(TickSample* sample) {
-    StackTracer::Trace(isolate(), sample);
   }
 
  private:
@@ -216,9 +172,10 @@ void Profiler::Engage() {
   Start();
 
   // Register to get ticks.
-  LOGGER->ticker_->SetProfiler(this);
+  Logger* logger = isolate_->logger();
+  logger->ticker_->SetProfiler(this);
 
-  LOGGER->ProfilerBeginEvent();
+  logger->ProfilerBeginEvent();
 }
 
 
@@ -226,7 +183,7 @@ void Profiler::Disengage() {
   if (!engaged_) return;
 
   // Stop receiving ticks.
-  LOGGER->ticker_->ClearProfiler();
+  isolate_->logger()->ticker_->ClearProfiler();
 
   // Terminate the worker thread by setting running_ to false,
   // inserting a fake element in the queue and then wait for
@@ -378,15 +335,6 @@ class Logger::NameBuffer {
 
   void AppendString(String* str) {
     if (str == NULL) return;
-    if (str->HasOnlyAsciiChars()) {
-      int utf8_length = Min(str->length(), kUtf8BufferSize - utf8_pos_);
-      String::WriteToFlat(str,
-                          reinterpret_cast<uint8_t*>(utf8_buffer_ + utf8_pos_),
-                          0,
-                          utf8_length);
-      utf8_pos_ += utf8_length;
-      return;
-    }
     int uc16_length = Min(str->length(), kUtf16BufferSize);
     String::WriteToFlat(str, utf16_buffer, 0, uc16_length);
     int previous = unibrow::Utf16::kNoPreviousCharacter;
@@ -406,7 +354,7 @@ class Logger::NameBuffer {
 
   void AppendBytes(const char* bytes, int size) {
     size = Min(size, kUtf8BufferSize - utf8_pos_);
-    memcpy(utf8_buffer_ + utf8_pos_, bytes, size);
+    OS::MemCopy(utf8_buffer_ + utf8_pos_, bytes, size);
     utf8_pos_ += size;
   }
 
@@ -644,7 +592,17 @@ void Logger::ApiNamedSecurityCheck(Object* key) {
         String::cast(key)->ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL);
     ApiEvent("api,check-security,\"%s\"\n", *str);
   } else if (key->IsSymbol()) {
-    ApiEvent("api,check-security,symbol(hash %x)\n", Symbol::cast(key)->Hash());
+    Symbol* symbol = Symbol::cast(key);
+    if (symbol->name()->IsUndefined()) {
+      ApiEvent("api,check-security,symbol(hash %x)\n",
+               Symbol::cast(key)->Hash());
+    } else {
+      SmartArrayPointer<char> str = String::cast(symbol->name())->ToCString(
+          DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL);
+      ApiEvent("api,check-security,symbol(\"%s\" hash %x)\n",
+               *str,
+               Symbol::cast(key)->Hash());
+    }
   } else if (key->IsUndefined()) {
     ApiEvent("api,check-security,undefined\n");
   } else {
@@ -691,13 +649,17 @@ void Logger::TimerEvent(StartEnd se, const char* name) {
 }
 
 
-void Logger::EnterExternal() {
-  LOG(ISOLATE, TimerEvent(START, TimerEventScope::v8_external));
+void Logger::EnterExternal(Isolate* isolate) {
+  LOG(isolate, TimerEvent(START, TimerEventScope::v8_external));
+  ASSERT(isolate->current_vm_state() == JS);
+  isolate->set_current_vm_state(EXTERNAL);
 }
 
 
-void Logger::LeaveExternal() {
-  LOG(ISOLATE, TimerEvent(END, TimerEventScope::v8_external));
+void Logger::LeaveExternal(Isolate* isolate) {
+  LOG(isolate, TimerEvent(END, TimerEventScope::v8_external));
+  ASSERT(isolate->current_vm_state() == EXTERNAL);
+  isolate->set_current_vm_state(JS);
 }
 
 
@@ -768,11 +730,10 @@ void Logger::RegExpCompileEvent(Handle<JSRegExp> regexp, bool in_cache) {
 }
 
 
-void Logger::LogRuntime(Isolate* isolate,
-                        Vector<const char> format,
+void Logger::LogRuntime(Vector<const char> format,
                         JSArray* args) {
   if (!log_->IsEnabled() || !FLAG_log_runtime) return;
-  HandleScope scope(isolate);
+  HandleScope scope(isolate_);
   LogMessageBuilder msg(this);
   for (int i = 0; i < format.length(); i++) {
     char c = format[i];
@@ -833,8 +794,16 @@ void Logger::ApiNamedPropertyAccess(const char* tag,
         String::cast(name)->ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL);
     ApiEvent("api,%s,\"%s\",\"%s\"\n", tag, *class_name, *property_name);
   } else {
-    uint32_t hash = Symbol::cast(name)->Hash();
-    ApiEvent("api,%s,\"%s\",symbol(hash %x)\n", tag, *class_name, hash);
+    Symbol* symbol = Symbol::cast(name);
+    uint32_t hash = symbol->Hash();
+    if (symbol->name()->IsUndefined()) {
+      ApiEvent("api,%s,\"%s\",symbol(hash %x)\n", tag, *class_name, hash);
+    } else {
+      SmartArrayPointer<char> str = String::cast(symbol->name())->ToCString(
+          DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL);
+      ApiEvent("api,%s,\"%s\",symbol(\"%s\" hash %x)\n",
+               tag, *class_name, *str, hash);
+    }
   }
 }
 
@@ -881,12 +850,12 @@ void Logger::DeleteEvent(const char* name, void* object) {
 
 
 void Logger::NewEventStatic(const char* name, void* object, size_t size) {
-  LOGGER->NewEvent(name, object, size);
+  Isolate::Current()->logger()->NewEvent(name, object, size);
 }
 
 
 void Logger::DeleteEventStatic(const char* name, void* object) {
-  LOGGER->DeleteEvent(name, object);
+  Isolate::Current()->logger()->DeleteEvent(name, object);
 }
 
 void Logger::CallbackEventInternal(const char* prefix, Name* name,
@@ -902,7 +871,14 @@ void Logger::CallbackEventInternal(const char* prefix, Name* name,
         String::cast(name)->ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL);
     msg.Append(",1,\"%s%s\"", prefix, *str);
   } else {
-    msg.Append(",1,symbol(hash %x)", prefix, Name::cast(name)->Hash());
+    Symbol* symbol = Symbol::cast(name);
+    if (symbol->name()->IsUndefined()) {
+      msg.Append(",1,symbol(hash %x)", prefix, symbol->Hash());
+    } else {
+      SmartArrayPointer<char> str = String::cast(symbol->name())->ToCString(
+          DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL);
+      msg.Append(",1,symbol(\"%s\" hash %x)", prefix, *str, symbol->Hash());
+    }
   }
   msg.Append('\n');
   msg.WriteToLogFile();
@@ -978,8 +954,15 @@ void Logger::CodeCreateEvent(LogEventsAndTags tag,
     if (name->IsString()) {
       name_buffer_->AppendString(String::cast(name));
     } else {
-      name_buffer_->AppendBytes("symbol(hash ");
-      name_buffer_->AppendHex(Name::cast(name)->Hash());
+      Symbol* symbol = Symbol::cast(name);
+      name_buffer_->AppendBytes("symbol(");
+      if (!symbol->name()->IsUndefined()) {
+        name_buffer_->AppendBytes("\"");
+        name_buffer_->AppendString(String::cast(symbol->name()));
+        name_buffer_->AppendBytes("\" ");
+      }
+      name_buffer_->AppendBytes("hash ");
+      name_buffer_->AppendHex(symbol->Hash());
       name_buffer_->AppendByte(')');
     }
   }
@@ -1006,7 +989,14 @@ void Logger::CodeCreateEvent(LogEventsAndTags tag,
     msg.AppendDetailed(String::cast(name), false);
     msg.Append('"');
   } else {
-    msg.Append("symbol(hash %x)", Name::cast(name)->Hash());
+    Symbol* symbol = Symbol::cast(name);
+    msg.Append("symbol(");
+    if (!symbol->name()->IsUndefined()) {
+      msg.Append("\"");
+      msg.AppendDetailed(String::cast(symbol->name()), false);
+      msg.Append("\" ");
+    }
+    msg.Append("hash %x)", symbol->Hash());
   }
   msg.Append('\n');
   msg.WriteToLogFile();
@@ -1036,8 +1026,15 @@ void Logger::CodeCreateEvent(LogEventsAndTags tag,
     if (name->IsString()) {
       name_buffer_->AppendString(String::cast(name));
     } else {
-      name_buffer_->AppendBytes("symbol(hash ");
-      name_buffer_->AppendHex(Name::cast(name)->Hash());
+      Symbol* symbol = Symbol::cast(name);
+      name_buffer_->AppendBytes("symbol(");
+      if (!symbol->name()->IsUndefined()) {
+        name_buffer_->AppendBytes("\"");
+        name_buffer_->AppendString(String::cast(symbol->name()));
+        name_buffer_->AppendBytes("\" ");
+      }
+      name_buffer_->AppendBytes("hash ");
+      name_buffer_->AppendHex(symbol->Hash());
       name_buffer_->AppendByte(')');
     }
   }
@@ -1073,7 +1070,14 @@ void Logger::CodeCreateEvent(LogEventsAndTags tag,
         String::cast(name)->ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL);
     msg.Append("\"%s\"", *str);
   } else {
-    msg.Append("symbol(hash %x)", Name::cast(name)->Hash());
+    Symbol* symbol = Symbol::cast(name);
+    msg.Append("symbol(");
+    if (!symbol->name()->IsUndefined()) {
+      msg.Append("\"");
+      msg.AppendDetailed(String::cast(symbol->name()), false);
+      msg.Append("\" ");
+    }
+    msg.Append("hash %x)", symbol->Hash());
   }
   msg.Append(',');
   msg.AppendAddress(shared->address());
@@ -1138,7 +1142,14 @@ void Logger::CodeCreateEvent(LogEventsAndTags tag,
        String::cast(source)->ToCString(DISALLOW_NULLS, ROBUST_STRING_TRAVERSAL);
     msg.Append("%s", *sourcestr);
   } else {
-    msg.Append("symbol(hash %x)", Name::cast(source)->Hash());
+    Symbol* symbol = Symbol::cast(source);
+    msg.Append("symbol(");
+    if (!symbol->name()->IsUndefined()) {
+      msg.Append("\"");
+      msg.AppendDetailed(String::cast(symbol->name()), false);
+      msg.Append("\" ");
+    }
+    msg.Append("hash %x)", symbol->Hash());
   }
   msg.Append(":%d\",", line);
   msg.AppendAddress(shared->address());
@@ -1358,7 +1369,14 @@ void Logger::SuspectReadEvent(Name* name, Object* obj) {
     msg.Append(String::cast(name));
     msg.Append('"');
   } else {
-    msg.Append("symbol(hash %x)", Name::cast(name)->Hash());
+    Symbol* symbol = Symbol::cast(name);
+    msg.Append("symbol(");
+    if (!symbol->name()->IsUndefined()) {
+      msg.Append("\"");
+      msg.AppendDetailed(String::cast(symbol->name()), false);
+      msg.Append("\" ");
+    }
+    msg.Append("hash %x)", symbol->Hash());
   }
   msg.Append('\n');
   msg.WriteToLogFile();
@@ -1493,11 +1511,6 @@ void Logger::LogFailure() {
 }
 
 
-bool Logger::IsProfilerSamplerActive() {
-  return ticker_->IsActive();
-}
-
-
 class EnumerateOptimizedFunctionsVisitor: public OptimizedFunctionVisitor {
  public:
   EnumerateOptimizedFunctionsVisitor(Handle<SharedFunctionInfo>* sfis,
@@ -1577,8 +1590,8 @@ void Logger::LogCodeObject(Object* object) {
       case Code::UNARY_OP_IC:   // fall through
       case Code::BINARY_OP_IC:   // fall through
       case Code::COMPARE_IC:  // fall through
+      case Code::COMPARE_NIL_IC:   // fall through
       case Code::TO_BOOLEAN_IC:  // fall through
-      case Code::COMPILED_STUB:  // fall through
       case Code::STUB:
         description =
             CodeStub::MajorName(CodeStub::GetMajorKey(code_object), true);
@@ -1615,7 +1628,7 @@ void Logger::LogCodeObject(Object* object) {
         tag = Logger::KEYED_CALL_IC_TAG;
         break;
     }
-    PROFILE(ISOLATE, CodeCreateEvent(tag, code_object, description));
+    PROFILE(isolate_, CodeCreateEvent(tag, code_object, description));
   }
 }
 
@@ -1719,20 +1732,20 @@ void Logger::LogExistingFunction(Handle<SharedFunctionInfo> shared,
       Handle<String> script_name(String::cast(script->name()));
       int line_num = GetScriptLineNumber(script, shared->start_position());
       if (line_num > 0) {
-        PROFILE(ISOLATE,
+        PROFILE(isolate_,
                 CodeCreateEvent(
                     Logger::ToNativeByScript(Logger::LAZY_COMPILE_TAG, *script),
                     *code, *shared,
                     *script_name, line_num + 1));
       } else {
         // Can't distinguish eval and script here, so always use Script.
-        PROFILE(ISOLATE,
+        PROFILE(isolate_,
                 CodeCreateEvent(
                     Logger::ToNativeByScript(Logger::SCRIPT_TAG, *script),
                     *code, *shared, *script_name));
       }
     } else {
-      PROFILE(ISOLATE,
+      PROFILE(isolate_,
               CodeCreateEvent(
                   Logger::ToNativeByScript(Logger::LAZY_COMPILE_TAG, *script),
                   *code, *shared, *func_name));
@@ -1745,10 +1758,10 @@ void Logger::LogExistingFunction(Handle<SharedFunctionInfo> shared,
       CallHandlerInfo* call_data = CallHandlerInfo::cast(raw_call_data);
       Object* callback_obj = call_data->callback();
       Address entry_point = v8::ToCData<Address>(callback_obj);
-      PROFILE(ISOLATE, CallbackEvent(*func_name, entry_point));
+      PROFILE(isolate_, CallbackEvent(*func_name, entry_point));
     }
   } else {
-    PROFILE(ISOLATE,
+    PROFILE(isolate_,
             CodeCreateEvent(
                 Logger::LAZY_COMPILE_TAG, *code, *shared, *func_name));
   }
@@ -1789,17 +1802,17 @@ void Logger::LogAccessorCallbacks() {
     Address getter_entry = v8::ToCData<Address>(ai->getter());
     Name* name = Name::cast(ai->name());
     if (getter_entry != 0) {
-      PROFILE(ISOLATE, GetterCallbackEvent(name, getter_entry));
+      PROFILE(isolate_, GetterCallbackEvent(name, getter_entry));
     }
     Address setter_entry = v8::ToCData<Address>(ai->setter());
     if (setter_entry != 0) {
-      PROFILE(ISOLATE, SetterCallbackEvent(name, setter_entry));
+      PROFILE(isolate_, SetterCallbackEvent(name, setter_entry));
     }
   }
 }
 
 
-bool Logger::SetUp() {
+bool Logger::SetUp(Isolate* isolate) {
   // Tests and EnsureInitialize() can call this twice in a row. It's harmless.
   if (is_initialized_) return true;
   is_initialized_ = true;
@@ -1815,23 +1828,13 @@ bool Logger::SetUp() {
     FLAG_prof_auto = false;
   }
 
-  // TODO(isolates): this assert introduces cyclic dependency (logger
-  // -> thread local top -> heap -> logger).
-  // ASSERT(VMState::is_outermost_external());
-
   log_->Initialize();
 
   if (FLAG_ll_prof) LogCodeInfo();
 
-  Isolate* isolate = Isolate::Current();
   ticker_ = new Ticker(isolate, kSamplingIntervalMs);
 
-  bool start_logging = FLAG_log || FLAG_log_runtime || FLAG_log_api
-    || FLAG_log_code || FLAG_log_gc || FLAG_log_handles || FLAG_log_suspect
-    || FLAG_log_regexp || FLAG_log_state_changes || FLAG_ll_prof
-    || FLAG_log_internal_timer_events;
-
-  if (start_logging) {
+  if (Log::InitLogAtStart()) {
     logging_nesting_ = 1;
   }
 
@@ -1870,17 +1873,6 @@ Sampler* Logger::sampler() {
 }
 
 
-void Logger::EnsureTickerStarted() {
-  ASSERT(ticker_ != NULL);
-  if (!ticker_->IsActive()) ticker_->Start();
-}
-
-
-void Logger::EnsureTickerStopped() {
-  if (ticker_ != NULL && ticker_->IsActive()) ticker_->Stop();
-}
-
-
 FILE* Logger::TearDown() {
   if (!is_initialized_) return NULL;
   is_initialized_ = false;
@@ -1896,67 +1888,6 @@ FILE* Logger::TearDown() {
   ticker_ = NULL;
 
   return log_->Close();
-}
-
-
-// Protects the state below.
-static Mutex* active_samplers_mutex = NULL;
-
-List<Sampler*>* SamplerRegistry::active_samplers_ = NULL;
-
-
-void SamplerRegistry::SetUp() {
-  if (!active_samplers_mutex) {
-    active_samplers_mutex = OS::CreateMutex();
-  }
-}
-
-
-bool SamplerRegistry::IterateActiveSamplers(VisitSampler func, void* param) {
-  ScopedLock lock(active_samplers_mutex);
-  for (int i = 0;
-       ActiveSamplersExist() && i < active_samplers_->length();
-       ++i) {
-    func(active_samplers_->at(i), param);
-  }
-  return ActiveSamplersExist();
-}
-
-
-static void ComputeCpuProfiling(Sampler* sampler, void* flag_ptr) {
-  bool* flag = reinterpret_cast<bool*>(flag_ptr);
-  *flag |= sampler->IsProfiling();
-}
-
-
-SamplerRegistry::State SamplerRegistry::GetState() {
-  bool flag = false;
-  if (!IterateActiveSamplers(&ComputeCpuProfiling, &flag)) {
-    return HAS_NO_SAMPLERS;
-  }
-  return flag ? HAS_CPU_PROFILING_SAMPLERS : HAS_SAMPLERS;
-}
-
-
-void SamplerRegistry::AddActiveSampler(Sampler* sampler) {
-  ASSERT(sampler->IsActive());
-  ScopedLock lock(active_samplers_mutex);
-  if (active_samplers_ == NULL) {
-    active_samplers_ = new List<Sampler*>;
-  } else {
-    ASSERT(!active_samplers_->Contains(sampler));
-  }
-  active_samplers_->Add(sampler);
-}
-
-
-void SamplerRegistry::RemoveActiveSampler(Sampler* sampler) {
-  ASSERT(sampler->IsActive());
-  ScopedLock lock(active_samplers_mutex);
-  ASSERT(active_samplers_ != NULL);
-  bool removed = active_samplers_->RemoveElement(sampler);
-  ASSERT(removed);
-  USE(removed);
 }
 
 } }  // namespace v8::internal

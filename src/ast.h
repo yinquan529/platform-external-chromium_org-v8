@@ -102,6 +102,7 @@ namespace internal {
   V(ObjectLiteral)                              \
   V(ArrayLiteral)                               \
   V(Assignment)                                 \
+  V(Yield)                                      \
   V(Throw)                                      \
   V(Property)                                   \
   V(Call)                                       \
@@ -118,6 +119,10 @@ namespace internal {
   MODULE_NODE_LIST(V)                           \
   STATEMENT_NODE_LIST(V)                        \
   EXPRESSION_NODE_LIST(V)
+
+#ifdef WIN32
+#undef Yield
+#endif
 
 // Forward declarations
 class AstConstructionVisitor;
@@ -333,6 +338,9 @@ class Expression: public AstNode {
 
   // True iff the expression is the null literal.
   bool IsNullLiteral();
+
+  // True iff the expression is the undefined literal.
+  bool IsUndefinedLiteral();
 
   // Type feedback information for assignments and properties.
   virtual bool IsMonomorphic() {
@@ -934,15 +942,18 @@ class WithStatement: public Statement {
  public:
   DECLARE_NODE_TYPE(WithStatement)
 
+  Scope* scope() { return scope_; }
   Expression* expression() const { return expression_; }
   Statement* statement() const { return statement_; }
 
  protected:
-  WithStatement(Expression* expression, Statement* statement)
-      : expression_(expression),
+  WithStatement(Scope* scope, Expression* expression, Statement* statement)
+      : scope_(scope),
+        expression_(expression),
         statement_(statement) { }
 
  private:
+  Scope* scope_;
   Expression* expression_;
   Statement* statement_;
 };
@@ -1488,7 +1499,6 @@ class Property: public Expression {
   virtual KeyedAccessStoreMode GetStoreMode() {
     return STANDARD_STORE;
   }
-  bool IsArrayLength() { return is_array_length_; }
   bool IsUninitialized() { return is_uninitialized_; }
   TypeFeedbackId PropertyFeedbackId() { return reuse(id()); }
 
@@ -1504,7 +1514,6 @@ class Property: public Expression {
         load_id_(GetNextId(isolate)),
         is_monomorphic_(false),
         is_uninitialized_(false),
-        is_array_length_(false),
         is_string_length_(false),
         is_string_access_(false),
         is_function_prototype_(false) { }
@@ -1518,7 +1527,6 @@ class Property: public Expression {
   SmallMapList receiver_types_;
   bool is_monomorphic_ : 1;
   bool is_uninitialized_ : 1;
-  bool is_array_length_ : 1;
   bool is_string_length_ : 1;
   bool is_string_access_ : 1;
   bool is_function_prototype_ : 1;
@@ -1809,7 +1817,8 @@ class CountOperation: public Expression {
   Token::Value op_;
   bool is_prefix_ : 1;
   bool is_monomorphic_ : 1;
-  KeyedAccessStoreMode store_mode_: 4;
+  KeyedAccessStoreMode store_mode_ : 5;  // Windows treats as signed,
+                                         // must have extra bit.
   Expression* expression_;
   int pos_;
   const BailoutId assignment_id_;
@@ -1951,8 +1960,45 @@ class Assignment: public Expression {
   const BailoutId assignment_id_;
 
   bool is_monomorphic_ : 1;
-  KeyedAccessStoreMode store_mode_ : 4;
+  KeyedAccessStoreMode store_mode_ : 5;  // Windows treats as signed,
+                                         // must have extra bit.
   SmallMapList receiver_types_;
+};
+
+
+class Yield: public Expression {
+ public:
+  DECLARE_NODE_TYPE(Yield)
+
+  enum Kind {
+    INITIAL,     // The initial yield that returns the unboxed generator object.
+    SUSPEND,     // A normal yield: { value: EXPRESSION, done: false }
+    DELEGATING,  // A yield*.
+    FINAL        // A return: { value: EXPRESSION, done: true }
+  };
+
+  Expression* generator_object() const { return generator_object_; }
+  Expression* expression() const { return expression_; }
+  Kind yield_kind() const { return yield_kind_; }
+  virtual int position() const { return pos_; }
+
+ protected:
+  Yield(Isolate* isolate,
+        Expression* generator_object,
+        Expression* expression,
+        Kind yield_kind,
+        int pos)
+      : Expression(isolate),
+        generator_object_(generator_object),
+        expression_(expression),
+        yield_kind_(yield_kind),
+        pos_(pos) { }
+
+ private:
+  Expression* generator_object_;
+  Expression* expression_;
+  Kind yield_kind_;
+  int pos_;
 };
 
 
@@ -1994,6 +2040,11 @@ class FunctionLiteral: public Expression {
   enum IsParenthesizedFlag {
     kIsParenthesized,
     kNotParenthesized
+  };
+
+  enum IsGeneratorFlag {
+    kIsGenerator,
+    kNotGenerator
   };
 
   DECLARE_NODE_TYPE(FunctionLiteral)
@@ -2056,6 +2107,10 @@ class FunctionLiteral: public Expression {
     bitfield_ = IsParenthesized::update(bitfield_, kIsParenthesized);
   }
 
+  bool is_generator() {
+    return IsGenerator::decode(bitfield_) == kIsGenerator;
+  }
+
   int ast_node_count() { return ast_properties_.node_count(); }
   AstProperties::Flags* flags() { return ast_properties_.flags(); }
   void set_ast_properties(AstProperties* ast_properties) {
@@ -2076,7 +2131,8 @@ class FunctionLiteral: public Expression {
                   Type type,
                   ParameterFlag has_duplicate_parameters,
                   IsFunctionFlag is_function,
-                  IsParenthesizedFlag is_parenthesized)
+                  IsParenthesizedFlag is_parenthesized,
+                  IsGeneratorFlag is_generator)
       : Expression(isolate),
         name_(name),
         scope_(scope),
@@ -2096,7 +2152,8 @@ class FunctionLiteral: public Expression {
         Pretenure::encode(false) |
         HasDuplicateParameters::encode(has_duplicate_parameters) |
         IsFunction::encode(is_function) |
-        IsParenthesized::encode(is_parenthesized);
+        IsParenthesized::encode(is_parenthesized) |
+        IsGenerator::encode(is_generator);
   }
 
  private:
@@ -2121,6 +2178,7 @@ class FunctionLiteral: public Expression {
   class HasDuplicateParameters: public BitField<ParameterFlag, 4, 1> {};
   class IsFunction: public BitField<IsFunctionFlag, 5, 1> {};
   class IsParenthesized: public BitField<IsParenthesizedFlag, 6, 1> {};
+  class IsGenerator: public BitField<IsGeneratorFlag, 7, 1> {};
 };
 
 
@@ -2732,9 +2790,11 @@ class AstNodeFactory BASE_EMBEDDED {
     VISIT_AND_RETURN(ReturnStatement, stmt)
   }
 
-  WithStatement* NewWithStatement(Expression* expression,
+  WithStatement* NewWithStatement(Scope* scope,
+                                  Expression* expression,
                                   Statement* statement) {
-    WithStatement* stmt = new(zone_) WithStatement(expression, statement);
+    WithStatement* stmt = new(zone_) WithStatement(
+        scope, expression, statement);
     VISIT_AND_RETURN(WithStatement, stmt)
   }
 
@@ -2919,6 +2979,15 @@ class AstNodeFactory BASE_EMBEDDED {
     VISIT_AND_RETURN(Assignment, assign)
   }
 
+  Yield* NewYield(Expression *generator_object,
+                  Expression* expression,
+                  Yield::Kind yield_kind,
+                  int pos) {
+    Yield* yield = new(zone_) Yield(
+        isolate_, generator_object, expression, yield_kind, pos);
+    VISIT_AND_RETURN(Yield, yield)
+  }
+
   Throw* NewThrow(Expression* exception, int pos) {
     Throw* t = new(zone_) Throw(isolate_, exception, pos);
     VISIT_AND_RETURN(Throw, t)
@@ -2937,13 +3006,14 @@ class AstNodeFactory BASE_EMBEDDED {
       FunctionLiteral::ParameterFlag has_duplicate_parameters,
       FunctionLiteral::Type type,
       FunctionLiteral::IsFunctionFlag is_function,
-      FunctionLiteral::IsParenthesizedFlag is_parenthesized) {
+      FunctionLiteral::IsParenthesizedFlag is_parenthesized,
+      FunctionLiteral::IsGeneratorFlag is_generator) {
     FunctionLiteral* lit = new(zone_) FunctionLiteral(
         isolate_, name, scope, body,
         materialized_literal_count, expected_property_count, handler_count,
         has_only_simple_this_property_assignments, this_property_assignments,
         parameter_count, type, has_duplicate_parameters, is_function,
-        is_parenthesized);
+        is_parenthesized, is_generator);
     // Top-level literal doesn't count for the AST's properties.
     if (is_function == FunctionLiteral::kIsFunction) {
       visitor_.VisitFunctionLiteral(lit);

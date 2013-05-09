@@ -85,7 +85,7 @@ class SweeperThread;
 class ThreadManager;
 class ThreadState;
 class ThreadVisitor;  // Defined in v8threads.h
-class VMState;
+template <StateTag Tag> class VMState;
 
 // 'void function pointer', used to roundtrip the
 // ExternalReference::ExternalReferenceRedirector since we can not include
@@ -357,9 +357,6 @@ typedef List<HeapObject*, PreallocatedStorageAllocationPolicy> DebugObjectCache;
   V(FunctionInfoListener*, active_function_info_listener, NULL)                \
   /* State for Relocatable. */                                                 \
   V(Relocatable*, relocatable_top, NULL)                                       \
-  /* State for CodeEntry in profile-generator. */                              \
-  V(CodeGenerator*, current_code_generator, NULL)                              \
-  V(bool, jump_target_compiling_deferred_code, false)                          \
   V(DebugObjectCache*, string_stream_debug_object_cache, NULL)                 \
   V(Object*, string_stream_current_security_token, NULL)                       \
   /* TODO(isolates): Release this on destruction? */                           \
@@ -371,8 +368,6 @@ typedef List<HeapObject*, PreallocatedStorageAllocationPolicy> DebugObjectCache;
   V(unsigned, ast_node_count, 0)                                               \
   /* SafeStackFrameIterator activations count. */                              \
   V(int, safe_stack_iterator_counter, 0)                                       \
-  V(CpuProfiler*, cpu_profiler, NULL)                                          \
-  V(HeapProfiler*, heap_profiler, NULL)                                        \
   V(bool, observer_delivery_pending, false)                                    \
   V(HStatistics*, hstatistics, NULL)                                           \
   V(HTracer*, htracer, NULL)                                                   \
@@ -501,6 +496,10 @@ class Isolate {
   // Find the PerThread for this particular (isolate, thread) combination
   // If one does not yet exist, return null.
   PerIsolateThreadData* FindPerThreadDataForThisThread();
+
+  // Find the PerThread for given (isolate, thread) combination
+  // If one does not yet exist, return null.
+  PerIsolateThreadData* FindPerThreadDataForThread(ThreadId thread_id);
 
 #ifdef ENABLE_DEBUGGER_SUPPORT
   // Get the debugger from the default isolate. Preinitializes the
@@ -650,7 +649,7 @@ class Isolate {
   }
   inline Address* handler_address() { return &thread_local_top_.handler_; }
 
-  // Bottom JS entry (see StackTracer::Trace in log.cc).
+  // Bottom JS entry (see StackTracer::Trace in sampler.cc).
   static Address js_entry_sp(ThreadLocalTop* thread) {
     return thread->js_entry_sp_;
   }
@@ -784,6 +783,7 @@ class Isolate {
   // Out of resource exception helpers.
   Failure* StackOverflow();
   Failure* TerminateExecution();
+  void CancelTerminateExecution();
 
   // Administration
   void Iterate(ObjectVisitor* v);
@@ -979,6 +979,9 @@ class Isolate {
   inline bool IsDebuggerActive();
   inline bool DebuggerHasBreakPoints();
 
+  CpuProfiler* cpu_profiler() const { return cpu_profiler_; }
+  HeapProfiler* heap_profiler() const { return heap_profiler_; }
+
 #ifdef DEBUG
   HistogramInfo* heap_histograms() { return heap_histograms_; }
 
@@ -988,9 +991,9 @@ class Isolate {
 
   int* code_kind_statistics() { return code_kind_statistics_; }
 
-  bool AllowHandleDereference();
+  HandleDereferenceGuard::State HandleDereferenceGuardState();
 
-  void SetAllowHandleDereference(bool allow);
+  void SetHandleDereferenceGuardState(HandleDereferenceGuard::State state);
 #endif
 
 #if defined(V8_TARGET_ARCH_ARM) && !defined(__arm__) || \
@@ -1028,24 +1031,7 @@ class Isolate {
     return thread_local_top_.current_vm_state_;
   }
 
-  void SetCurrentVMState(StateTag state) {
-    if (RuntimeProfiler::IsEnabled()) {
-      // Make sure thread local top is initialized.
-      ASSERT(thread_local_top_.isolate_ == this);
-      StateTag current_state = thread_local_top_.current_vm_state_;
-      if (current_state != JS && state == JS) {
-        // Non-JS -> JS transition.
-        RuntimeProfiler::IsolateEnteredJS(this);
-      } else if (current_state == JS && state != JS) {
-        // JS -> non-JS transition.
-        RuntimeProfiler::IsolateExitedJS(this);
-      } else {
-        // Other types of state transitions are not interesting to the
-        // runtime profiler, because they don't affect whether we're
-        // in JS or not.
-        ASSERT((current_state == JS) == (state == JS));
-      }
-    }
+  void set_current_vm_state(StateTag state) {
     thread_local_top_.current_vm_state_ = state;
   }
 
@@ -1087,6 +1073,10 @@ class Isolate {
   void IterateDeferredHandles(ObjectVisitor* visitor);
   void LinkDeferredHandles(DeferredHandles* deferred_handles);
   void UnlinkDeferredHandles(DeferredHandles* deferred_handles);
+
+#ifdef DEBUG
+  bool IsDeferredHandle(Object** location);
+#endif  // DEBUG
 
   OptimizingCompilerThread* optimizing_compiler_thread() {
     return &optimizing_compiler_thread_;
@@ -1306,14 +1296,16 @@ class Isolate {
   JSObject::SpillInformation js_spill_information_;
   int code_kind_statistics_[Code::NUMBER_OF_KINDS];
 
-  bool allow_compiler_thread_handle_deref_;
-  bool allow_execution_thread_handle_deref_;
+  HandleDereferenceGuard::State compiler_thread_handle_deref_state_;
+  HandleDereferenceGuard::State execution_thread_handle_deref_state_;
 #endif
 
 #ifdef ENABLE_DEBUGGER_SUPPORT
   Debugger* debugger_;
   Debug* debug_;
 #endif
+  CpuProfiler* cpu_profiler_;
+  HeapProfiler* heap_profiler_;
 
 #define GLOBAL_BACKING_STORE(type, name, initialvalue)                         \
   type name##_;
@@ -1480,7 +1472,6 @@ class PostponeInterruptsScope BASE_EMBEDDED {
 #define HEAP (v8::internal::Isolate::Current()->heap())
 #define FACTORY (v8::internal::Isolate::Current()->factory())
 #define ISOLATE (v8::internal::Isolate::Current())
-#define LOGGER (v8::internal::Isolate::Current()->logger())
 
 
 // Tells whether the native context is marked with out of memory.

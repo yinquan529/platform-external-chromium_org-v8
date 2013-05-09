@@ -178,6 +178,7 @@ class MacroAssembler: public Assembler {
   void LoadHeapObject(Register dst, Handle<HeapObject> object);
 
   void LoadObject(Register result, Handle<Object> object) {
+    ALLOW_HANDLE_DEREF(isolate(), "heap object check");
     if (object->IsHeapObject()) {
       LoadHeapObject(result, Handle<HeapObject>::cast(object));
     } else {
@@ -211,6 +212,10 @@ class MacroAssembler: public Assembler {
                      int mask,
                      Condition cc,
                      Label* condition_met);
+
+  void CheckMapDeprecated(Handle<Map> map,
+                          Register scratch,
+                          Label* if_deprecated);
 
   // Check if object is in new space.  Jumps if the object is not in new space.
   // The register scratch can be object itself, but scratch will be clobbered.
@@ -460,6 +465,19 @@ class MacroAssembler: public Assembler {
             const MemOperand& dst,
             Condition cond = al);
 
+  // Ensure that FPSCR contains values needed by JavaScript.
+  // We need the NaNModeControlBit to be sure that operations like
+  // vadd and vsub generate the Canonical NaN (if a NaN must be generated).
+  // In VFP3 it will be always the Canonical NaN.
+  // In VFP2 it will be either the Canonical NaN or the negative version
+  // of the Canonical NaN. It doesn't matter if we have two values. The aim
+  // is to be sure to never generate the hole NaN.
+  void VFPEnsureFPSCRState(Register scratch);
+
+  // If the value is a NaN, canonicalize the value else, do nothing.
+  void VFPCanonicalizeNaN(const DwVfpRegister value,
+                          const Condition cond = al);
+
   // Compare double values and move the result to the normal condition flags.
   void VFPCompareAndSetFlags(const DwVfpRegister src1,
                              const DwVfpRegister src2,
@@ -481,6 +499,54 @@ class MacroAssembler: public Assembler {
   void Vmov(const DwVfpRegister dst,
             const double imm,
             const Register scratch = no_reg);
+
+  // Converts the smi or heap number in object to an int32 using the rules
+  // for ToInt32 as described in ECMAScript 9.5.: the value is truncated
+  // and brought into the range -2^31 .. +2^31 - 1.
+  void ConvertNumberToInt32(Register object,
+                            Register dst,
+                            Register heap_number_map,
+                            Register scratch1,
+                            Register scratch2,
+                            Register scratch3,
+                            DwVfpRegister double_scratch1,
+                            DwVfpRegister double_scratch2,
+                            Label* not_int32);
+
+  // Loads the number from object into dst register.
+  // If |object| is neither smi nor heap number, |not_number| is jumped to
+  // with |object| still intact.
+  void LoadNumber(Register object,
+                  DwVfpRegister dst,
+                  Register heap_number_map,
+                  Register scratch,
+                  Label* not_number);
+
+  // Loads the number from object into double_dst in the double format.
+  // Control will jump to not_int32 if the value cannot be exactly represented
+  // by a 32-bit integer.
+  // Floating point value in the 32-bit integer range that are not exact integer
+  // won't be loaded.
+  void LoadNumberAsInt32Double(Register object,
+                               DwVfpRegister double_dst,
+                               Register heap_number_map,
+                               Register scratch,
+                               DwVfpRegister double_scratch,
+                               Label* not_int32);
+
+  // Loads the number from object into dst as a 32-bit integer.
+  // Control will jump to not_int32 if the object cannot be exactly represented
+  // by a 32-bit integer.
+  // Floating point value in the 32-bit integer range that are not exact integer
+  // won't be converted.
+  void LoadNumberAsInt32(Register object,
+                         Register dst,
+                         Register heap_number_map,
+                         Register scratch,
+                         DwVfpRegister double_scratch0,
+                         DwVfpRegister double_scratch1,
+                         Label* not_int32);
+
 
   // Enter exit frame.
   // stack_space - extra stack space, used for alignment before call to C.
@@ -560,6 +626,7 @@ class MacroAssembler: public Assembler {
                       CallKind call_kind);
 
   void InvokeFunction(Handle<JSFunction> function,
+                      const ParameterCount& expected,
                       const ParameterCount& actual,
                       InvokeFlag flag,
                       const CallWrapper& call_wrapper,
@@ -679,12 +746,12 @@ class MacroAssembler: public Assembler {
                 Label* gc_required,
                 AllocationFlags flags);
 
-  void AllocateInNewSpace(Register object_size,
-                          Register result,
-                          Register scratch1,
-                          Register scratch2,
-                          Label* gc_required,
-                          AllocationFlags flags);
+  void Allocate(Register object_size,
+                Register result,
+                Register scratch1,
+                Register scratch2,
+                Label* gc_required,
+                AllocationFlags flags);
 
   // Undo allocation in new space. The object passed and objects allocated after
   // it will no longer be allocated. The caller must make sure that no pointers
@@ -743,7 +810,11 @@ class MacroAssembler: public Assembler {
                                    Label* gc_required);
 
   // Copies a fixed number of fields of heap objects from src to dst.
-  void CopyFields(Register dst, Register src, RegList temps, int field_count);
+  void CopyFields(Register dst,
+                  Register src,
+                  DwVfpRegister double_scratch,
+                  SwVfpRegister single_scratch,
+                  int field_count);
 
   // Copies a number of bytes from src to dst. All registers are clobbered. On
   // exit src and dst will point to the place just after where the last byte was
@@ -814,16 +885,11 @@ class MacroAssembler: public Assembler {
 
   // Check to see if maybe_number can be stored as a double in
   // FastDoubleElements. If it can, store it at the index specified by key in
-  // the FastDoubleElements array elements. Otherwise jump to fail, in which
-  // case scratch2, scratch3 and scratch4 are unmodified.
+  // the FastDoubleElements array elements. Otherwise jump to fail.
   void StoreNumberToDoubleElements(Register value_reg,
                                    Register key_reg,
-                                   // All regs below here overwritten.
                                    Register elements_reg,
                                    Register scratch1,
-                                   Register scratch2,
-                                   Register scratch3,
-                                   Register scratch4,
                                    Label* fail,
                                    int elements_offset = 0);
 
@@ -955,48 +1021,28 @@ class MacroAssembler: public Assembler {
                      Label* done,
                      Label* exact);
 
-  // Performs a truncating conversion of a heap floating point number as used by
-  // the JS bitwise operations. See ECMA-262 9.5: ToInt32.
-  // Exits with 'result' holding the answer.
-  void ECMAConvertNumberToInt32(Register source,
-                                Register result,
-                                Register scratch,
-                                Register input_high,
-                                Register input_low,
-                                DwVfpRegister double_scratch1,
-                                DwVfpRegister double_scratch2);
-
   // Performs a truncating conversion of a floating point number as used by
   // the JS bitwise operations. See ECMA-262 9.5: ToInt32.
+  // Double_scratch must be between d0 and d15.
   // Exits with 'result' holding the answer and all other registers clobbered.
-  void ECMAToInt32VFP(Register result,
-                      DwVfpRegister double_input,
-                      DwVfpRegister double_scratch,
-                      Register scratch,
-                      Register input_high,
-                      Register input_low);
-
-  // Performs a truncating conversion of a floating point number as used by
-  // the JS bitwise operations. See ECMA-262 9.5: ToInt32.
-  // Exits with 'result' holding the answer.
-  void ECMAToInt32NoVFP(Register result,
-                        Register scratch,
-                        Register input_high,
-                        Register input_low);
-
-  // Count leading zeros in a 32 bit word.  On ARM5 and later it uses the clz
-  // instruction.  On pre-ARM5 hardware this routine gives the wrong answer
-  // for 0 (31 instead of 32).  Source and scratch can be the same in which case
-  // the source is clobbered.  Source and zeros can also be the same in which
-  // case scratch should be a different register.
-  void CountLeadingZeros(Register zeros,
-                         Register source,
-                         Register scratch);
+  void ECMAToInt32(Register result,
+                   DwVfpRegister double_input,
+                   Register scratch,
+                   Register scratch_high,
+                   Register scratch_low,
+                   DwVfpRegister double_scratch);
 
   // Check whether d16-d31 are available on the CPU. The result is given by the
   // Z condition flag: Z==0 if d16-d31 available, Z==1 otherwise.
   void CheckFor32DRegs(Register scratch);
 
+  // Does a runtime check for 16/32 FP registers. Either way, pushes 32 double
+  // values to location, saving [d0..(d15|d31)].
+  void SaveFPRegs(Register location, Register scratch);
+
+  // Does a runtime check for 16/32 FP registers. Either way, pops 32 double
+  // values to location, restoring [d0..(d15|d31)].
+  void RestoreFPRegs(Register location, Register scratch);
 
   // ---------------------------------------------------------------------------
   // Runtime calls
@@ -1120,7 +1166,6 @@ class MacroAssembler: public Assembler {
   // Calls Abort(msg) if the condition cond is not satisfied.
   // Use --debug_code to enable.
   void Assert(Condition cond, const char* msg);
-  void AssertRegisterIsRoot(Register reg, Heap::RootListIndex index);
   void AssertFastElements(Register elements);
 
   // Like Assert(), but always enabled.
@@ -1140,7 +1185,9 @@ class MacroAssembler: public Assembler {
 
   // EABI variant for double arguments in use.
   bool use_eabi_hardfloat() {
-#if USE_EABI_HARDFLOAT
+#ifdef __arm__
+    return OS::ArmUsingHardFloat();
+#elif USE_EABI_HARDFLOAT
     return true;
 #else
     return false;
@@ -1228,11 +1275,9 @@ class MacroAssembler: public Assembler {
   // Abort execution if argument is not a name, enabled via --debug-code.
   void AssertName(Register object);
 
-  // Abort execution if argument is not the root value with the given index,
+  // Abort execution if reg is not the root value with the given index,
   // enabled via --debug-code.
-  void AssertRootValue(Register src,
-                       Heap::RootListIndex root_value_index,
-                       const char* message);
+  void AssertIsRoot(Register reg, Heap::RootListIndex index);
 
   // ---------------------------------------------------------------------------
   // HeapNumber utilities
@@ -1362,16 +1407,6 @@ class MacroAssembler: public Assembler {
   // Helper for throwing exceptions.  Compute a handler address and jump to
   // it.  See the implementation for register usage.
   void JumpToHandlerEntry();
-
-  // Helper for ECMAToInt32VFP and ECMAToInt32NoVFP.
-  // It is expected that 31 <= exponent <= 83, and scratch is exponent - 1.
-  void ECMAToInt32Tail(Register result,
-                       Register scratch,
-                       Register input_high,
-                       Register input_low,
-                       Label* out_of_range,
-                       Label* negate,
-                       Label* done);
 
   // Compute memory operands for safepoint stack slots.
   static int SafepointRegisterStackIndex(int reg_code);

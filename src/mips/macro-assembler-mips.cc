@@ -83,6 +83,7 @@ void MacroAssembler::StoreRoot(Register source,
 
 void MacroAssembler::LoadHeapObject(Register result,
                                     Handle<HeapObject> object) {
+  ALLOW_HANDLE_DEREF(isolate(), "using raw address");
   if (isolate()->heap()->InNewSpace(*object)) {
     Handle<JSGlobalPropertyCell> cell =
         isolate()->factory()->NewJSGlobalPropertyCell(object);
@@ -369,7 +370,6 @@ void MacroAssembler::CheckAccessGlobalProxy(Register holder_reg,
 
   // Check the context is a native context.
   if (emit_debug_code()) {
-    // TODO(119): Avoid push(holder_reg)/pop(holder_reg).
     push(holder_reg);  // Temporarily save holder on the stack.
     // Read the first word and compare to the native_context_map.
     lw(holder_reg, FieldMemOperand(scratch, HeapObject::kMapOffset));
@@ -385,7 +385,6 @@ void MacroAssembler::CheckAccessGlobalProxy(Register holder_reg,
 
   // Check the context is a native context.
   if (emit_debug_code()) {
-    // TODO(119): Avoid push(holder_reg)/pop(holder_reg).
     push(holder_reg);  // Temporarily save holder on the stack.
     mov(holder_reg, at);  // Move at to its holding place.
     LoadRoot(at, Heap::kNullValueRootIndex);
@@ -853,7 +852,6 @@ void MacroAssembler::MultiPopReversed(RegList regs) {
 
 
 void MacroAssembler::MultiPushFPU(RegList regs) {
-  CpuFeatureScope scope(this, FPU);
   int16_t num_to_push = NumberOfBitsSet(regs);
   int16_t stack_offset = num_to_push * kDoubleSize;
 
@@ -868,7 +866,6 @@ void MacroAssembler::MultiPushFPU(RegList regs) {
 
 
 void MacroAssembler::MultiPushReversedFPU(RegList regs) {
-  CpuFeatureScope scope(this, FPU);
   int16_t num_to_push = NumberOfBitsSet(regs);
   int16_t stack_offset = num_to_push * kDoubleSize;
 
@@ -883,7 +880,6 @@ void MacroAssembler::MultiPushReversedFPU(RegList regs) {
 
 
 void MacroAssembler::MultiPopFPU(RegList regs) {
-  CpuFeatureScope scope(this, FPU);
   int16_t stack_offset = 0;
 
   for (int16_t i = 0; i < kNumRegisters; i++) {
@@ -897,7 +893,6 @@ void MacroAssembler::MultiPopFPU(RegList regs) {
 
 
 void MacroAssembler::MultiPopReversedFPU(RegList regs) {
-  CpuFeatureScope scope(this, FPU);
   int16_t stack_offset = 0;
 
   for (int16_t i = kNumRegisters - 1; i >= 0; i--) {
@@ -1170,7 +1165,6 @@ void MacroAssembler::BranchF(Label* target,
 
 
 void MacroAssembler::Move(FPURegister dst, double imm) {
-  ASSERT(IsEnabled(FPU));
   static const DoubleRepresentation minus_zero(-0.0);
   static const DoubleRepresentation zero(0.0);
   DoubleRepresentation value(imm);
@@ -1340,61 +1334,17 @@ void MacroAssembler::ConvertToInt32(Register source,
   Subu(scratch2, scratch2, Operand(zero_exponent));
   // Dest already has a Smi zero.
   Branch(&done, lt, scratch2, Operand(zero_reg));
-  if (!CpuFeatures::IsSupported(FPU)) {
-    // We have a shifted exponent between 0 and 30 in scratch2.
-    srl(dest, scratch2, HeapNumber::kExponentShift);
-    // We now have the exponent in dest.  Subtract from 30 to get
-    // how much to shift down.
-    li(at, Operand(30));
-    subu(dest, at, dest);
-  }
   bind(&right_exponent);
-  if (CpuFeatures::IsSupported(FPU)) {
-    CpuFeatureScope scope(this, FPU);
-    // MIPS FPU instructions implementing double precision to integer
-    // conversion using round to zero. Since the FP value was qualified
-    // above, the resulting integer should be a legal int32.
-    // The original 'Exponent' word is still in scratch.
-    lwc1(double_scratch, FieldMemOperand(source, HeapNumber::kMantissaOffset));
-    mtc1(scratch, FPURegister::from_code(double_scratch.code() + 1));
-    trunc_w_d(double_scratch, double_scratch);
-    mfc1(dest, double_scratch);
-  } else {
-    // On entry, dest has final downshift, scratch has original sign/exp/mant.
-    // Save sign bit in top bit of dest.
-    And(scratch2, scratch, Operand(0x80000000));
-    Or(dest, dest, Operand(scratch2));
-    // Put back the implicit 1, just above mantissa field.
-    Or(scratch, scratch, Operand(1 << HeapNumber::kExponentShift));
 
-    // Shift up the mantissa bits to take up the space the exponent used to
-    // take. We just orred in the implicit bit so that took care of one and
-    // we want to leave the sign bit 0 so we subtract 2 bits from the shift
-    // distance. But we want to clear the sign-bit so shift one more bit
-    // left, then shift right one bit.
-    const int shift_distance = HeapNumber::kNonMantissaBitsInTopWord - 2;
-    sll(scratch, scratch, shift_distance + 1);
-    srl(scratch, scratch, 1);
+  // MIPS FPU instructions implementing double precision to integer
+  // conversion using round to zero. Since the FP value was qualified
+  // above, the resulting integer should be a legal int32.
+  // The original 'Exponent' word is still in scratch.
+  lwc1(double_scratch, FieldMemOperand(source, HeapNumber::kMantissaOffset));
+  mtc1(scratch, FPURegister::from_code(double_scratch.code() + 1));
+  trunc_w_d(double_scratch, double_scratch);
+  mfc1(dest, double_scratch);
 
-    // Get the second half of the double. For some exponents we don't
-    // actually need this because the bits get shifted out again, but
-    // it's probably slower to test than just to do it.
-    lw(scratch2, FieldMemOperand(source, HeapNumber::kMantissaOffset));
-    // Extract the top 10 bits, and insert those bottom 10 bits of scratch.
-    // The width of the field here is the same as the shift amount above.
-    const int field_width = shift_distance;
-    Ext(scratch2, scratch2, 32-shift_distance, field_width);
-    Ins(scratch, scratch2, 0, field_width);
-    // Move down according to the exponent.
-    srlv(scratch, scratch, dest);
-    // Prepare the negative version of our integer.
-    subu(scratch2, zero_reg, scratch);
-    // Trick to check sign bit (msb) held in dest, count leading zero.
-    // 0 indicates negative, save negative version with conditional move.
-    Clz(dest, dest);
-    Movz(scratch, scratch2, dest);
-    mov(dest, scratch);
-  }
   bind(&done);
 }
 
@@ -1410,8 +1360,6 @@ void MacroAssembler::EmitFPUTruncate(FPURoundingMode rounding_mode,
   ASSERT(!double_input.is(double_scratch));
   ASSERT(!except_flag.is(scratch));
 
-  ASSERT(CpuFeatures::IsSupported(FPU));
-  CpuFeatureScope scope(this, FPU);
   Label done;
 
   // Clear the except flag (0 = no exception)
@@ -1553,7 +1501,6 @@ void MacroAssembler::EmitECMATruncate(Register result,
                                       Register scratch,
                                       Register scratch2,
                                       Register scratch3) {
-  CpuFeatureScope scope(this, FPU);
   ASSERT(!scratch2.is(result));
   ASSERT(!scratch3.is(result));
   ASSERT(!scratch3.is(scratch2));
@@ -1928,7 +1875,7 @@ void MacroAssembler::BranchShort(Label* L, Condition cond, Register rs,
                                  BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
 
-  int32_t offset;
+  int32_t offset = 0;
   Register r2 = no_reg;
   Register scratch = at;
   if (rt.is_reg()) {
@@ -2361,7 +2308,7 @@ void MacroAssembler::BranchAndLinkShort(Label* L, Condition cond, Register rs,
                                         BranchDelaySlot bdslot) {
   BRANCH_ARGS_CHECK(cond, rs, rt);
 
-  int32_t offset;
+  int32_t offset = 0;
   Register r2 = no_reg;
   Register scratch = at;
   if (rt.is_reg()) {
@@ -2511,6 +2458,7 @@ void MacroAssembler::Jump(Handle<Code> code,
                           const Operand& rt,
                           BranchDelaySlot bd) {
   ASSERT(RelocInfo::IsCodeTarget(rmode));
+  ALLOW_HANDLE_DEREF(isolate(), "embedding raw address");
   Jump(reinterpret_cast<intptr_t>(code.location()), rmode, cond, rs, rt, bd);
 }
 
@@ -2598,6 +2546,7 @@ int MacroAssembler::CallSize(Handle<Code> code,
                              Register rs,
                              const Operand& rt,
                              BranchDelaySlot bd) {
+  ALLOW_HANDLE_DEREF(isolate(), "using raw address");
   return CallSize(reinterpret_cast<Address>(code.location()),
       rmode, cond, rs, rt, bd);
 }
@@ -2618,6 +2567,7 @@ void MacroAssembler::Call(Handle<Code> code,
     SetRecordedAstId(ast_id);
     rmode = RelocInfo::CODE_TARGET_WITH_ID;
   }
+  ALLOW_HANDLE_DEREF(isolate(), "embedding raw address");
   Call(reinterpret_cast<Address>(code.location()), rmode, cond, rs, rt, bd);
   ASSERT_EQ(CallSize(code, rmode, ast_id, cond, rs, rt, bd),
             SizeOfCodeGeneratedSince(&start));
@@ -3002,13 +2952,12 @@ void MacroAssembler::Allocate(int object_size,
 }
 
 
-void MacroAssembler::AllocateInNewSpace(Register object_size,
-                                        Register result,
-                                        Register scratch1,
-                                        Register scratch2,
-                                        Label* gc_required,
-                                        AllocationFlags flags) {
-  ASSERT((flags & PRETENURE_OLD_POINTER_SPACE) == 0);
+void MacroAssembler::Allocate(Register object_size,
+                              Register result,
+                              Register scratch1,
+                              Register scratch2,
+                              Label* gc_required,
+                              AllocationFlags flags) {
   if (!FLAG_inline_new) {
     if (emit_debug_code()) {
       // Trash the registers to simulate an allocation failure.
@@ -3029,19 +2978,19 @@ void MacroAssembler::AllocateInNewSpace(Register object_size,
   // Check relative positions of allocation top and limit addresses.
   // ARM adds additional checks to make sure the ldm instruction can be
   // used. On MIPS we don't have ldm so we don't need additional checks either.
-  ExternalReference new_space_allocation_top =
-      ExternalReference::new_space_allocation_top_address(isolate());
-  ExternalReference new_space_allocation_limit =
-      ExternalReference::new_space_allocation_limit_address(isolate());
+  ExternalReference allocation_top =
+      AllocationUtils::GetAllocationTopReference(isolate(), flags);
+  ExternalReference allocation_limit =
+      AllocationUtils::GetAllocationLimitReference(isolate(), flags);
   intptr_t top   =
-      reinterpret_cast<intptr_t>(new_space_allocation_top.address());
+      reinterpret_cast<intptr_t>(allocation_top.address());
   intptr_t limit =
-      reinterpret_cast<intptr_t>(new_space_allocation_limit.address());
+      reinterpret_cast<intptr_t>(allocation_limit.address());
   ASSERT((limit - top) == kPointerSize);
 
   // Set up allocation top address and object size registers.
   Register topaddr = scratch1;
-  li(topaddr, Operand(new_space_allocation_top));
+  li(topaddr, Operand(allocation_top));
 
   // This code stores a temporary value in t9.
   if ((flags & RESULT_CONTAINS_TOP) == 0) {
@@ -3120,12 +3069,12 @@ void MacroAssembler::AllocateTwoByteString(Register result,
   And(scratch1, scratch1, Operand(~kObjectAlignmentMask));
 
   // Allocate two-byte string in new space.
-  AllocateInNewSpace(scratch1,
-                     result,
-                     scratch2,
-                     scratch3,
-                     gc_required,
-                     TAG_OBJECT);
+  Allocate(scratch1,
+           result,
+           scratch2,
+           scratch3,
+           gc_required,
+           TAG_OBJECT);
 
   // Set the map, length and hash field.
   InitializeNewString(result,
@@ -3150,12 +3099,12 @@ void MacroAssembler::AllocateAsciiString(Register result,
   And(scratch1, scratch1, Operand(~kObjectAlignmentMask));
 
   // Allocate ASCII string in new space.
-  AllocateInNewSpace(scratch1,
-                     result,
-                     scratch2,
-                     scratch3,
-                     gc_required,
-                     TAG_OBJECT);
+  Allocate(scratch1,
+           result,
+           scratch2,
+           scratch3,
+           gc_required,
+           TAG_OBJECT);
 
   // Set the map, length and hash field.
   InitializeNewString(result,
@@ -3462,11 +3411,7 @@ void MacroAssembler::StoreNumberToDoubleElements(Register value_reg,
   // scratch1 is now effective address of the double element
 
   FloatingPointHelper::Destination destination;
-  if (CpuFeatures::IsSupported(FPU)) {
-    destination = FloatingPointHelper::kFPURegisters;
-  } else {
-    destination = FloatingPointHelper::kCoreRegisters;
-  }
+  destination = FloatingPointHelper::kFPURegisters;
 
   Register untagged_value = elements_reg;
   SmiUntag(untagged_value, value_reg);
@@ -3479,7 +3424,6 @@ void MacroAssembler::StoreNumberToDoubleElements(Register value_reg,
                                           scratch4,
                                           f2);
   if (destination == FloatingPointHelper::kFPURegisters) {
-    CpuFeatureScope scope(this, FPU);
     sdc1(f0, MemOperand(scratch1, 0));
   } else {
     sw(mantissa_reg, MemOperand(scratch1, 0));
@@ -3572,7 +3516,6 @@ void MacroAssembler::CheckMap(Register obj,
 
 
 void MacroAssembler::GetCFunctionDoubleResult(const DoubleRegister dst) {
-  CpuFeatureScope scope(this, FPU);
   if (IsMipsSoftFloatABI) {
     Move(dst, v0, v1);
   } else {
@@ -3582,7 +3525,6 @@ void MacroAssembler::GetCFunctionDoubleResult(const DoubleRegister dst) {
 
 
 void MacroAssembler::SetCallCDoubleArguments(DoubleRegister dreg) {
-  CpuFeatureScope scope(this, FPU);
   if (!IsMipsSoftFloatABI) {
     Move(f12, dreg);
   } else {
@@ -3593,7 +3535,6 @@ void MacroAssembler::SetCallCDoubleArguments(DoubleRegister dreg) {
 
 void MacroAssembler::SetCallCDoubleArguments(DoubleRegister dreg1,
                                              DoubleRegister dreg2) {
-  CpuFeatureScope scope(this, FPU);
   if (!IsMipsSoftFloatABI) {
     if (dreg2.is(f12)) {
       ASSERT(!dreg1.is(f14));
@@ -3612,7 +3553,6 @@ void MacroAssembler::SetCallCDoubleArguments(DoubleRegister dreg1,
 
 void MacroAssembler::SetCallCDoubleArguments(DoubleRegister dreg,
                                              Register reg) {
-  CpuFeatureScope scope(this, FPU);
   if (!IsMipsSoftFloatABI) {
     Move(f12, dreg);
     Move(a2, reg);
@@ -3807,6 +3747,7 @@ void MacroAssembler::InvokeFunction(Register function,
 
 
 void MacroAssembler::InvokeFunction(Handle<JSFunction> function,
+                                    const ParameterCount& expected,
                                     const ParameterCount& actual,
                                     InvokeFlag flag,
                                     const CallWrapper& call_wrapper,
@@ -3818,7 +3759,6 @@ void MacroAssembler::InvokeFunction(Handle<JSFunction> function,
   LoadHeapObject(a1, function);
   lw(cp, FieldMemOperand(a1, JSFunction::kContextOffset));
 
-  ParameterCount expected(function->shared()->formal_parameter_count());
   // We call indirectly through the code field in the function to
   // allow recompilation to take effect without changing any of the
   // call sites.
@@ -3985,8 +3925,9 @@ void MacroAssembler::CallApiFunctionAndReturn(ExternalReference function,
   if (FLAG_log_timer_events) {
     FrameScope frame(this, StackFrame::MANUAL);
     PushSafepointRegisters();
-    PrepareCallCFunction(0, a0);
-    CallCFunction(ExternalReference::log_enter_external_function(isolate()), 0);
+    PrepareCallCFunction(1, a0);
+    li(a0, Operand(ExternalReference::isolate_address(isolate())));
+    CallCFunction(ExternalReference::log_enter_external_function(isolate()), 1);
     PopSafepointRegisters();
   }
 
@@ -4005,8 +3946,9 @@ void MacroAssembler::CallApiFunctionAndReturn(ExternalReference function,
   if (FLAG_log_timer_events) {
     FrameScope frame(this, StackFrame::MANUAL);
     PushSafepointRegisters();
-    PrepareCallCFunction(0, a0);
-    CallCFunction(ExternalReference::log_leave_external_function(isolate()), 0);
+    PrepareCallCFunction(1, a0);
+    li(a0, Operand(ExternalReference::isolate_address(isolate())));
+    CallCFunction(ExternalReference::log_leave_external_function(isolate()), 1);
     PopSafepointRegisters();
   }
 
@@ -4060,7 +4002,7 @@ void MacroAssembler::CallApiFunctionAndReturn(ExternalReference function,
   mov(s0, v0);
   mov(a0, v0);
   PrepareCallCFunction(1, s1);
-  li(a0, Operand(ExternalReference::isolate_address()));
+  li(a0, Operand(ExternalReference::isolate_address(isolate())));
   CallCFunction(ExternalReference::delete_handle_scope_extensions(isolate()),
       1);
   mov(v0, s0);
@@ -4255,10 +4197,7 @@ void MacroAssembler::CallRuntimeSaveDoubles(Runtime::FunctionId id) {
   const Runtime::Function* function = Runtime::FunctionForId(id);
   PrepareCEntryArgs(function->nargs);
   PrepareCEntryFunction(ExternalReference(function, isolate()));
-  SaveFPRegsMode mode = CpuFeatures::IsSupported(FPU)
-      ? kSaveFPRegs
-      : kDontSaveFPRegs;
-  CEntryStub stub(1, mode);
+  CEntryStub stub(1, kSaveFPRegs);
   CallStub(&stub);
 }
 
@@ -4650,7 +4589,6 @@ void MacroAssembler::EnterExitFrame(bool save_doubles,
 
   const int frame_alignment = MacroAssembler::ActivationFrameAlignment();
   if (save_doubles) {
-    CpuFeatureScope scope(this, FPU);
     // The stack  must be allign to 0 modulo 8 for stores with sdc1.
     ASSERT(kDoubleSize == frame_alignment);
     if (frame_alignment > 0) {
@@ -4688,7 +4626,6 @@ void MacroAssembler::LeaveExitFrame(bool save_doubles,
                                     bool do_return) {
   // Optionally restore all double registers.
   if (save_doubles) {
-    CpuFeatureScope scope(this, FPU);
     // Remember: we only need to restore every 2nd double FPU value.
     lw(t8, MemOperand(fp, ExitFrameConstants::kSPOffset));
     for (int i = 0; i < FPURegister::kMaxNumRegisters; i+=2) {
@@ -5198,6 +5135,18 @@ void MacroAssembler::CheckPageFlag(
 }
 
 
+void MacroAssembler::CheckMapDeprecated(Handle<Map> map,
+                                        Register scratch,
+                                        Label* if_deprecated) {
+  if (map->CanBeDeprecated()) {
+    li(scratch, Operand(map));
+    lw(scratch, FieldMemOperand(scratch, Map::kBitField3Offset));
+    And(scratch, scratch, Operand(Smi::FromInt(Map::Deprecated::kMask)));
+    Branch(if_deprecated, ne, scratch, Operand(zero_reg));
+  }
+}
+
+
 void MacroAssembler::JumpIfBlack(Register object,
                                  Register scratch0,
                                  Register scratch1,
@@ -5515,7 +5464,6 @@ bool AreAliased(Register r1, Register r2, Register r3, Register r4) {
 
 CodePatcher::CodePatcher(byte* address, int instructions)
     : address_(address),
-      instructions_(instructions),
       size_(instructions * Assembler::kInstrSize),
       masm_(NULL, address, size_ + Assembler::kGap) {
   // Create a new macro assembler pointing to the address of the code to patch.

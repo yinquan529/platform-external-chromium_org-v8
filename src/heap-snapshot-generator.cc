@@ -189,27 +189,22 @@ template <> struct SnapshotSizeConstants<4> {
   static const int kExpectedHeapGraphEdgeSize = 12;
   static const int kExpectedHeapEntrySize = 24;
   static const int kExpectedHeapSnapshotsCollectionSize = 100;
-  static const int kExpectedHeapSnapshotSize = 136;
-  static const size_t kMaxSerializableSnapshotRawSize = 256 * MB;
+  static const int kExpectedHeapSnapshotSize = 132;
 };
 
 template <> struct SnapshotSizeConstants<8> {
   static const int kExpectedHeapGraphEdgeSize = 24;
   static const int kExpectedHeapEntrySize = 32;
   static const int kExpectedHeapSnapshotsCollectionSize = 152;
-  static const int kExpectedHeapSnapshotSize = 168;
-  static const uint64_t kMaxSerializableSnapshotRawSize =
-      static_cast<uint64_t>(6000) * MB;
+  static const int kExpectedHeapSnapshotSize = 160;
 };
 
 }  // namespace
 
 HeapSnapshot::HeapSnapshot(HeapSnapshotsCollection* collection,
-                           HeapSnapshot::Type type,
                            const char* title,
                            unsigned uid)
     : collection_(collection),
-      type_(type),
       title_(title),
       uid_(uid),
       root_index_(HeapEntry::kNoEntry),
@@ -599,11 +594,10 @@ HeapSnapshotsCollection::~HeapSnapshotsCollection() {
 }
 
 
-HeapSnapshot* HeapSnapshotsCollection::NewSnapshot(HeapSnapshot::Type type,
-                                                   const char* name,
+HeapSnapshot* HeapSnapshotsCollection::NewSnapshot(const char* name,
                                                    unsigned uid) {
   is_tracking_objects_ = true;  // Start watching for heap objects moves.
-  return new HeapSnapshot(this, type, name, uid);
+  return new HeapSnapshot(this, name, uid);
 }
 
 
@@ -1942,18 +1936,19 @@ void NativeObjectsExplorer::FillRetainedObjects() {
   Isolate* isolate = Isolate::Current();
   const GCType major_gc_type = kGCTypeMarkSweepCompact;
   // Record objects that are joined into ObjectGroups.
-  isolate->heap()->CallGCPrologueCallbacks(major_gc_type);
+  isolate->heap()->CallGCPrologueCallbacks(
+      major_gc_type, kGCCallbackFlagConstructRetainedObjectInfos);
   List<ObjectGroup*>* groups = isolate->global_handles()->object_groups();
   for (int i = 0; i < groups->length(); ++i) {
     ObjectGroup* group = groups->at(i);
-    if (group->info_ == NULL) continue;
-    List<HeapObject*>* list = GetListMaybeDisposeInfo(group->info_);
-    for (size_t j = 0; j < group->length_; ++j) {
-      HeapObject* obj = HeapObject::cast(*group->objects_[j]);
+    if (group->info == NULL) continue;
+    List<HeapObject*>* list = GetListMaybeDisposeInfo(group->info);
+    for (size_t j = 0; j < group->length; ++j) {
+      HeapObject* obj = HeapObject::cast(*group->objects[j]);
       list->Add(obj);
       in_groups_.Insert(obj);
     }
-    group->info_ = NULL;  // Acquire info object ownership.
+    group->info = NULL;  // Acquire info object ownership.
   }
   isolate->global_handles()->RemoveObjectGroups();
   isolate->heap()->CallGCEpilogueCallbacks(major_gc_type);
@@ -1969,12 +1964,12 @@ void NativeObjectsExplorer::FillImplicitReferences() {
       isolate->global_handles()->implicit_ref_groups();
   for (int i = 0; i < groups->length(); ++i) {
     ImplicitRefGroup* group = groups->at(i);
-    HeapObject* parent = *group->parent_;
+    HeapObject* parent = *group->parent;
     int parent_entry =
         filler_->FindOrAddEntry(parent, native_entries_allocator_)->index();
     ASSERT(parent_entry != HeapEntry::kNoEntry);
-    Object*** children = group->children_;
-    for (size_t j = 0; j < group->length_; ++j) {
+    Object*** children = group->children;
+    for (size_t j = 0; j < group->length; ++j) {
       Object* child = *children[j];
       HeapEntry* child_entry =
           filler_->FindOrAddEntry(child, native_entries_allocator_);
@@ -2322,7 +2317,7 @@ class OutputStreamWriter {
       int s_chunk_size = Min(
           chunk_size_ - chunk_pos_, static_cast<int>(s_end - s));
       ASSERT(s_chunk_size > 0);
-      memcpy(chunk_.start() + chunk_pos_, s, s_chunk_size);
+      OS::MemCopy(chunk_.start() + chunk_pos_, s, s_chunk_size);
       s += s_chunk_size;
       chunk_pos_ += s_chunk_size;
       MaybeWriteChunk();
@@ -2387,43 +2382,9 @@ const int HeapSnapshotJSONSerializer::kNodeFieldsCount = 5;
 void HeapSnapshotJSONSerializer::Serialize(v8::OutputStream* stream) {
   ASSERT(writer_ == NULL);
   writer_ = new OutputStreamWriter(stream);
-
-  HeapSnapshot* original_snapshot = NULL;
-  if (snapshot_->RawSnapshotSize() >=
-      SnapshotSizeConstants<kPointerSize>::kMaxSerializableSnapshotRawSize) {
-    // The snapshot is too big. Serialize a fake snapshot.
-    original_snapshot = snapshot_;
-    snapshot_ = CreateFakeSnapshot();
-  }
-
   SerializeImpl();
-
   delete writer_;
   writer_ = NULL;
-
-  if (original_snapshot != NULL) {
-    delete snapshot_;
-    snapshot_ = original_snapshot;
-  }
-}
-
-
-HeapSnapshot* HeapSnapshotJSONSerializer::CreateFakeSnapshot() {
-  HeapSnapshot* result = new HeapSnapshot(snapshot_->collection(),
-                                          HeapSnapshot::kFull,
-                                          snapshot_->title(),
-                                          snapshot_->uid());
-  result->AddRootEntry();
-  const char* text = snapshot_->collection()->names()->GetFormatted(
-      "The snapshot is too big. "
-      "Maximum snapshot size is %"  V8_PTR_PREFIX "u MB. "
-      "Actual snapshot size is %"  V8_PTR_PREFIX "u MB.",
-      SnapshotSizeConstants<kPointerSize>::kMaxSerializableSnapshotRawSize / MB,
-      (snapshot_->RawSnapshotSize() + MB - 1) / MB);
-  HeapEntry* message = result->AddEntry(HeapEntry::kString, text, 0, 4);
-  result->root()->SetIndexedReference(HeapGraphEdge::kElement, 1, message);
-  result->FillChildren();
-  return result;
 }
 
 

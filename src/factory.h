@@ -313,6 +313,10 @@ class Factory {
                                 uint32_t length,
                                 EnsureElementsMode mode);
 
+  Handle<JSArrayBuffer> NewJSArrayBuffer();
+
+  Handle<JSTypedArray> NewJSTypedArray(ExternalArrayType type);
+
   Handle<JSProxy> NewJSProxy(Handle<Object> handler, Handle<Object> prototype);
 
   // Change the type of the argument into a JS object/function and reinitialize.
@@ -347,7 +351,8 @@ class Factory {
   Handle<Code> NewCode(const CodeDesc& desc,
                        Code::Flags flags,
                        Handle<Object> self_reference,
-                       bool immovable = false);
+                       bool immovable = false,
+                       bool crankshafted = false);
 
   Handle<Code> CopyCode(Handle<Code> code);
 
@@ -454,6 +459,7 @@ class Factory {
   Handle<SharedFunctionInfo> NewSharedFunctionInfo(
       Handle<String> name,
       int number_of_literals,
+      bool is_generator,
       Handle<Code> code,
       Handle<ScopeInfo> scope_info);
   Handle<SharedFunctionInfo> NewSharedFunctionInfo(Handle<String> name);

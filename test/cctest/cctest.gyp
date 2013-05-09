@@ -70,6 +70,7 @@
         'test-fixed-dtoa.cc',
         'test-flags.cc',
         'test-func-name-inference.cc',
+        'test-global-handles.cc',
         'test-global-object.cc',
         'test-hashing.cc',
         'test-hashmap.cc',
@@ -158,7 +159,9 @@
               'dependencies': ['../../tools/gyp/v8.gyp:v8_snapshot'],
             },
             {
-              'dependencies': ['../../tools/gyp/v8.gyp:v8_nosnapshot'],
+              'dependencies': [
+                '../../tools/gyp/v8.gyp:v8_nosnapshot.<(v8_target_arch)',
+              ],
             }],
           ],
         }, {

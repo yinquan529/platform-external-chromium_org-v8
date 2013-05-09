@@ -411,6 +411,7 @@ class Operand BASE_EMBEDDED {
   }
 
   static Operand Cell(Handle<JSGlobalPropertyCell> cell) {
+    ALLOW_HANDLE_DEREF(Isolate::Current(), "embedding raw address");
     return Operand(reinterpret_cast<int32_t>(cell.location()),
                    RelocInfo::GLOBAL_PROPERTY_CELL);
   }
@@ -1026,6 +1027,13 @@ class Assembler : public AssemblerBase {
   void movdqa(const Operand& dst, XMMRegister src);
   void movdqu(XMMRegister dst, const Operand& src);
   void movdqu(const Operand& dst, XMMRegister src);
+  void movdq(bool aligned, XMMRegister dst, const Operand& src) {
+    if (aligned) {
+      movdqa(dst, src);
+    } else {
+      movdqu(dst, src);
+    }
+  }
 
   // Use either movsd or movlpd.
   void movdbl(XMMRegister dst, const Operand& src);
@@ -1140,6 +1148,9 @@ class Assembler : public AssemblerBase {
   inline void emit(uint32_t x);
   inline void emit(Handle<Object> handle);
   inline void emit(uint32_t x,
+                   RelocInfo::Mode rmode,
+                   TypeFeedbackId id = TypeFeedbackId::None());
+  inline void emit(Handle<Code> code,
                    RelocInfo::Mode rmode,
                    TypeFeedbackId id = TypeFeedbackId::None());
   inline void emit(const Immediate& x);

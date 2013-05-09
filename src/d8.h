@@ -298,13 +298,21 @@ class Shell : public i::AllStatic {
 #endif  // ENABLE_DEBUGGER_SUPPORT
 #endif  // V8_SHARED
 
-#ifdef WIN32
-#undef Yield
-#endif
+  static Handle<Value> RealmCurrent(const Arguments& args);
+  static Handle<Value> RealmOwner(const Arguments& args);
+  static Handle<Value> RealmGlobal(const Arguments& args);
+  static Handle<Value> RealmCreate(const Arguments& args);
+  static Handle<Value> RealmDispose(const Arguments& args);
+  static Handle<Value> RealmSwitch(const Arguments& args);
+  static Handle<Value> RealmEval(const Arguments& args);
+  static Handle<Value> RealmSharedGet(Local<String> property,
+                                      const AccessorInfo& info);
+  static void RealmSharedSet(Local<String> property,
+                             Local<Value> value,
+                             const AccessorInfo& info);
 
   static Handle<Value> Print(const Arguments& args);
   static Handle<Value> Write(const Arguments& args);
-  static Handle<Value> Yield(const Arguments& args);
   static Handle<Value> Quit(const Arguments& args);
   static Handle<Value> Version(const Arguments& args);
   static Handle<Value> EnableProfiler(const Arguments& args);

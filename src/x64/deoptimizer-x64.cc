@@ -117,40 +117,39 @@ void Deoptimizer::DeoptimizeFunctionWithPreparedFunctionList(
 
 
 static const byte kJnsInstruction = 0x79;
-static const byte kJnsOffset = 0x1f;
+static const byte kJnsOffset = 0x1d;
 static const byte kCallInstruction = 0xe8;
 static const byte kNopByteOne = 0x66;
 static const byte kNopByteTwo = 0x90;
 
-void Deoptimizer::PatchStackCheckCodeAt(Code* unoptimized_code,
-                                        Address pc_after,
-                                        Code* check_code,
-                                        Code* replacement_code) {
+// The back edge bookkeeping code matches the pattern:
+//
+//     add <profiling_counter>, <-delta>
+//     jns ok
+//     call <stack guard>
+//   ok:
+//
+// We will patch away the branch so the code is:
+//
+//     add <profiling_counter>, <-delta>  ;; Not changed
+//     nop
+//     nop
+//     call <on-stack replacment>
+//   ok:
+
+void Deoptimizer::PatchInterruptCodeAt(Code* unoptimized_code,
+                                       Address pc_after,
+                                       Code* interrupt_code,
+                                       Code* replacement_code) {
+  ASSERT(!InterruptCodeIsPatched(unoptimized_code,
+                                 pc_after,
+                                 interrupt_code,
+                                 replacement_code));
+  // Turn the jump into nops.
   Address call_target_address = pc_after - kIntSize;
-  ASSERT_EQ(check_code->entry(),
-            Assembler::target_address_at(call_target_address));
-  // The back edge bookkeeping code matches the pattern:
-  //
-  //     add <profiling_counter>, <-delta>
-  //     jns ok
-  //     call <stack guard>
-  //     test rax, <loop nesting depth>
-  // ok: ...
-  //
-  // We will patch away the branch so the code is:
-  //
-  //     add <profiling_counter>, <-delta>  ;; Not changed
-  //     nop
-  //     nop
-  //     call <on-stack replacment>
-  //     test rax, <loop nesting depth>
-  // ok:
-  //
-  ASSERT_EQ(kJnsInstruction,  *(call_target_address - 3));
-  ASSERT_EQ(kJnsOffset,       *(call_target_address - 2));
-  ASSERT_EQ(kCallInstruction, *(call_target_address - 1));
   *(call_target_address - 3) = kNopByteOne;
   *(call_target_address - 2) = kNopByteTwo;
+  // Replace the call address.
   Assembler::set_target_address_at(call_target_address,
                                    replacement_code->entry());
 
@@ -159,26 +158,48 @@ void Deoptimizer::PatchStackCheckCodeAt(Code* unoptimized_code,
 }
 
 
-void Deoptimizer::RevertStackCheckCodeAt(Code* unoptimized_code,
-                                         Address pc_after,
-                                         Code* check_code,
-                                         Code* replacement_code) {
+void Deoptimizer::RevertInterruptCodeAt(Code* unoptimized_code,
+                                        Address pc_after,
+                                        Code* interrupt_code,
+                                        Code* replacement_code) {
+  ASSERT(InterruptCodeIsPatched(unoptimized_code,
+                                pc_after,
+                                interrupt_code,
+                                replacement_code));
+  // Restore the original jump.
   Address call_target_address = pc_after - kIntSize;
-  ASSERT(replacement_code->entry() ==
-         Assembler::target_address_at(call_target_address));
-  // Replace the nops from patching (Deoptimizer::PatchStackCheckCode) to
-  // restore the conditional branch.
-  ASSERT_EQ(kNopByteOne,      *(call_target_address - 3));
-  ASSERT_EQ(kNopByteTwo,      *(call_target_address - 2));
-  ASSERT_EQ(kCallInstruction, *(call_target_address - 1));
   *(call_target_address - 3) = kJnsInstruction;
   *(call_target_address - 2) = kJnsOffset;
+  // Restore the original call address.
   Assembler::set_target_address_at(call_target_address,
-                                   check_code->entry());
+                                   interrupt_code->entry());
 
-  check_code->GetHeap()->incremental_marking()->RecordCodeTargetPatch(
-      unoptimized_code, call_target_address, check_code);
+  interrupt_code->GetHeap()->incremental_marking()->RecordCodeTargetPatch(
+      unoptimized_code, call_target_address, interrupt_code);
 }
+
+
+#ifdef DEBUG
+bool Deoptimizer::InterruptCodeIsPatched(Code* unoptimized_code,
+                                         Address pc_after,
+                                         Code* interrupt_code,
+                                         Code* replacement_code) {
+  Address call_target_address = pc_after - kIntSize;
+  ASSERT_EQ(kCallInstruction, *(call_target_address - 1));
+  if (*(call_target_address - 3) == kNopByteOne) {
+    ASSERT(replacement_code->entry() ==
+           Assembler::target_address_at(call_target_address));
+    ASSERT_EQ(kNopByteTwo,      *(call_target_address - 2));
+    return true;
+  } else {
+    ASSERT_EQ(interrupt_code->entry(),
+              Assembler::target_address_at(call_target_address));
+    ASSERT_EQ(kJnsInstruction,  *(call_target_address - 3));
+    ASSERT_EQ(kJnsOffset,       *(call_target_address - 2));
+    return false;
+  }
+}
+#endif  // DEBUG
 
 
 static int LookupBailoutId(DeoptimizationInputData* data, BailoutId ast_id) {
@@ -588,37 +609,22 @@ void Deoptimizer::EntryGenerator::Generate() {
   const int kSavedRegistersAreaSize = kNumberOfRegisters * kPointerSize +
                                       kDoubleRegsSize;
 
-  // When calling new_deoptimizer_function we need to pass the last argument
-  // on the stack on windows and in r8 on linux. The remaining arguments are
-  // all passed in registers (different ones on linux and windows though).
-
-#ifdef _WIN64
-  Register arg4 = r9;
-  Register arg3 = r8;
-  Register arg2 = rdx;
-  Register arg1 = rcx;
-#else
-  Register arg4 = rcx;
-  Register arg3 = rdx;
-  Register arg2 = rsi;
-  Register arg1 = rdi;
-#endif
-
   // We use this to keep the value of the fifth argument temporarily.
   // Unfortunately we can't store it directly in r8 (used for passing
   // this on linux), since it is another parameter passing register on windows.
   Register arg5 = r11;
 
   // Get the bailout id from the stack.
-  __ movq(arg3, Operand(rsp, kSavedRegistersAreaSize));
+  __ movq(arg_reg_3, Operand(rsp, kSavedRegistersAreaSize));
 
   // Get the address of the location in the code object if possible
   // and compute the fp-to-sp delta in register arg5.
   if (type() == EAGER) {
-    __ Set(arg4, 0);
+    __ Set(arg_reg_4, 0);
     __ lea(arg5, Operand(rsp, kSavedRegistersAreaSize + 1 * kPointerSize));
   } else {
-    __ movq(arg4, Operand(rsp, kSavedRegistersAreaSize + 1 * kPointerSize));
+    __ movq(arg_reg_4,
+            Operand(rsp, kSavedRegistersAreaSize + 1 * kPointerSize));
     __ lea(arg5, Operand(rsp, kSavedRegistersAreaSize + 2 * kPointerSize));
   }
 
@@ -628,26 +634,23 @@ void Deoptimizer::EntryGenerator::Generate() {
   // Allocate a new deoptimizer object.
   __ PrepareCallCFunction(6);
   __ movq(rax, Operand(rbp, JavaScriptFrameConstants::kFunctionOffset));
-  __ movq(arg1, rax);
-  __ Set(arg2, type());
+  __ movq(arg_reg_1, rax);
+  __ Set(arg_reg_2, type());
   // Args 3 and 4 are already in the right registers.
 
   // On windows put the arguments on the stack (PrepareCallCFunction
   // has created space for this). On linux pass the arguments in r8 and r9.
 #ifdef _WIN64
   __ movq(Operand(rsp, 4 * kPointerSize), arg5);
-  __ LoadAddress(arg5, ExternalReference::isolate_address());
+  __ LoadAddress(arg5, ExternalReference::isolate_address(isolate()));
   __ movq(Operand(rsp, 5 * kPointerSize), arg5);
 #else
   __ movq(r8, arg5);
-  __ LoadAddress(r9, ExternalReference::isolate_address());
+  __ LoadAddress(r9, ExternalReference::isolate_address(isolate()));
 #endif
 
-  Isolate* isolate = masm()->isolate();
-
-  {
-    AllowExternalCallThatCantCauseGC scope(masm());
-    __ CallCFunction(ExternalReference::new_deoptimizer_function(isolate), 6);
+  { AllowExternalCallThatCantCauseGC scope(masm());
+    __ CallCFunction(ExternalReference::new_deoptimizer_function(isolate()), 6);
   }
   // Preserve deoptimizer object in register rax and get the input
   // frame descriptor pointer.
@@ -695,12 +698,12 @@ void Deoptimizer::EntryGenerator::Generate() {
   // Compute the output frame in the deoptimizer.
   __ push(rax);
   __ PrepareCallCFunction(2);
-  __ movq(arg1, rax);
-  __ LoadAddress(arg2, ExternalReference::isolate_address());
+  __ movq(arg_reg_1, rax);
+  __ LoadAddress(arg_reg_2, ExternalReference::isolate_address(isolate()));
   {
     AllowExternalCallThatCantCauseGC scope(masm());
     __ CallCFunction(
-        ExternalReference::compute_output_frames_function(isolate), 2);
+        ExternalReference::compute_output_frames_function(isolate()), 2);
   }
   __ pop(rax);
 

@@ -48,14 +48,6 @@
 
 static const bool kLogThreading = false;
 
-static bool IsNaN(double x) {
-#ifdef WIN32
-  return _isnan(x);
-#else
-  return isnan(x);
-#endif
-}
-
 using ::v8::AccessorInfo;
 using ::v8::Arguments;
 using ::v8::Context;
@@ -75,6 +67,7 @@ using ::v8::StackTrace;
 using ::v8::String;
 using ::v8::TryCatch;
 using ::v8::Undefined;
+using ::v8::UniqueId;
 using ::v8::V8;
 using ::v8::Value;
 
@@ -2178,6 +2171,154 @@ THREADED_TEST(IdentityHash) {
 }
 
 
+THREADED_TEST(SymbolProperties) {
+  i::FLAG_harmony_symbols = true;
+
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+
+  v8::Local<v8::Object> obj = v8::Object::New();
+  v8::Local<v8::Symbol> sym1 = v8::Symbol::New(isolate);
+  v8::Local<v8::Symbol> sym2 = v8::Symbol::New(isolate, "my-symbol");
+
+  HEAP->CollectAllGarbage(i::Heap::kNoGCFlags);
+
+  // Check basic symbol functionality.
+  CHECK(sym1->IsSymbol());
+  CHECK(sym2->IsSymbol());
+  CHECK(!obj->IsSymbol());
+
+  CHECK(sym1->Equals(sym1));
+  CHECK(sym2->Equals(sym2));
+  CHECK(!sym1->Equals(sym2));
+  CHECK(!sym2->Equals(sym1));
+  CHECK(sym1->StrictEquals(sym1));
+  CHECK(sym2->StrictEquals(sym2));
+  CHECK(!sym1->StrictEquals(sym2));
+  CHECK(!sym2->StrictEquals(sym1));
+
+  CHECK(sym2->Name()->Equals(v8::String::New("my-symbol")));
+
+  v8::Local<v8::Value> sym_val = sym2;
+  CHECK(sym_val->IsSymbol());
+  CHECK(sym_val->Equals(sym2));
+  CHECK(sym_val->StrictEquals(sym2));
+  CHECK(v8::Symbol::Cast(*sym_val)->Equals(sym2));
+
+  v8::Local<v8::Value> sym_obj = v8::SymbolObject::New(isolate, sym2);
+  CHECK(sym_obj->IsSymbolObject());
+  CHECK(!sym2->IsSymbolObject());
+  CHECK(!obj->IsSymbolObject());
+  CHECK(sym_obj->Equals(sym2));
+  CHECK(!sym_obj->StrictEquals(sym2));
+  CHECK(v8::SymbolObject::Cast(*sym_obj)->Equals(sym_obj));
+  CHECK(v8::SymbolObject::Cast(*sym_obj)->SymbolValue()->Equals(sym2));
+
+  // Make sure delete of a non-existent symbol property works.
+  CHECK(obj->Delete(sym1));
+  CHECK(!obj->Has(sym1));
+
+  CHECK(obj->Set(sym1, v8::Integer::New(1503)));
+  CHECK(obj->Has(sym1));
+  CHECK_EQ(1503, obj->Get(sym1)->Int32Value());
+  CHECK(obj->Set(sym1, v8::Integer::New(2002)));
+  CHECK(obj->Has(sym1));
+  CHECK_EQ(2002, obj->Get(sym1)->Int32Value());
+  CHECK_EQ(v8::None, obj->GetPropertyAttributes(sym1));
+
+  CHECK_EQ(0, obj->GetOwnPropertyNames()->Length());
+  int num_props = obj->GetPropertyNames()->Length();
+  CHECK(obj->Set(v8::String::New("bla"), v8::Integer::New(20)));
+  CHECK_EQ(1, obj->GetOwnPropertyNames()->Length());
+  CHECK_EQ(num_props + 1, obj->GetPropertyNames()->Length());
+
+  HEAP->CollectAllGarbage(i::Heap::kNoGCFlags);
+
+  // Add another property and delete it afterwards to force the object in
+  // slow case.
+  CHECK(obj->Set(sym2, v8::Integer::New(2008)));
+  CHECK_EQ(2002, obj->Get(sym1)->Int32Value());
+  CHECK_EQ(2008, obj->Get(sym2)->Int32Value());
+  CHECK_EQ(2002, obj->Get(sym1)->Int32Value());
+  CHECK_EQ(1, obj->GetOwnPropertyNames()->Length());
+
+  CHECK(obj->Has(sym1));
+  CHECK(obj->Has(sym2));
+  CHECK(obj->Delete(sym2));
+  CHECK(obj->Has(sym1));
+  CHECK(!obj->Has(sym2));
+  CHECK_EQ(2002, obj->Get(sym1)->Int32Value());
+  CHECK_EQ(1, obj->GetOwnPropertyNames()->Length());
+}
+
+
+THREADED_TEST(ArrayBuffer) {
+  i::FLAG_harmony_typed_arrays = true;
+
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope handle_scope(isolate);
+
+  Local<v8::ArrayBuffer> ab = v8::ArrayBuffer::New(1024);
+  HEAP->CollectAllGarbage(i::Heap::kNoGCFlags);
+
+  CHECK_EQ(1024, static_cast<int>(ab->ByteLength()));
+  uint8_t* data = static_cast<uint8_t*>(ab->Data());
+  ASSERT(data != NULL);
+  env->Global()->Set(v8_str("ab"), ab);
+
+  v8::Handle<v8::Value> result = CompileRun("ab.byteLength");
+  CHECK_EQ(1024, result->Int32Value());
+
+  result = CompileRun("var u8 = new Uint8Array(ab);"
+                      "u8[0] = 0xFF;"
+                      "u8[1] = 0xAA;"
+                      "u8.length");
+  CHECK_EQ(1024, result->Int32Value());
+  CHECK_EQ(0xFF, data[0]);
+  CHECK_EQ(0xAA, data[1]);
+  data[0] = 0xCC;
+  data[1] = 0x11;
+  result = CompileRun("u8[0] + u8[1]");
+  CHECK_EQ(0xDD, result->Int32Value());
+
+  result = CompileRun("var ab1 = new ArrayBuffer(2);"
+                      "var u8_a = new Uint8Array(ab1);"
+                      "u8_a[0] = 0xAA;"
+                      "u8_a[1] = 0xFF; u8_a.buffer");
+  Local<v8::ArrayBuffer> ab1 = v8::ArrayBuffer::Cast(*result);
+  CHECK_EQ(2, static_cast<int>(ab1->ByteLength()));
+  uint8_t* ab1_data = static_cast<uint8_t*>(ab1->Data());
+  CHECK_EQ(0xAA, ab1_data[0]);
+  CHECK_EQ(0xFF, ab1_data[1]);
+  ab1_data[0] = 0xCC;
+  ab1_data[1] = 0x11;
+  result = CompileRun("u8_a[0] + u8_a[1]");
+  CHECK_EQ(0xDD, result->Int32Value());
+
+  uint8_t* my_data = new uint8_t[100];
+  memset(my_data, 0, 100);
+  Local<v8::ArrayBuffer> ab3 = v8::ArrayBuffer::New(my_data, 100);
+  CHECK_EQ(100, static_cast<int>(ab3->ByteLength()));
+  CHECK_EQ(my_data, ab3->Data());
+  env->Global()->Set(v8_str("ab3"), ab3);
+  result = CompileRun("var u8_b = new Uint8Array(ab3);"
+                      "u8_b[0] = 0xBB;"
+                      "u8_b[1] = 0xCC;"
+                      "u8_b.length");
+  CHECK_EQ(100, result->Int32Value());
+  CHECK_EQ(0xBB, my_data[0]);
+  CHECK_EQ(0xCC, my_data[1]);
+  my_data[0] = 0xCC;
+  my_data[1] = 0x11;
+  result = CompileRun("u8_b[0] + u8_b[1]");
+  CHECK_EQ(0xDD, result->Int32Value());
+
+  delete[] my_data;
+}
+
+
 THREADED_TEST(HiddenProperties) {
   LocalContext env;
   v8::HandleScope scope(env->GetIsolate());
@@ -2371,7 +2512,7 @@ static void WeakPointerCallback(v8::Isolate* isolate,
 }
 
 
-THREADED_TEST(ApiObjectGroups) {
+THREADED_TEST(OldApiObjectGroups) {
   LocalContext env;
   v8::Isolate* iso = env->GetIsolate();
   HandleScope scope(iso);
@@ -2416,7 +2557,7 @@ THREADED_TEST(ApiObjectGroups) {
     V8::AddObjectGroup(g1_objects, 2);
     V8::AddImplicitReferences(g1s1, g1_children, 1);
     V8::AddObjectGroup(g2_objects, 2);
-    V8::AddImplicitReferences(g2s2, g2_children, 1);
+    V8::AddImplicitReferences(g2s1, g2_children, 1);
   }
   // Do a single full GC, ensure incremental marking is stopped.
   HEAP->CollectAllGarbage(i::Heap::kAbortIncrementalMarkingMask);
@@ -2440,7 +2581,7 @@ THREADED_TEST(ApiObjectGroups) {
     V8::AddObjectGroup(g1_objects, 2);
     V8::AddImplicitReferences(g1s1, g1_children, 1);
     V8::AddObjectGroup(g2_objects, 2);
-    V8::AddImplicitReferences(g2s2, g2_children, 1);
+    V8::AddImplicitReferences(g2s1, g2_children, 1);
   }
 
   HEAP->CollectAllGarbage(i::Heap::kAbortIncrementalMarkingMask);
@@ -2457,7 +2598,95 @@ THREADED_TEST(ApiObjectGroups) {
 }
 
 
-THREADED_TEST(ApiObjectGroupsCycle) {
+THREADED_TEST(ApiObjectGroups) {
+  LocalContext env;
+  v8::Isolate* iso = env->GetIsolate();
+  HandleScope scope(iso);
+
+  Persistent<Object> g1s1;
+  Persistent<Object> g1s2;
+  Persistent<Object> g1c1;
+  Persistent<Object> g2s1;
+  Persistent<Object> g2s2;
+  Persistent<Object> g2c1;
+
+  WeakCallCounter counter(1234);
+
+  {
+    HandleScope scope(iso);
+    g1s1 = Persistent<Object>::New(iso, Object::New());
+    g1s2 = Persistent<Object>::New(iso, Object::New());
+    g1c1 = Persistent<Object>::New(iso, Object::New());
+    g1s1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g1s2.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g1c1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+
+    g2s1 = Persistent<Object>::New(iso, Object::New());
+    g2s2 = Persistent<Object>::New(iso, Object::New());
+    g2c1 = Persistent<Object>::New(iso, Object::New());
+    g2s1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g2s2.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g2c1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+  }
+
+  Persistent<Object> root = Persistent<Object>::New(iso, g1s1);  // make a root.
+
+  // Connect group 1 and 2, make a cycle.
+  CHECK(g1s2->Set(0, g2s2));
+  CHECK(g2s1->Set(0, g1s1));
+
+  {
+    UniqueId id1(reinterpret_cast<intptr_t>(*g1s1));
+    UniqueId id2(reinterpret_cast<intptr_t>(*g2s2));
+    iso->SetObjectGroupId(g1s1, id1);
+    iso->SetObjectGroupId(g1s2, id1);
+    iso->SetReferenceFromGroup(id1, g1c1);
+    iso->SetObjectGroupId(g2s1, id2);
+    iso->SetObjectGroupId(g2s2, id2);
+    iso->SetReferenceFromGroup(id2, g2c1);
+  }
+  // Do a single full GC, ensure incremental marking is stopped.
+  v8::internal::Heap* heap = reinterpret_cast<v8::internal::Isolate*>(
+      iso)->heap();
+  heap->CollectAllGarbage(i::Heap::kAbortIncrementalMarkingMask);
+
+  // All object should be alive.
+  CHECK_EQ(0, counter.NumberOfWeakCalls());
+
+  // Weaken the root.
+  root.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+  // But make children strong roots---all the objects (except for children)
+  // should be collectable now.
+  g1c1.ClearWeak(iso);
+  g2c1.ClearWeak(iso);
+
+  // Groups are deleted, rebuild groups.
+  {
+    UniqueId id1(reinterpret_cast<intptr_t>(*g1s1));
+    UniqueId id2(reinterpret_cast<intptr_t>(*g2s2));
+    iso->SetObjectGroupId(g1s1, id1);
+    iso->SetObjectGroupId(g1s2, id1);
+    iso->SetReferenceFromGroup(id1, g1c1);
+    iso->SetObjectGroupId(g2s1, id2);
+    iso->SetObjectGroupId(g2s2, id2);
+    iso->SetReferenceFromGroup(id2, g2c1);
+  }
+
+  heap->CollectAllGarbage(i::Heap::kAbortIncrementalMarkingMask);
+
+  // All objects should be gone. 5 global handles in total.
+  CHECK_EQ(5, counter.NumberOfWeakCalls());
+
+  // And now make children weak again and collect them.
+  g1c1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+  g2c1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+
+  heap->CollectAllGarbage(i::Heap::kAbortIncrementalMarkingMask);
+  CHECK_EQ(7, counter.NumberOfWeakCalls());
+}
+
+
+THREADED_TEST(OldApiObjectGroupsCycle) {
   LocalContext env;
   v8::Isolate* iso = env->GetIsolate();
   HandleScope scope(iso);
@@ -2563,9 +2792,117 @@ THREADED_TEST(ApiObjectGroupsCycle) {
 }
 
 
+THREADED_TEST(ApiObjectGroupsCycle) {
+  LocalContext env;
+  v8::Isolate* iso = env->GetIsolate();
+  HandleScope scope(iso);
+
+  WeakCallCounter counter(1234);
+
+  Persistent<Object> g1s1;
+  Persistent<Object> g1s2;
+  Persistent<Object> g2s1;
+  Persistent<Object> g2s2;
+  Persistent<Object> g3s1;
+  Persistent<Object> g3s2;
+  Persistent<Object> g4s1;
+  Persistent<Object> g4s2;
+
+  {
+    HandleScope scope(iso);
+    g1s1 = Persistent<Object>::New(iso, Object::New());
+    g1s2 = Persistent<Object>::New(iso, Object::New());
+    g1s1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g1s2.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    CHECK(g1s1.IsWeak(iso));
+    CHECK(g1s2.IsWeak(iso));
+
+    g2s1 = Persistent<Object>::New(iso, Object::New());
+    g2s2 = Persistent<Object>::New(iso, Object::New());
+    g2s1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g2s2.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    CHECK(g2s1.IsWeak(iso));
+    CHECK(g2s2.IsWeak(iso));
+
+    g3s1 = Persistent<Object>::New(iso, Object::New());
+    g3s2 = Persistent<Object>::New(iso, Object::New());
+    g3s1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g3s2.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    CHECK(g3s1.IsWeak(iso));
+    CHECK(g3s2.IsWeak(iso));
+
+    g4s1 = Persistent<Object>::New(iso, Object::New());
+    g4s2 = Persistent<Object>::New(iso, Object::New());
+    g4s1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g4s2.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    CHECK(g4s1.IsWeak(iso));
+    CHECK(g4s2.IsWeak(iso));
+  }
+
+  Persistent<Object> root = Persistent<Object>::New(iso, g1s1);  // make a root.
+
+  // Connect groups.  We're building the following cycle:
+  // G1: { g1s1, g2s1 }, g1s1 implicitly references g2s1, ditto for other
+  // groups.
+  {
+    UniqueId id1(reinterpret_cast<intptr_t>(*g1s1));
+    UniqueId id2(reinterpret_cast<intptr_t>(*g2s1));
+    UniqueId id3(reinterpret_cast<intptr_t>(*g3s1));
+    UniqueId id4(reinterpret_cast<intptr_t>(*g4s1));
+    iso->SetObjectGroupId(g1s1, id1);
+    iso->SetObjectGroupId(g1s2, id1);
+    iso->SetReferenceFromGroup(id1, g2s1);
+    iso->SetObjectGroupId(g2s1, id2);
+    iso->SetObjectGroupId(g2s2, id2);
+    iso->SetReferenceFromGroup(id2, g3s1);
+    iso->SetObjectGroupId(g3s1, id3);
+    iso->SetObjectGroupId(g3s2, id3);
+    iso->SetReferenceFromGroup(id3, g4s1);
+    iso->SetObjectGroupId(g4s1, id4);
+    iso->SetObjectGroupId(g4s2, id4);
+    iso->SetReferenceFromGroup(id4, g1s1);
+  }
+  // Do a single full GC
+  v8::internal::Heap* heap = reinterpret_cast<v8::internal::Isolate*>(
+      iso)->heap();
+  heap->CollectAllGarbage(i::Heap::kAbortIncrementalMarkingMask);
+
+  // All object should be alive.
+  CHECK_EQ(0, counter.NumberOfWeakCalls());
+
+  // Weaken the root.
+  root.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+
+  // Groups are deleted, rebuild groups.
+  {
+    UniqueId id1(reinterpret_cast<intptr_t>(*g1s1));
+    UniqueId id2(reinterpret_cast<intptr_t>(*g2s1));
+    UniqueId id3(reinterpret_cast<intptr_t>(*g3s1));
+    UniqueId id4(reinterpret_cast<intptr_t>(*g4s1));
+    iso->SetObjectGroupId(g1s1, id1);
+    iso->SetObjectGroupId(g1s2, id1);
+    iso->SetReferenceFromGroup(id1, g2s1);
+    iso->SetObjectGroupId(g2s1, id2);
+    iso->SetObjectGroupId(g2s2, id2);
+    iso->SetReferenceFromGroup(id2, g3s1);
+    iso->SetObjectGroupId(g3s1, id3);
+    iso->SetObjectGroupId(g3s2, id3);
+    iso->SetReferenceFromGroup(id3, g4s1);
+    iso->SetObjectGroupId(g4s1, id4);
+    iso->SetObjectGroupId(g4s2, id4);
+    iso->SetReferenceFromGroup(id4, g1s1);
+  }
+
+  heap->CollectAllGarbage(i::Heap::kAbortIncrementalMarkingMask);
+
+  // All objects should be gone. 9 global handles in total.
+  CHECK_EQ(9, counter.NumberOfWeakCalls());
+}
+
+
 // TODO(mstarzinger): This should be a THREADED_TEST but causes failures
 // on the buildbots, so was made non-threaded for the time being.
-TEST(ApiObjectGroupsCycleForScavenger) {
+TEST(OldApiObjectGroupsCycleForScavenger) {
   i::FLAG_stress_compaction = false;
   i::FLAG_gc_global = false;
   LocalContext env;
@@ -2654,6 +2991,105 @@ TEST(ApiObjectGroupsCycleForScavenger) {
   }
 
   HEAP->CollectGarbage(i::NEW_SPACE);
+
+  // All objects should be gone. 7 global handles in total.
+  CHECK_EQ(7, counter.NumberOfWeakCalls());
+}
+
+
+// TODO(mstarzinger): This should be a THREADED_TEST but causes failures
+// on the buildbots, so was made non-threaded for the time being.
+TEST(ApiObjectGroupsCycleForScavenger) {
+  i::FLAG_stress_compaction = false;
+  i::FLAG_gc_global = false;
+  LocalContext env;
+  v8::Isolate* iso = env->GetIsolate();
+  HandleScope scope(iso);
+
+  WeakCallCounter counter(1234);
+
+  Persistent<Object> g1s1;
+  Persistent<Object> g1s2;
+  Persistent<Object> g2s1;
+  Persistent<Object> g2s2;
+  Persistent<Object> g3s1;
+  Persistent<Object> g3s2;
+
+  {
+    HandleScope scope(iso);
+    g1s1 = Persistent<Object>::New(iso, Object::New());
+    g1s2 = Persistent<Object>::New(iso, Object::New());
+    g1s1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g1s2.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+
+    g2s1 = Persistent<Object>::New(iso, Object::New());
+    g2s2 = Persistent<Object>::New(iso, Object::New());
+    g2s1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g2s2.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+
+    g3s1 = Persistent<Object>::New(iso, Object::New());
+    g3s2 = Persistent<Object>::New(iso, Object::New());
+    g3s1.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+    g3s2.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+  }
+
+  // Make a root.
+  Persistent<Object> root = Persistent<Object>::New(iso, g1s1);
+  root.MarkPartiallyDependent(iso);
+
+  // Connect groups.  We're building the following cycle:
+  // G1: { g1s1, g2s1 }, g1s1 implicitly references g2s1, ditto for other
+  // groups.
+  {
+    g1s1.MarkPartiallyDependent(iso);
+    g1s2.MarkPartiallyDependent(iso);
+    g2s1.MarkPartiallyDependent(iso);
+    g2s2.MarkPartiallyDependent(iso);
+    g3s1.MarkPartiallyDependent(iso);
+    g3s2.MarkPartiallyDependent(iso);
+    iso->SetObjectGroupId(g1s1, UniqueId(1));
+    iso->SetObjectGroupId(g1s2, UniqueId(1));
+    g1s1->Set(v8_str("x"), g2s1);
+    iso->SetObjectGroupId(g2s1, UniqueId(2));
+    iso->SetObjectGroupId(g2s2, UniqueId(2));
+    g2s1->Set(v8_str("x"), g3s1);
+    iso->SetObjectGroupId(g3s1, UniqueId(3));
+    iso->SetObjectGroupId(g3s2, UniqueId(3));
+    g3s1->Set(v8_str("x"), g1s1);
+  }
+
+  v8::internal::Heap* heap = reinterpret_cast<v8::internal::Isolate*>(
+      iso)->heap();
+  heap->CollectGarbage(i::NEW_SPACE);
+
+  // All objects should be alive.
+  CHECK_EQ(0, counter.NumberOfWeakCalls());
+
+  // Weaken the root.
+  root.MakeWeak(iso, reinterpret_cast<void*>(&counter), &WeakPointerCallback);
+  root.MarkPartiallyDependent(iso);
+
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  // Groups are deleted, rebuild groups.
+  {
+    g1s1.MarkPartiallyDependent(isolate);
+    g1s2.MarkPartiallyDependent(isolate);
+    g2s1.MarkPartiallyDependent(isolate);
+    g2s2.MarkPartiallyDependent(isolate);
+    g3s1.MarkPartiallyDependent(isolate);
+    g3s2.MarkPartiallyDependent(isolate);
+    iso->SetObjectGroupId(g1s1, UniqueId(1));
+    iso->SetObjectGroupId(g1s2, UniqueId(1));
+    g1s1->Set(v8_str("x"), g2s1);
+    iso->SetObjectGroupId(g2s1, UniqueId(2));
+    iso->SetObjectGroupId(g2s2, UniqueId(2));
+    g2s1->Set(v8_str("x"), g3s1);
+    iso->SetObjectGroupId(g3s1, UniqueId(3));
+    iso->SetObjectGroupId(g3s2, UniqueId(3));
+    g3s1->Set(v8_str("x"), g1s1);
+  }
+
+  heap->CollectGarbage(i::NEW_SPACE);
 
   // All objects should be gone. 7 global handles in total.
   CHECK_EQ(7, counter.NumberOfWeakCalls());
@@ -3270,7 +3706,7 @@ THREADED_TEST(ConversionException) {
   CheckUncle(&try_catch);
 
   double number_value = obj->NumberValue();
-  CHECK_NE(0, IsNaN(number_value));
+  CHECK_NE(0, std::isnan(number_value));
   CheckUncle(&try_catch);
 
   int64_t integer_value = obj->IntegerValue();
@@ -8376,7 +8812,7 @@ THREADED_TEST(Regress91517) {
   // Call the runtime version of GetLocalPropertyNames() on the natively
   // created object through JavaScript.
   context->Global()->Set(v8_str("obj"), o4);
-  CompileRun("var names = %GetLocalPropertyNames(obj);");
+  CompileRun("var names = %GetLocalPropertyNames(obj, true);");
 
   ExpectInt32("names.length", 1006);
   ExpectTrue("names.indexOf(\"baz\") >= 0");
@@ -11751,6 +12187,7 @@ static bool MatchPointers(void* key1, void* key2) {
 
 TEST(SetJitCodeEventHandler) {
   i::FLAG_stress_compaction = true;
+  i::FLAG_incremental_marking = false;
   const char* script =
     "function bar() {"
     "  var sum = 0;"
@@ -11858,10 +12295,11 @@ THREADED_TEST(ExternalAllocatedMemory) {
   CHECK(!env.IsEmpty());
   const intptr_t kSize = 1024*1024;
   v8::Isolate* isolate = env->GetIsolate();
-  CHECK_EQ(cast(isolate->AdjustAmountOfExternalAllocatedMemory(kSize)),
-           cast(kSize));
-  CHECK_EQ(cast(isolate->AdjustAmountOfExternalAllocatedMemory(-kSize)),
-           cast(0));
+  int64_t baseline = cast(isolate->AdjustAmountOfExternalAllocatedMemory(0));
+  CHECK_EQ(baseline + cast(kSize),
+           cast(isolate->AdjustAmountOfExternalAllocatedMemory(kSize)));
+  CHECK_EQ(baseline,
+           cast(isolate->AdjustAmountOfExternalAllocatedMemory(-kSize)));
 }
 
 
@@ -12417,7 +12855,7 @@ TEST(PreCompileSerialization) {
   // Serialize.
   int serialized_data_length = sd->Length();
   char* serialized_data = i::NewArray<char>(serialized_data_length);
-  memcpy(serialized_data, sd->Data(), serialized_data_length);
+  i::OS::MemCopy(serialized_data, sd->Data(), serialized_data_length);
 
   // Deserialize.
   v8::ScriptData* deserialized_sd =
@@ -13410,6 +13848,7 @@ v8::Persistent<Context> calling_context2;
 static v8::Handle<Value> GetCallingContextCallback(const v8::Arguments& args) {
   ApiTestFuzzer::Fuzz();
   CHECK(Context::GetCurrent() == calling_context0);
+  CHECK(args.GetIsolate()->GetCurrentContext() == calling_context0);
   CHECK(Context::GetCalling() == calling_context1);
   CHECK(Context::GetEntered() == calling_context2);
   return v8::Integer::New(42);
@@ -13997,39 +14436,13 @@ static int ExternalArrayElementSize(v8::ExternalArrayType array_type) {
 
 
 template <class ExternalArrayClass, class ElementType>
-static void ExternalArrayTestHelper(v8::ExternalArrayType array_type,
-                                    int64_t low,
-                                    int64_t high) {
-  LocalContext context;
-  v8::HandleScope scope(context->GetIsolate());
-  const int kElementCount = 40;
-  int element_size = ExternalArrayElementSize(array_type);
-  ElementType* array_data =
-      static_cast<ElementType*>(malloc(kElementCount * element_size));
-  i::Handle<ExternalArrayClass> array =
-      i::Handle<ExternalArrayClass>::cast(
-          FACTORY->NewExternalArray(kElementCount, array_type, array_data));
-  // Force GC to trigger verification.
-  HEAP->CollectAllGarbage(i::Heap::kNoGCFlags);
-  for (int i = 0; i < kElementCount; i++) {
-    array->set(i, static_cast<ElementType>(i));
-  }
-  // Force GC to trigger verification.
-  HEAP->CollectAllGarbage(i::Heap::kNoGCFlags);
-  for (int i = 0; i < kElementCount; i++) {
-    CHECK_EQ(static_cast<int64_t>(i),
-             static_cast<int64_t>(array->get_scalar(i)));
-    CHECK_EQ(static_cast<int64_t>(i), static_cast<int64_t>(array_data[i]));
-  }
-
-  v8::Handle<v8::Object> obj = v8::Object::New();
+static void ObjectWithExternalArrayTestHelper(
+    Handle<Context> context,
+    v8::Handle<Object> obj,
+    int element_count,
+    v8::ExternalArrayType array_type,
+    int64_t low, int64_t high) {
   i::Handle<i::JSObject> jsobj = v8::Utils::OpenHandle(*obj);
-  // Set the elements to be the external array.
-  obj->SetIndexedPropertiesToExternalArrayData(array_data,
-                                               array_type,
-                                               kElementCount);
-  CHECK_EQ(
-      1, static_cast<int>(jsobj->GetElement(1)->ToObjectChecked()->Number()));
   obj->Set(v8_str("field"), v8::Int32::New(1503));
   context->Global()->Set(v8_str("ext_array"), obj);
   v8::Handle<v8::Value> result = CompileRun("ext_array.field");
@@ -14146,7 +14559,7 @@ static void ExternalArrayTestHelper(v8::ExternalArrayType array_type,
                   "  caught_exception = true;"
                   "}"
                   "caught_exception;",
-                  kElementCount);
+                  element_count);
   result = CompileRun(test_buf.start());
   CHECK_EQ(false, result->BooleanValue());
 
@@ -14159,7 +14572,7 @@ static void ExternalArrayTestHelper(v8::ExternalArrayType array_type,
                   "  caught_exception = true;"
                   "}"
                   "caught_exception;",
-                  kElementCount);
+                  element_count);
   result = CompileRun(test_buf.start());
   CHECK_EQ(false, result->BooleanValue());
 
@@ -14260,9 +14673,12 @@ static void ExternalArrayTestHelper(v8::ExternalArrayType array_type,
     CHECK_EQ(true, result->BooleanValue());
   }
 
-  for (int i = 0; i < kElementCount; i++) {
+  i::Handle<ExternalArrayClass> array(
+      ExternalArrayClass::cast(jsobj->elements()));
+  for (int i = 0; i < element_count; i++) {
     array->set(i, static_cast<ElementType>(i));
   }
+
   // Test complex assignments
   result = CompileRun("function ee_op_test_complex_func(sum) {"
                       " for (var i = 0; i < 40; ++i) {"
@@ -14319,6 +14735,48 @@ static void ExternalArrayTestHelper(v8::ExternalArrayType array_type,
 
   result = CompileRun("ext_array[1] = 23;");
   CHECK_EQ(23, result->Int32Value());
+}
+
+
+template <class ExternalArrayClass, class ElementType>
+static void ExternalArrayTestHelper(v8::ExternalArrayType array_type,
+                                    int64_t low,
+                                    int64_t high) {
+  LocalContext context;
+  v8::HandleScope scope(context->GetIsolate());
+  const int kElementCount = 40;
+  int element_size = ExternalArrayElementSize(array_type);
+  ElementType* array_data =
+      static_cast<ElementType*>(malloc(kElementCount * element_size));
+  i::Handle<ExternalArrayClass> array =
+      i::Handle<ExternalArrayClass>::cast(
+          FACTORY->NewExternalArray(kElementCount, array_type, array_data));
+  // Force GC to trigger verification.
+  HEAP->CollectAllGarbage(i::Heap::kNoGCFlags);
+  for (int i = 0; i < kElementCount; i++) {
+    array->set(i, static_cast<ElementType>(i));
+  }
+  // Force GC to trigger verification.
+  HEAP->CollectAllGarbage(i::Heap::kNoGCFlags);
+  for (int i = 0; i < kElementCount; i++) {
+    CHECK_EQ(static_cast<int64_t>(i),
+             static_cast<int64_t>(array->get_scalar(i)));
+    CHECK_EQ(static_cast<int64_t>(i), static_cast<int64_t>(array_data[i]));
+  }
+
+  v8::Handle<v8::Object> obj = v8::Object::New();
+  i::Handle<i::JSObject> jsobj = v8::Utils::OpenHandle(*obj);
+  // Set the elements to be the external array.
+  obj->SetIndexedPropertiesToExternalArrayData(array_data,
+                                               array_type,
+                                               kElementCount);
+  CHECK_EQ(
+      1, static_cast<int>(jsobj->GetElement(1)->ToObjectChecked()->Number()));
+
+  ObjectWithExternalArrayTestHelper<ExternalArrayClass, ElementType>(
+      context.local(), obj, kElementCount, array_type, low, high);
+
+  v8::Handle<v8::Value> result;
 
   // Test more complex manipulations which cause eax to contain values
   // that won't be completely overwritten by loads from the arrays.
@@ -14633,6 +15091,87 @@ TEST(ExternalArrayLimits) {
   ExternalArrayLimitTestHelper(v8::kExternalDoubleArray, 0xffffffff);
   ExternalArrayLimitTestHelper(v8::kExternalPixelArray, 0x40000000);
   ExternalArrayLimitTestHelper(v8::kExternalPixelArray, 0xffffffff);
+}
+
+
+template <typename ElementType, typename TypedArray,
+          class ExternalArrayClass>
+void TypedArrayTestHelper(v8::ExternalArrayType array_type,
+                          int64_t low, int64_t high) {
+  const int kElementCount = 50;
+  i::FLAG_harmony_typed_arrays = true;
+
+  LocalContext env;
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope handle_scope(isolate);
+
+  Local<v8::ArrayBuffer> ab =
+      v8::ArrayBuffer::New((kElementCount+2)*sizeof(ElementType));
+  Local<TypedArray> ta =
+      TypedArray::New(ab, 2*sizeof(ElementType), kElementCount);
+  CHECK_EQ(kElementCount, static_cast<int>(ta->Length()));
+  CHECK_EQ(2*sizeof(ElementType), static_cast<int>(ta->ByteOffset()));
+  CHECK_EQ(kElementCount*sizeof(ElementType),
+           static_cast<int>(ta->ByteLength()));
+  CHECK_EQ(ab, ta->Buffer());
+
+  ElementType* data = static_cast<ElementType*>(ab->Data()) + 2;
+  for (int i = 0; i < kElementCount; i++) {
+    data[i] = static_cast<ElementType>(i);
+  }
+
+  ObjectWithExternalArrayTestHelper<ExternalArrayClass, ElementType>(
+      env.local(), ta, kElementCount, array_type, low, high);
+}
+
+
+THREADED_TEST(Uint8Array) {
+  TypedArrayTestHelper<uint8_t, v8::Uint8Array, i::ExternalUnsignedByteArray>(
+      v8::kExternalUnsignedByteArray, 0, 0xFF);
+}
+
+
+THREADED_TEST(Int8Array) {
+  TypedArrayTestHelper<int8_t, v8::Int8Array, i::ExternalByteArray>(
+      v8::kExternalByteArray, -0x80, 0x7F);
+}
+
+
+THREADED_TEST(Uint16Array) {
+  TypedArrayTestHelper<uint16_t,
+                       v8::Uint16Array,
+                       i::ExternalUnsignedShortArray>(
+      v8::kExternalUnsignedShortArray, 0, 0xFFFF);
+}
+
+
+THREADED_TEST(Int16Array) {
+  TypedArrayTestHelper<int16_t, v8::Int16Array, i::ExternalShortArray>(
+      v8::kExternalShortArray, -0x8000, 0x7FFF);
+}
+
+
+THREADED_TEST(Uint32Array) {
+  TypedArrayTestHelper<uint32_t, v8::Uint32Array, i::ExternalUnsignedIntArray>(
+      v8::kExternalUnsignedIntArray, 0, UINT_MAX);
+}
+
+
+THREADED_TEST(Int32Array) {
+  TypedArrayTestHelper<int32_t, v8::Int32Array, i::ExternalIntArray>(
+      v8::kExternalIntArray, INT_MIN, INT_MAX);
+}
+
+
+THREADED_TEST(Float32Array) {
+  TypedArrayTestHelper<float, v8::Float32Array, i::ExternalFloatArray>(
+      v8::kExternalFloatArray, -500, 500);
+}
+
+
+THREADED_TEST(Float64Array) {
+  TypedArrayTestHelper<double, v8::Float64Array, i::ExternalDoubleArray>(
+      v8::kExternalDoubleArray, -500, 500);
 }
 
 
@@ -15356,21 +15895,21 @@ TEST(VisitExternalStrings) {
 
 static double DoubleFromBits(uint64_t value) {
   double target;
-  memcpy(&target, &value, sizeof(target));
+  i::OS::MemCopy(&target, &value, sizeof(target));
   return target;
 }
 
 
 static uint64_t DoubleToBits(double value) {
   uint64_t target;
-  memcpy(&target, &value, sizeof(target));
+  i::OS::MemCopy(&target, &value, sizeof(target));
   return target;
 }
 
 
 static double DoubleToDateTime(double input) {
   double date_limit = 864e13;
-  if (IsNaN(input) || input < -date_limit || input > date_limit) {
+  if (std::isnan(input) || input < -date_limit || input > date_limit) {
     return i::OS::nan_value();
   }
   return (input < 0) ? -(floor(-input)) : floor(input);
@@ -15431,7 +15970,7 @@ THREADED_TEST(QuietSignalingNaNs) {
     // Check that Number::New preserves non-NaNs and quiets SNaNs.
     v8::Handle<v8::Value> number = v8::Number::New(test_value);
     double stored_number = number->NumberValue();
-    if (!IsNaN(test_value)) {
+    if (!std::isnan(test_value)) {
       CHECK_EQ(test_value, stored_number);
     } else {
       uint64_t stored_bits = DoubleToBits(stored_number);
@@ -15450,7 +15989,7 @@ THREADED_TEST(QuietSignalingNaNs) {
     v8::Handle<v8::Value> date = v8::Date::New(test_value);
     double expected_stored_date = DoubleToDateTime(test_value);
     double stored_date = date->NumberValue();
-    if (!IsNaN(expected_stored_date)) {
+    if (!std::isnan(expected_stored_date)) {
       CHECK_EQ(expected_stored_date, stored_date);
     } else {
       uint64_t stored_bits = DoubleToBits(stored_date);
@@ -15804,7 +16343,7 @@ THREADED_TEST(InterceptorOnConstructorPrototype) {
 }
 
 
-TEST(Bug618) {
+TEST(Regress618) {
   const char* source = "function C1() {"
                        "  this.x = 23;"
                        "};"

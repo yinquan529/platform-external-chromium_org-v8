@@ -199,7 +199,7 @@ enum BuiltinExtraArguments {
                                     Code::kNoExtraICState)              \
   V(ArrayCode,                      BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
-  V(ArrayConstructCode,             BUILTIN, UNINITIALIZED,             \
+  V(CommonArrayConstructCode,       BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
                                                                         \
   V(StringConstructCode,            BUILTIN, UNINITIALIZED,             \
@@ -229,6 +229,8 @@ enum BuiltinExtraArguments {
   V(StoreIC_DebugBreak,                        STORE_IC, DEBUG_STUB,          \
                                                DEBUG_BREAK)                   \
   V(KeyedStoreIC_DebugBreak,                   KEYED_STORE_IC, DEBUG_STUB,    \
+                                               DEBUG_BREAK)                   \
+  V(CompareNilIC_DebugBreak,                   COMPARE_NIL_IC, DEBUG_STUB,    \
                                                DEBUG_BREAK)                   \
   V(Slot_DebugBreak,                           BUILTIN, DEBUG_STUB,           \
                                                DEBUG_BREAK)                   \
@@ -273,8 +275,6 @@ enum BuiltinExtraArguments {
   V(STRING_ADD_RIGHT, 1)                 \
   V(APPLY_PREPARE, 1)                    \
   V(APPLY_OVERFLOW, 1)
-
-MaybeObject* ArrayConstructor_StubFailure(Arguments args, Isolate* isolate);
 
 class BuiltinFunctionTable;
 class ObjectVisitor;
@@ -388,7 +388,7 @@ class Builtins {
 
   static void Generate_InternalArrayCode(MacroAssembler* masm);
   static void Generate_ArrayCode(MacroAssembler* masm);
-  static void Generate_ArrayConstructCode(MacroAssembler* masm);
+  static void Generate_CommonArrayConstructCode(MacroAssembler* masm);
 
   static void Generate_StringConstructCode(MacroAssembler* masm);
   static void Generate_OnStackReplacement(MacroAssembler* masm);

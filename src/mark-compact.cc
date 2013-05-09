@@ -672,8 +672,8 @@ static int FreeListFragmentation(PagedSpace* space, Page* p) {
     return 0;
   }
 
-  FreeList::SizeStats sizes;
-  space->CountFreeListItems(p, &sizes);
+  PagedSpace::SizeStats sizes;
+  space->ObtainFreeListStatistics(p, &sizes);
 
   intptr_t ratio;
   intptr_t ratio_threshold;
@@ -812,8 +812,8 @@ void MarkCompactCollector::CollectEvacuationCandidates(PagedSpace* space) {
       if (!p->WasSwept()) {
         free_bytes = (p->area_size() - p->LiveBytes());
       } else {
-        FreeList::SizeStats sizes;
-        space->CountFreeListItems(p, &sizes);
+        PagedSpace::SizeStats sizes;
+        space->ObtainFreeListStatistics(p, &sizes);
         free_bytes = sizes.Total();
       }
 
@@ -1939,14 +1939,14 @@ void MarkCompactCollector::MarkImplicitRefGroups() {
     ImplicitRefGroup* entry = ref_groups->at(i);
     ASSERT(entry != NULL);
 
-    if (!IsMarked(*entry->parent_)) {
+    if (!IsMarked(*entry->parent)) {
       (*ref_groups)[last++] = entry;
       continue;
     }
 
-    Object*** children = entry->children_;
+    Object*** children = entry->children;
     // A parent object is marked, so mark all child heap objects.
-    for (size_t j = 0; j < entry->length_; ++j) {
+    for (size_t j = 0; j < entry->length; ++j) {
       if ((*children[j])->IsHeapObject()) {
         HeapObject* child = HeapObject::cast(*children[j]);
         MarkBit mark = Marking::MarkBitFrom(child);
@@ -1956,7 +1956,7 @@ void MarkCompactCollector::MarkImplicitRefGroups() {
 
     // Once the entire group has been marked, dispose it because it's
     // not needed anymore.
-    entry->Dispose();
+    delete entry;
   }
   ref_groups->Rewind(last);
 }

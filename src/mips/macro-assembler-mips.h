@@ -188,10 +188,10 @@ class MacroAssembler: public Assembler {
   void Call(Register target, COND_ARGS);
   static int CallSize(Address target, RelocInfo::Mode rmode, COND_ARGS);
   void Call(Address target, RelocInfo::Mode rmode, COND_ARGS);
-  static int CallSize(Handle<Code> code,
-                      RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
-                      TypeFeedbackId ast_id = TypeFeedbackId::None(),
-                      COND_ARGS);
+  int CallSize(Handle<Code> code,
+               RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
+               TypeFeedbackId ast_id = TypeFeedbackId::None(),
+               COND_ARGS);
   void Call(Handle<Code> code,
             RelocInfo::Mode rmode = RelocInfo::CODE_TARGET,
             TypeFeedbackId ast_id = TypeFeedbackId::None(),
@@ -289,6 +289,7 @@ class MacroAssembler: public Assembler {
   void LoadHeapObject(Register dst, Handle<HeapObject> object);
 
   void LoadObject(Register result, Handle<Object> object) {
+    ALLOW_HANDLE_DEREF(isolate(), "heap object check");
     if (object->IsHeapObject()) {
       LoadHeapObject(result, Handle<HeapObject>::cast(object));
     } else {
@@ -323,6 +324,10 @@ class MacroAssembler: public Assembler {
                      int mask,
                      Condition cc,
                      Label* condition_met);
+
+  void CheckMapDeprecated(Handle<Map> map,
+                          Register scratch,
+                          Label* if_deprecated);
 
   // Check if object is in new space.  Jumps if the object is not in new space.
   // The register scratch can be object itself, but it will be clobbered.
@@ -491,12 +496,12 @@ class MacroAssembler: public Assembler {
                 Label* gc_required,
                 AllocationFlags flags);
 
-  void AllocateInNewSpace(Register object_size,
-                          Register result,
-                          Register scratch1,
-                          Register scratch2,
-                          Label* gc_required,
-                          AllocationFlags flags);
+  void Allocate(Register object_size,
+                Register result,
+                Register scratch1,
+                Register scratch2,
+                Label* gc_required,
+                AllocationFlags flags);
 
   // Undo allocation in new space. The object passed and objects allocated after
   // it will no longer be allocated. The caller must make sure that no pointers
@@ -882,6 +887,7 @@ class MacroAssembler: public Assembler {
                       CallKind call_kind);
 
   void InvokeFunction(Handle<JSFunction> function,
+                      const ParameterCount& expected,
                       const ParameterCount& actual,
                       InvokeFlag flag,
                       const CallWrapper& call_wrapper,
@@ -1565,7 +1571,6 @@ class CodePatcher {
 
  private:
   byte* address_;  // The address of the code being patched.
-  int instructions_;  // Number of instructions of the expected patch size.
   int size_;  // Number of bytes of the expected patch size.
   MacroAssembler masm_;  // Macro assembler used to generate the code.
 };

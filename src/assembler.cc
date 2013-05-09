@@ -34,7 +34,7 @@
 
 #include "assembler.h"
 
-#include <math.h>  // For cos, log, pow, sin, tan, etc.
+#include <cmath>
 #include "api.h"
 #include "builtins.h"
 #include "counters.h"
@@ -191,11 +191,9 @@ CpuFeatureScope::CpuFeatureScope(AssemblerBase* assembler, CpuFeature f)
   uint64_t mask = static_cast<uint64_t>(1) << f;
   // TODO(svenpanne) This special case below doesn't belong here!
 #if V8_TARGET_ARCH_ARM
-  // VFP2 and ARMv7 are implied by VFP3.
+  // ARMv7 is implied by VFP3.
   if (f == VFP3) {
-    mask |=
-        static_cast<uint64_t>(1) << VFP2 |
-        static_cast<uint64_t>(1) << ARMv7;
+    mask |= static_cast<uint64_t>(1) << ARMv7;
   }
 #endif
   assembler_->set_enabled_cpu_features(old_enabled_ | mask);
@@ -971,8 +969,8 @@ ExternalReference::ExternalReference(const Runtime::Function* f,
   : address_(Redirect(isolate, f->entry)) {}
 
 
-ExternalReference ExternalReference::isolate_address() {
-  return ExternalReference(Isolate::Current());
+ExternalReference ExternalReference::isolate_address(Isolate* isolate) {
+  return ExternalReference(isolate);
 }
 
 
@@ -1188,6 +1186,20 @@ ExternalReference ExternalReference::old_pointer_space_allocation_limit_address(
     Isolate* isolate) {
   return ExternalReference(
       isolate->heap()->OldPointerSpaceAllocationLimitAddress());
+}
+
+
+ExternalReference ExternalReference::old_data_space_allocation_top_address(
+    Isolate* isolate) {
+  return ExternalReference(
+      isolate->heap()->OldDataSpaceAllocationTopAddress());
+}
+
+
+ExternalReference ExternalReference::old_data_space_allocation_limit_address(
+    Isolate* isolate) {
+  return ExternalReference(
+      isolate->heap()->OldDataSpaceAllocationLimitAddress());
 }
 
 
@@ -1447,10 +1459,11 @@ double power_helper(double x, double y) {
     return power_double_int(x, y_int);  // Returns 1 if exponent is 0.
   }
   if (y == 0.5) {
-    return (isinf(x)) ? V8_INFINITY : fast_sqrt(x + 0.0);  // Convert -0 to +0.
+    return (std::isinf(x)) ? V8_INFINITY
+                           : fast_sqrt(x + 0.0);  // Convert -0 to +0.
   }
   if (y == -0.5) {
-    return (isinf(x)) ? 0 : 1.0 / fast_sqrt(x + 0.0);  // Convert -0 to +0.
+    return (std::isinf(x)) ? 0 : 1.0 / fast_sqrt(x + 0.0);  // Convert -0 to +0.
   }
   return power_double_double(x, y);
 }
@@ -1480,7 +1493,7 @@ double power_double_double(double x, double y) {
     (!defined(__MINGW64_VERSION_RC) || __MINGW64_VERSION_RC < 1)
   // MinGW64 has a custom implementation for pow.  This handles certain
   // special cases that are different.
-  if ((x == 0.0 || isinf(x)) && isfinite(y)) {
+  if ((x == 0.0 || std::isinf(x)) && std::isfinite(y)) {
     double f;
     if (modf(y, &f) != 0.0) return ((x == 0.0) ^ (y > 0)) ? V8_INFINITY : 0;
   }
@@ -1493,7 +1506,9 @@ double power_double_double(double x, double y) {
 
   // The checks for special cases can be dropped in ia32 because it has already
   // been done in generated code before bailing out here.
-  if (isnan(y) || ((x == 1 || x == -1) && isinf(y))) return OS::nan_value();
+  if (std::isnan(y) || ((x == 1 || x == -1) && std::isinf(y))) {
+    return OS::nan_value();
+  }
   return pow(x, y);
 }
 

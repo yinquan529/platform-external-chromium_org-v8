@@ -1,3 +1,89 @@
+2013-04-30: Version 3.18.5
+
+        Allowed setting debugger breakpoints on CompareNilICs (issue 2660)
+
+        Fixed beyond-heap load on x64 Crankshafted StringCharFromCode
+        (Chromium issue 235311)
+
+        Change 'Parse error' to three more informative messages.
+        (Chromium issue 2636)
+
+        Performance and stability improvements on all platforms.
+
+
+2013-04-26: Version 3.18.4
+
+        Added a preliminary API for ES6 ArrayBuffers
+
+        Replaced qsort with std::sort. (Chromium issue 2639)
+
+        Performance and stability improvements on all platforms.
+
+
+2013-04-24: Version 3.18.3
+
+        Exposed the GC under a name that is less collision prone than window.gc.
+        (issue 2641)
+
+        Do not emit double values at their use sites. (Chromium issue 234101)
+
+        Added methods to allow resuming execution after calling
+        TerminateExecution(). (issue 2361)
+
+        Performance and stability improvements on all platforms.
+
+
+2013-04-22: Version 3.18.2
+
+        OS::MemMove/OS::MemCopy: Don't call through to generated code when size
+        == 0 to avoid prefetching invalid memory (Chromium issue 233500)
+
+        Removed heap snapshot size limit. (Chromium issue 232305)
+
+        Performance and stability improvements on all platforms.
+
+
+2013-04-18: Version 3.18.1
+
+        Removed SCons related files and deprecated test suite configurations.
+
+        Improved handling of unary plus (issue 2527).
+
+        Performance and stability improvements on all platforms.
+
+
+2013-04-17: Version 3.18.0
+
+        Enabled pretenuring of fast literals in high promotion mode.
+
+        Removed preparser library; link preparser executable against full V8.
+
+        Fixed set-up of intrinsic's 'constructor' properties.
+        (Chromium issue 229445)
+
+        ES6 symbols: extended V8 API to support symbols (issue 2158).
+
+        Removed ARM support for VFP2.
+
+        Made __proto__ a real JavaScript accessor property.
+        (issue 1949 and issue 2606)
+
+        Performance and stability improvements on all platforms.
+
+
+2013-04-04: Version 3.17.16
+
+        Stack trace API: poison stack frames below the first strict mode frame.
+        (issue 2564)
+
+        Made Isolate::GetHeapStatistics robust against half-initialized
+        isolates (Chromium issue 2591).
+
+        Finished implementation of ES6 symbols aka. private names (issue 2158).
+
+        Performance and stability improvements on all platforms.
+
+
 2013-03-21: Version 3.17.15
 
         Rolled back API changes to maintain compatibility with older

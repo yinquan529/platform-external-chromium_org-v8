@@ -125,11 +125,8 @@ CompilationInfo::~CompilationInfo() {
 
 
 int CompilationInfo::num_parameters() const {
-  if (IsStub()) {
-    return 0;
-  } else {
-    return scope()->num_parameters();
-  }
+  ASSERT(!IsStub());
+  return scope()->num_parameters();
 }
 
 
@@ -144,7 +141,10 @@ int CompilationInfo::num_heap_slots() const {
 
 Code::Flags CompilationInfo::flags() const {
   if (IsStub()) {
-    return Code::ComputeFlags(Code::COMPILED_STUB);
+    return Code::ComputeFlags(code_stub()->GetCodeKind(),
+                              code_stub()->GetICState(),
+                              code_stub()->GetExtraICState(),
+                              Code::NORMAL, -1);
   } else {
     return Code::ComputeFlags(Code::OPTIMIZED_FUNCTION);
   }
@@ -421,7 +421,13 @@ OptimizingCompiler::Status OptimizingCompiler::GenerateAndInstallCode() {
     Timer timer(this, &time_taken_to_codegen_);
     ASSERT(chunk_ != NULL);
     ASSERT(graph_ != NULL);
-    Handle<Code> optimized_code = chunk_->Codegen(Code::OPTIMIZED_FUNCTION);
+    // Deferred handles reference objects that were accessible during
+    // graph creation.  To make sure that we don't encounter inconsistencies
+    // between graph creation and code generation, we disallow accessing
+    // objects through deferred handles during the latter, with exceptions.
+    HandleDereferenceGuard no_deref_deferred(
+        isolate(), HandleDereferenceGuard::DISALLOW_DEFERRED);
+    Handle<Code> optimized_code = chunk_->Codegen();
     if (optimized_code.is_null()) {
       info()->set_bailout_reason("code generation failed");
       return AbortOptimization();
@@ -520,14 +526,15 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(CompilationInfo* info) {
 
   // Only allow non-global compiles for eval.
   ASSERT(info->is_eval() || info->is_global());
-  ParsingFlags flags = kNoParsingFlags;
-  if ((info->pre_parse_data() != NULL ||
-       String::cast(script->source())->length() > FLAG_min_preparse_length) &&
-      !DebuggerWantsEagerCompilation(info)) {
-    flags = kAllowLazy;
-  }
-  if (!ParserApi::Parse(info, flags)) {
-    return Handle<SharedFunctionInfo>::null();
+  {
+    Parser parser(info);
+    if ((info->pre_parse_data() != NULL ||
+         String::cast(script->source())->length() > FLAG_min_preparse_length) &&
+        !DebuggerWantsEagerCompilation(info))
+      parser.set_allow_lazy(true);
+    if (!parser.Parse()) {
+      return Handle<SharedFunctionInfo>::null();
+    }
   }
 
   // Measure how long it takes to do the compilation; only take the
@@ -552,6 +559,7 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(CompilationInfo* info) {
       isolate->factory()->NewSharedFunctionInfo(
           lit->name(),
           lit->materialized_literal_count(),
+          lit->is_generator(),
           info->code(),
           ScopeInfo::Create(info->scope(), info->zone()));
 
@@ -616,7 +624,7 @@ Handle<SharedFunctionInfo> Compiler::Compile(Handle<String> source,
   isolate->counters()->total_compile_size()->Increment(source_length);
 
   // The VM is in the COMPILER state until exiting this function.
-  VMState state(isolate, COMPILER);
+  VMState<COMPILER> state(isolate);
 
   CompilationCache* compilation_cache = isolate->compilation_cache();
 
@@ -690,7 +698,7 @@ Handle<SharedFunctionInfo> Compiler::CompileEval(Handle<String> source,
   isolate->counters()->total_compile_size()->Increment(source_length);
 
   // The VM is in the COMPILER state until exiting this function.
-  VMState state(isolate, COMPILER);
+  VMState<COMPILER> state(isolate);
 
   // Do a lookup in the compilation cache; if the entry is not there, invoke
   // the compiler and add the result to the cache.
@@ -853,7 +861,7 @@ bool Compiler::CompileLazy(CompilationInfo* info) {
   ZoneScope zone_scope(info->zone(), DELETE_ON_EXIT);
 
   // The VM is in the COMPILER state until exiting this function.
-  VMState state(isolate, COMPILER);
+  VMState<COMPILER> state(isolate);
 
   PostponeInterruptsScope postpone(isolate);
 
@@ -864,7 +872,7 @@ bool Compiler::CompileLazy(CompilationInfo* info) {
   if (InstallCodeFromOptimizedCodeMap(info)) return true;
 
   // Generate the AST for the lazily compiled function.
-  if (ParserApi::Parse(info, kNoParsingFlags)) {
+  if (Parser::Parse(info)) {
     // Measure how long it takes to do the lazy compilation; only take the
     // rest of the function into account to avoid overlap with the lazy
     // parsing statistics.
@@ -917,7 +925,7 @@ void Compiler::RecompileParallel(Handle<JSFunction> closure) {
   }
 
   SmartPointer<CompilationInfo> info(new CompilationInfoWithZone(closure));
-  VMState state(isolate, PARALLEL_COMPILER);
+  VMState<COMPILER> state(isolate);
   PostponeInterruptsScope postpone(isolate);
 
   Handle<SharedFunctionInfo> shared = info->shared_info();
@@ -932,7 +940,7 @@ void Compiler::RecompileParallel(Handle<JSFunction> closure) {
       return;
     }
 
-    if (ParserApi::Parse(*info, kNoParsingFlags)) {
+    if (Parser::Parse(*info)) {
       LanguageMode language_mode = info->function()->language_mode();
       info->SetLanguageMode(language_mode);
       shared->set_language_mode(language_mode);
@@ -957,18 +965,18 @@ void Compiler::RecompileParallel(Handle<JSFunction> closure) {
     }
   }
 
-  if (shared->code()->stack_check_patched_for_osr()) {
+  if (shared->code()->back_edges_patched_for_osr()) {
     // At this point we either put the function on recompilation queue or
     // aborted optimization.  In either case we want to continue executing
     // the unoptimized code without running into OSR.  If the unoptimized
     // code has been patched for OSR, unpatch it.
     InterruptStub interrupt_stub;
-    Handle<Code> check_code = interrupt_stub.GetCode(isolate);
+    Handle<Code> interrupt_code = interrupt_stub.GetCode(isolate);
     Handle<Code> replacement_code =
         isolate->builtins()->OnStackReplacement();
-    Deoptimizer::RevertStackCheckCode(shared->code(),
-                                      *check_code,
-                                      *replacement_code);
+    Deoptimizer::RevertInterruptCode(shared->code(),
+                                     *interrupt_code,
+                                     *replacement_code);
   }
 
   if (isolate->has_pending_exception()) isolate->clear_pending_exception();
@@ -992,7 +1000,7 @@ void Compiler::InstallOptimizedCode(OptimizingCompiler* optimizing_compiler) {
   }
 
   Isolate* isolate = info->isolate();
-  VMState state(isolate, PARALLEL_COMPILER);
+  VMState<COMPILER> state(isolate);
   Logger::TimerEventScope timer(
       isolate, Logger::TimerEventScope::v8_recompile_synchronous);
   // If crankshaft succeeded, install the optimized code else install
@@ -1073,6 +1081,7 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
   Handle<SharedFunctionInfo> result =
       FACTORY->NewSharedFunctionInfo(literal->name(),
                                      literal->materialized_literal_count(),
+                                     literal->is_generator(),
                                      info.code(),
                                      scope_info);
   SetFunctionInfo(result, literal, false, script);
@@ -1121,6 +1130,7 @@ void Compiler::SetFunctionInfo(Handle<SharedFunctionInfo> function_info,
   function_info->set_dont_optimize(lit->flags()->Contains(kDontOptimize));
   function_info->set_dont_inline(lit->flags()->Contains(kDontInline));
   function_info->set_dont_cache(lit->flags()->Contains(kDontCache));
+  function_info->set_is_generator(lit->is_generator());
 }
 
 
@@ -1134,7 +1144,7 @@ void Compiler::RecordFunctionCompilation(Logger::LogEventsAndTags tag,
   // script name and line number. Check explicitly whether logging is
   // enabled as finding the line number is not free.
   if (info->isolate()->logger()->is_logging_code_events() ||
-      CpuProfiler::is_profiling(info->isolate())) {
+      info->isolate()->cpu_profiler()->is_profiling()) {
     Handle<Script> script = info->script();
     Handle<Code> code = info->code();
     if (*code == info->isolate()->builtins()->builtin(Builtins::kLazyCompile))

@@ -74,7 +74,8 @@ ProfileNode::ProfileNode(ProfileTree* tree, CodeEntry* entry)
       entry_(entry),
       total_ticks_(0),
       self_ticks_(0),
-      children_(CodeEntriesMatch) {
+      children_(CodeEntriesMatch),
+      id_(tree->next_node_id()) {
 }
 
 
@@ -84,7 +85,6 @@ CodeEntry* ProfileGenerator::EntryForVMState(StateTag tag) {
       return gc_entry_;
     case JS:
     case COMPILER:
-    case PARALLEL_COMPILER:
     // DOM events handlers are reported as OTHER / EXTERNAL entries.
     // To avoid confusing people, let's put all these entries into
     // one bucket.

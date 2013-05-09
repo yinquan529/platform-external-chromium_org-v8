@@ -107,7 +107,6 @@ class CodeEntry {
   INLINE(const char* name() const) { return name_; }
   INLINE(const char* resource_name() const) { return resource_name_; }
   INLINE(int line_number() const) { return line_number_; }
-  INLINE(int shared_id() const) { return shared_id_; }
   INLINE(void set_shared_id(int shared_id)) { shared_id_ = shared_id; }
   INLINE(int security_token_id() const) { return security_token_id_; }
 
@@ -150,6 +149,7 @@ class ProfileNode {
   INLINE(const List<ProfileNode*>* children() const) { return &children_list_; }
   double GetSelfMillis() const;
   double GetTotalMillis() const;
+  unsigned id() const { return id_; }
 
   void Print(int indent);
 
@@ -170,6 +170,7 @@ class ProfileNode {
   // Mapping from CodeEntry* to ProfileNode*
   HashMap children_;
   List<ProfileNode*> children_list_;
+  unsigned id_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileNode);
 };
@@ -180,7 +181,7 @@ class ProfileTree {
   ProfileTree();
   ~ProfileTree();
 
-  void AddPathFromEnd(const Vector<CodeEntry*>& path);
+  ProfileNode* AddPathFromEnd(const Vector<CodeEntry*>& path);
   void AddPathFromStart(const Vector<CodeEntry*>& path);
   void CalculateTotalTicks();
   void FilteredClone(ProfileTree* src, int security_token_id);
@@ -190,6 +191,8 @@ class ProfileTree {
   }
   ProfileNode* root() const { return root_; }
   void SetTickRatePerMs(double ticks_per_ms);
+
+  unsigned next_node_id() { return next_node_id_++; }
 
   void ShortPrint();
   void Print() {
@@ -201,6 +204,7 @@ class ProfileTree {
   void TraverseDepthFirst(Callback* callback);
 
   CodeEntry root_entry_;
+  unsigned next_node_id_;
   ProfileNode* root_;
   double ms_to_ticks_scale_;
 
@@ -210,8 +214,8 @@ class ProfileTree {
 
 class CpuProfile {
  public:
-  CpuProfile(const char* title, unsigned uid)
-      : title_(title), uid_(uid) { }
+  CpuProfile(const char* title, unsigned uid, bool record_samples)
+      : title_(title), uid_(uid), record_samples_(record_samples) { }
 
   // Add pc -> ... -> main() call path to the profile.
   void AddPath(const Vector<CodeEntry*>& path);
@@ -223,6 +227,9 @@ class CpuProfile {
   INLINE(unsigned uid() const) { return uid_; }
   INLINE(const ProfileTree* top_down() const) { return &top_down_; }
 
+  INLINE(int samples_count() const) { return samples_.length(); }
+  INLINE(ProfileNode* sample(int index) const) { return samples_.at(index); }
+
   void UpdateTicksScale();
 
   void ShortPrint();
@@ -231,6 +238,8 @@ class CpuProfile {
  private:
   const char* title_;
   unsigned uid_;
+  bool record_samples_;
+  List<ProfileNode*> samples_;
   ProfileTree top_down_;
 
   DISALLOW_COPY_AND_ASSIGN(CpuProfile);
@@ -288,8 +297,7 @@ class CpuProfilesCollection {
   CpuProfilesCollection();
   ~CpuProfilesCollection();
 
-  bool StartProfiling(const char* title, unsigned uid);
-  bool StartProfiling(String* title, unsigned uid);
+  bool StartProfiling(const char* title, unsigned uid, bool record_samples);
   CpuProfile* StopProfiling(int security_token_id,
                             const char* title,
                             double actual_sampling_rate);
@@ -391,33 +399,6 @@ class SampleRateCalculator {
 class ProfileGenerator {
  public:
   explicit ProfileGenerator(CpuProfilesCollection* profiles);
-
-  INLINE(CodeEntry* NewCodeEntry(Logger::LogEventsAndTags tag,
-                                 Name* name,
-                                 String* resource_name,
-                                 int line_number)) {
-    return profiles_->NewCodeEntry(tag, name, resource_name, line_number);
-  }
-
-  INLINE(CodeEntry* NewCodeEntry(Logger::LogEventsAndTags tag,
-                                 const char* name)) {
-    return profiles_->NewCodeEntry(tag, name);
-  }
-
-  INLINE(CodeEntry* NewCodeEntry(Logger::LogEventsAndTags tag,
-                                 const char* name_prefix,
-                                 Name* name)) {
-    return profiles_->NewCodeEntry(tag, name_prefix, name);
-  }
-
-  INLINE(CodeEntry* NewCodeEntry(Logger::LogEventsAndTags tag,
-                                 int args_count)) {
-    return profiles_->NewCodeEntry(tag, args_count);
-  }
-
-  INLINE(CodeEntry* NewCodeEntry(int security_token_id)) {
-    return profiles_->NewCodeEntry(security_token_id);
-  }
 
   void RecordTickSample(const TickSample& sample);
 

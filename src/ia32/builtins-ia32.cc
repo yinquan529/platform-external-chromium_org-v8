@@ -216,8 +216,7 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
       // eax: initial map
       __ movzx_b(edi, FieldOperand(eax, Map::kInstanceSizeOffset));
       __ shl(edi, kPointerSizeLog2);
-      __ AllocateInNewSpace(
-          edi, ebx, edi, no_reg, &rt_call, NO_ALLOCATION_FLAGS);
+      __ Allocate(edi, ebx, edi, no_reg, &rt_call, NO_ALLOCATION_FLAGS);
       // Allocated the JSObject, now initialize the fields.
       // eax: initial map
       // ebx: JSObject
@@ -280,15 +279,15 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
       // ebx: JSObject
       // edi: start of next object (will be start of FixedArray)
       // edx: number of elements in properties array
-      __ AllocateInNewSpace(FixedArray::kHeaderSize,
-                            times_pointer_size,
-                            edx,
-                            REGISTER_VALUE_IS_INT32,
-                            edi,
-                            ecx,
-                            no_reg,
-                            &undo_allocation,
-                            RESULT_CONTAINS_TOP);
+      __ Allocate(FixedArray::kHeaderSize,
+                  times_pointer_size,
+                  edx,
+                  REGISTER_VALUE_IS_INT32,
+                  edi,
+                  ecx,
+                  no_reg,
+                  &undo_allocation,
+                  RESULT_CONTAINS_TOP);
 
       // Initialize the FixedArray.
       // ebx: JSObject
@@ -408,10 +407,6 @@ static void Generate_JSConstructStubHelper(MacroAssembler* masm,
     // FIRST_SPEC_OBJECT_TYPE, it is not an object in the ECMA sense.
     __ CmpObjectType(eax, FIRST_SPEC_OBJECT_TYPE, ecx);
     __ j(above_equal, &exit);
-
-    // Symbols are "objects".
-    __ CmpInstanceType(ecx, SYMBOL_TYPE);
-    __ j(equal, &exit);
 
     // Throw away the result of the constructor invocation and use the
     // on-stack receiver as the result.
@@ -1129,15 +1124,15 @@ static void AllocateJSArray(MacroAssembler* masm,
   // Allocate the JSArray object together with space for a FixedArray with the
   // requested elements.
   STATIC_ASSERT(kSmiTagSize == 1 && kSmiTag == 0);
-  __ AllocateInNewSpace(JSArray::kSize + FixedArray::kHeaderSize,
-                        times_pointer_size,
-                        array_size,
-                        REGISTER_VALUE_IS_SMI,
-                        result,
-                        elements_array_end,
-                        scratch,
-                        gc_required,
-                        TAG_OBJECT);
+  __ Allocate(JSArray::kSize + FixedArray::kHeaderSize,
+              times_pointer_size,
+              array_size,
+              REGISTER_VALUE_IS_SMI,
+              result,
+              elements_array_end,
+              scratch,
+              gc_required,
+              TAG_OBJECT);
 
   // Allocated the JSArray. Now initialize the fields except for the elements
   // array.
@@ -1212,9 +1207,9 @@ static void AllocateJSArray(MacroAssembler* masm,
 // that for a construct call the constructor function in edi needs to be
 // preserved for entering the generic code. In both cases argc in eax needs to
 // be preserved.
-static void ArrayNativeCode(MacroAssembler* masm,
-                            bool construct_call,
-                            Label* call_generic_code) {
+void ArrayNativeCode(MacroAssembler* masm,
+                     bool construct_call,
+                     Label* call_generic_code) {
   Label argc_one_or_more, argc_two_or_more, prepare_generic_code_call,
       empty_array, not_empty_array, finish, cant_transition_map, not_double;
 
@@ -1499,7 +1494,7 @@ void Builtins::Generate_ArrayCode(MacroAssembler* masm) {
 }
 
 
-void Builtins::Generate_ArrayConstructCode(MacroAssembler* masm) {
+void Builtins::Generate_CommonArrayConstructCode(MacroAssembler* masm) {
   // ----------- S t a t e -------------
   //  -- eax : argc
   //  -- ebx : type info cell
@@ -1518,50 +1513,18 @@ void Builtins::Generate_ArrayConstructCode(MacroAssembler* masm) {
     __ Assert(not_zero, "Unexpected initial map for Array function");
     __ CmpObjectType(ecx, MAP_TYPE, ecx);
     __ Assert(equal, "Unexpected initial map for Array function");
-
-    if (FLAG_optimize_constructed_arrays) {
-      // We should either have undefined in ebx or a valid jsglobalpropertycell
-      Label okay_here;
-      Handle<Object> undefined_sentinel(
-          masm->isolate()->heap()->undefined_value(), masm->isolate());
-      Handle<Map> global_property_cell_map(
-          masm->isolate()->heap()->global_property_cell_map());
-      __ cmp(ebx, Immediate(undefined_sentinel));
-      __ j(equal, &okay_here);
-      __ cmp(FieldOperand(ebx, 0), Immediate(global_property_cell_map));
-      __ Assert(equal, "Expected property cell in register ebx");
-      __ bind(&okay_here);
-    }
   }
 
-  if (FLAG_optimize_constructed_arrays) {
-    Label not_zero_case, not_one_case;
-    __ test(eax, eax);
-    __ j(not_zero, &not_zero_case);
-    ArrayNoArgumentConstructorStub no_argument_stub;
-    __ TailCallStub(&no_argument_stub);
+  Label generic_constructor;
+  // Run the native code for the Array function called as constructor.
+  ArrayNativeCode(masm, true, &generic_constructor);
 
-    __ bind(&not_zero_case);
-    __ cmp(eax, 1);
-    __ j(greater, &not_one_case);
-    ArraySingleArgumentConstructorStub single_argument_stub;
-    __ TailCallStub(&single_argument_stub);
-
-    __ bind(&not_one_case);
-    ArrayNArgumentsConstructorStub n_argument_stub;
-    __ TailCallStub(&n_argument_stub);
-  } else {
-    Label generic_constructor;
-    // Run the native code for the Array function called as constructor.
-    ArrayNativeCode(masm, true, &generic_constructor);
-
-    // Jump to the generic construct code in case the specialized code cannot
-    // handle the construction.
-    __ bind(&generic_constructor);
-    Handle<Code> generic_construct_stub =
-        masm->isolate()->builtins()->JSConstructStubGeneric();
-    __ jmp(generic_construct_stub, RelocInfo::CODE_TARGET);
-  }
+  // Jump to the generic construct code in case the specialized code cannot
+  // handle the construction.
+  __ bind(&generic_constructor);
+  Handle<Code> generic_construct_stub =
+      masm->isolate()->builtins()->JSConstructStubGeneric();
+  __ jmp(generic_construct_stub, RelocInfo::CODE_TARGET);
 }
 
 
@@ -1815,25 +1778,7 @@ void Builtins::Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm) {
 
 
 void Builtins::Generate_OnStackReplacement(MacroAssembler* masm) {
-  // Get the loop depth of the stack guard check. This is recorded in
-  // a test(eax, depth) instruction right after the call.
-  Label stack_check;
-  __ mov(ebx, Operand(esp, 0));  // return address
-  if (FLAG_debug_code) {
-    __ cmpb(Operand(ebx, 0), Assembler::kTestAlByte);
-    __ Assert(equal, "test eax instruction not found after loop stack check");
-  }
-  __ movzx_b(ebx, Operand(ebx, 1));  // depth
-
-  // Get the loop nesting level at which we allow OSR from the
-  // unoptimized code and check if we want to do OSR yet. If not we
-  // should perform a stack guard check so we can get interrupts while
-  // waiting for on-stack replacement.
   __ mov(eax, Operand(ebp, JavaScriptFrameConstants::kFunctionOffset));
-  __ mov(ecx, FieldOperand(eax, JSFunction::kSharedFunctionInfoOffset));
-  __ mov(ecx, FieldOperand(ecx, SharedFunctionInfo::kCodeOffset));
-  __ cmpb(ebx, FieldOperand(ecx, Code::kAllowOSRAtLoopNestingLevelOffset));
-  __ j(greater, &stack_check);
 
   // Pass the function to optimize as the argument to the on-stack
   // replacement runtime function.
@@ -1848,23 +1793,6 @@ void Builtins::Generate_OnStackReplacement(MacroAssembler* masm) {
   Label skip;
   __ cmp(eax, Immediate(Smi::FromInt(-1)));
   __ j(not_equal, &skip, Label::kNear);
-  __ ret(0);
-
-  // Insert a stack guard check so that if we decide not to perform
-  // on-stack replacement right away, the function calling this stub can
-  // still be interrupted.
-  __ bind(&stack_check);
-  Label ok;
-  ExternalReference stack_limit =
-      ExternalReference::address_of_stack_limit(masm->isolate());
-  __ cmp(esp, Operand::StaticVariable(stack_limit));
-  __ j(above_equal, &ok, Label::kNear);
-  StackCheckStub stub;
-  __ TailCallStub(&stub);
-  if (FLAG_debug_code) {
-    __ Abort("Unreachable code: returned from tail call.");
-  }
-  __ bind(&ok);
   __ ret(0);
 
   __ bind(&skip);
