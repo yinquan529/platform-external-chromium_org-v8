@@ -27,58 +27,16 @@
 
 // Flags: --allow-natives-syntax
 
-function a() {
-  var sum = 0;
-  for (var i = 0; i < 500; ++i) {
-    sum = (i + sum) | 0;
-  }
-  return sum;
+var a = new Array(2);
+a[0] = 1;
+assertTrue(%HasFastSmiElements(a));
+assertTrue(%HasFastHoleyElements(a));
+
+function hole(i) {
+  return a[i] << 0;
 }
 
-function b() {
-  var sum = 0;
-  for (var i = -500; i < 0; ++i) {
-    sum = (i + sum) | 0;
-  }
-  return sum;
-}
-
-function c() {
-  var sum = 0;
-  for (var i = 0; i < 500; ++i) {
-    sum += (i + -0x7fffffff) | 0;
-  }
-  return sum;
-}
-
-function d() {
-  var sum = 0;
-  for (var i = -501; i < 0; ++i) {
-    sum += (i + 501) | 0;
-  }
-  return sum;
-}
-
-a();
-a();
-%OptimizeFunctionOnNextCall(a);
-assertEquals(124750, a());
-assertEquals(124750, a());
-
-b();
-b();
-%OptimizeFunctionOnNextCall(b);
-assertEquals(-125250, b());
-assertEquals(-125250, b());
-
-c();
-c();
-%OptimizeFunctionOnNextCall(c);
-assertEquals(-1073741698750, c());
-assertEquals(-1073741698750, c());
-
-d();
-d();
-%OptimizeFunctionOnNextCall(d);
-assertEquals(125250, d());
-assertEquals(125250, d());
+assertEquals(1, hole(0));
+assertEquals(1, hole(0));
+%OptimizeFunctionOnNextCall(hole);
+assertEquals(0, hole(1));
