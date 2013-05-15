@@ -55,12 +55,11 @@ void Deoptimizer::DeoptimizeFunctionWithPreparedFunctionList(
   ASSERT(function->IsOptimized());
   ASSERT(function->FunctionsInFunctionListShareSameCode());
 
-  // The optimized code is going to be patched, so we cannot use it
-  // any more.  Play safe and reset the whole cache.
-  function->shared()->ClearOptimizedCodeMap();
-
   // Get the optimized code.
   Code* code = function->code();
+
+  // The optimized code is going to be patched, so we cannot use it any more.
+  function->shared()->EvictFromOptimizedCodeMap(code, "deoptimized function");
 
   // Invalidate the relocation information, as it will become invalid by the
   // code patching below, and is not needed any more.
@@ -531,9 +530,15 @@ void Deoptimizer::DoComputeJSFrame(TranslationIterator* iterator,
 
   // Set the continuation for the topmost frame.
   if (is_topmost && bailout_type_ != DEBUGGER) {
-    Code* continuation = (bailout_type_ == EAGER)
-        ? isolate_->builtins()->builtin(Builtins::kNotifyDeoptimized)
-        : isolate_->builtins()->builtin(Builtins::kNotifyLazyDeoptimized);
+    Builtins* builtins = isolate_->builtins();
+    Code* continuation = builtins->builtin(Builtins::kNotifyDeoptimized);
+    if (bailout_type_ == LAZY) {
+      continuation = builtins->builtin(Builtins::kNotifyLazyDeoptimized);
+    } else if (bailout_type_ == SOFT) {
+      continuation = builtins->builtin(Builtins::kNotifySoftDeoptimized);
+    } else {
+      ASSERT(bailout_type_ == EAGER);
+    }
     output_frame->SetContinuation(
         reinterpret_cast<intptr_t>(continuation->entry()));
   }
@@ -619,7 +624,7 @@ void Deoptimizer::EntryGenerator::Generate() {
 
   // Get the address of the location in the code object if possible
   // and compute the fp-to-sp delta in register arg5.
-  if (type() == EAGER) {
+  if (type() == EAGER || type() == SOFT) {
     __ Set(arg_reg_4, 0);
     __ lea(arg5, Operand(rsp, kSavedRegistersAreaSize + 1 * kPointerSize));
   } else {
@@ -670,7 +675,7 @@ void Deoptimizer::EntryGenerator::Generate() {
   }
 
   // Remove the bailout id from the stack.
-  if (type() == EAGER) {
+  if (type() == EAGER || type() == SOFT) {
     __ addq(rsp, Immediate(kPointerSize));
   } else {
     __ addq(rsp, Immediate(2 * kPointerSize));

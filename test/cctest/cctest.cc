@@ -25,6 +25,9 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+#define V8_ALLOW_ACCESS_TO_PERSISTENT_IMPLICIT
+#define V8_ALLOW_ACCESS_TO_PERSISTENT_ARROW
+
 #include <v8.h>
 #include "cctest.h"
 #include "debug.h"
@@ -95,6 +98,8 @@ v8::Isolate* CcTest::default_isolate_;
 
 int main(int argc, char* argv[]) {
   v8::internal::FlagList::SetFlagsFromCommandLine(&argc, argv, true);
+  v8::internal::FLAG_harmony_array_buffer = true;
+  v8::internal::FLAG_harmony_typed_arrays = true;
   CcTest::set_default_isolate(v8::Isolate::GetCurrent());
   CHECK(CcTest::default_isolate() != NULL);
   int tests_run = 0;

@@ -29,9 +29,9 @@ $(gyp_shared_intermediate_dir)/experimental-libraries.cc: gyp_local_path := $(LO
 $(gyp_shared_intermediate_dir)/experimental-libraries.cc: gyp_intermediate_dir := $(GYP_ABS_ANDROID_TOP_DIR)/$(gyp_intermediate_dir)
 $(gyp_shared_intermediate_dir)/experimental-libraries.cc: gyp_shared_intermediate_dir := $(GYP_ABS_ANDROID_TOP_DIR)/$(gyp_shared_intermediate_dir)
 $(gyp_shared_intermediate_dir)/experimental-libraries.cc: export PATH := $(subst $(ANDROID_BUILD_PATHS),,$(PATH))
-$(gyp_shared_intermediate_dir)/experimental-libraries.cc: $(LOCAL_PATH)/v8/tools/js2c.py $(LOCAL_PATH)/v8/src/macros.py $(LOCAL_PATH)/v8/src/symbol.js $(LOCAL_PATH)/v8/src/proxy.js $(LOCAL_PATH)/v8/src/collection.js $(LOCAL_PATH)/v8/src/object-observe.js $(LOCAL_PATH)/v8/src/typedarray.js $(LOCAL_PATH)/v8/src/generator.js $(GYP_TARGET_DEPENDENCIES)
+$(gyp_shared_intermediate_dir)/experimental-libraries.cc: $(LOCAL_PATH)/v8/tools/js2c.py $(LOCAL_PATH)/v8/src/macros.py $(LOCAL_PATH)/v8/src/symbol.js $(LOCAL_PATH)/v8/src/proxy.js $(LOCAL_PATH)/v8/src/collection.js $(LOCAL_PATH)/v8/src/object-observe.js $(LOCAL_PATH)/v8/src/arraybuffer.js $(LOCAL_PATH)/v8/src/typedarray.js $(LOCAL_PATH)/v8/src/generator.js $(GYP_TARGET_DEPENDENCIES)
 	@echo "Gyp action: v8_tools_gyp_v8_gyp_js2c_host_js2c_experimental ($@)"
-	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_shared_intermediate_dir); python ../../tools/js2c.py "$(gyp_shared_intermediate_dir)/experimental-libraries.cc" EXPERIMENTAL off ../../src/macros.py ../../src/symbol.js ../../src/proxy.js ../../src/collection.js ../../src/object-observe.js ../../src/typedarray.js ../../src/generator.js
+	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_shared_intermediate_dir); python ../../tools/js2c.py "$(gyp_shared_intermediate_dir)/experimental-libraries.cc" EXPERIMENTAL off ../../src/macros.py ../../src/symbol.js ../../src/proxy.js ../../src/collection.js ../../src/object-observe.js ../../src/arraybuffer.js ../../src/typedarray.js ../../src/generator.js
 
 
 

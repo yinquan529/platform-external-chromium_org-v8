@@ -29,6 +29,9 @@
 
 #include <ctype.h>
 
+// TODO(dcarney): remove
+#define V8_ALLOW_ACCESS_TO_PERSISTENT_IMPLICIT
+
 #include "v8.h"
 
 #include "cctest.h"
@@ -105,7 +108,7 @@ static const v8::HeapGraphNode* GetProperty(const v8::HeapGraphNode* node,
                                             const char* name) {
   for (int i = 0, count = node->GetChildrenCount(); i < count; ++i) {
     const v8::HeapGraphEdge* prop = node->GetChild(i);
-    v8::String::AsciiValue prop_name(prop->GetName());
+    v8::String::Utf8Value prop_name(prop->GetName());
     if (prop->GetType() == type && strcmp(name, *prop_name) == 0)
       return prop->GetToNode();
   }
@@ -118,7 +121,7 @@ static bool HasString(const v8::HeapGraphNode* node, const char* contents) {
     const v8::HeapGraphEdge* prop = node->GetChild(i);
     const v8::HeapGraphNode* node = prop->GetToNode();
     if (node->GetType() == v8::HeapGraphNode::kString) {
-      v8::String::AsciiValue node_name(node->GetName());
+      v8::String::Utf8Value node_name(node->GetName());
       if (strcmp(contents, *node_name) == 0) return true;
     }
   }
@@ -282,7 +285,7 @@ TEST(HeapSnapshotCodeObjects) {
       GetProperty(global, v8::HeapGraphEdge::kProperty, "anonymous");
   CHECK_NE(NULL, anonymous);
   CHECK_EQ(v8::HeapGraphNode::kClosure, anonymous->GetType());
-  v8::String::AsciiValue anonymous_name(anonymous->GetName());
+  v8::String::Utf8Value anonymous_name(anonymous->GetName());
   CHECK_EQ("", *anonymous_name);
 
   // Find references to code.
@@ -1076,16 +1079,16 @@ class TestRetainedObjectInfo : public v8::RetainedObjectInfo {
       uint16_t class_id, v8::Handle<v8::Value> wrapper) {
     if (class_id == 1) {
       if (wrapper->IsString()) {
-        v8::String::AsciiValue ascii(wrapper);
-        if (strcmp(*ascii, "AAA") == 0)
+        v8::String::Utf8Value utf8(wrapper);
+        if (strcmp(*utf8, "AAA") == 0)
           return new TestRetainedObjectInfo(1, "aaa-group", "aaa", 100);
-        else if (strcmp(*ascii, "BBB") == 0)
+        else if (strcmp(*utf8, "BBB") == 0)
           return new TestRetainedObjectInfo(1, "aaa-group", "aaa", 100);
       }
     } else if (class_id == 2) {
       if (wrapper->IsString()) {
-        v8::String::AsciiValue ascii(wrapper);
-        if (strcmp(*ascii, "CCC") == 0)
+        v8::String::Utf8Value utf8(wrapper);
+        if (strcmp(*utf8, "CCC") == 0)
           return new TestRetainedObjectInfo(2, "ccc-group", "ccc");
       }
     }
@@ -1196,7 +1199,8 @@ class GraphWithImplicitRefs {
       objects_[i] =
           v8::Persistent<v8::Object>::New(isolate_, v8::Object::New());
     }
-    (*env)->Global()->Set(v8_str("root_object"), objects_[0]);
+    (*env)->Global()->Set(v8_str("root_object"),
+                          v8::Local<v8::Value>::New(isolate_, objects_[0]));
   }
   ~GraphWithImplicitRefs() {
     instance_ = NULL;
@@ -1250,7 +1254,7 @@ TEST(HeapSnapshotImplicitReferences) {
   int implicit_targets_count = 0;
   for (int i = 0, count = obj1->GetChildrenCount(); i < count; ++i) {
     const v8::HeapGraphEdge* prop = obj1->GetChild(i);
-    v8::String::AsciiValue prop_name(prop->GetName());
+    v8::String::Utf8Value prop_name(prop->GetName());
     if (prop->GetType() == v8::HeapGraphEdge::kInternal &&
         strcmp("native", *prop_name) == 0) {
       ++implicit_targets_count;
@@ -1410,7 +1414,7 @@ TEST(GetHeapValue) {
       GetProperty(obj, v8::HeapGraphEdge::kProperty, "n_prop");
   v8::Local<v8::Number> js_n_prop =
       js_obj->Get(v8_str("n_prop")).As<v8::Number>();
-  CHECK(js_n_prop == n_prop->GetHeapValue());
+  CHECK(js_n_prop->NumberValue() == n_prop->GetHeapValue()->NumberValue());
 }
 
 
@@ -1582,9 +1586,9 @@ bool HasWeakGlobalHandle() {
 
 
 static void PersistentHandleCallback(v8::Isolate* isolate,
-                                     v8::Persistent<v8::Value> handle,
+                                     v8::Persistent<v8::Value>* handle,
                                      void*) {
-  handle.Dispose(isolate);
+  handle->Dispose(isolate);
 }
 
 
@@ -1596,7 +1600,9 @@ TEST(WeakGlobalHandle) {
 
   v8::Persistent<v8::Object> handle =
       v8::Persistent<v8::Object>::New(env->GetIsolate(), v8::Object::New());
-  handle.MakeWeak(env->GetIsolate(), NULL, PersistentHandleCallback);
+  handle.MakeWeak<v8::Value, void>(env->GetIsolate(),
+                                   NULL,
+                                   PersistentHandleCallback);
 
   CHECK(HasWeakGlobalHandle());
 }
@@ -1686,7 +1692,7 @@ TEST(AllStrongGcRootsHaveNames) {
   for (int i = 0; i < strong_roots->GetChildrenCount(); ++i) {
     const v8::HeapGraphEdge* edge = strong_roots->GetChild(i);
     CHECK_EQ(v8::HeapGraphEdge::kInternal, edge->GetType());
-    v8::String::AsciiValue name(edge->GetName());
+    v8::String::Utf8Value name(edge->GetName());
     CHECK(isalpha(**name));
   }
 }

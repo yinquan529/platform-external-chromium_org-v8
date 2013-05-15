@@ -426,6 +426,8 @@ bool Range::MulAndCheckOverflow(Range* other) {
 
 
 const char* HType::ToString() {
+  // Note: The c1visualizer syntax for locals allows only a sequence of the
+  // following characters: A-Za-z0-9_-|:
   switch (type_) {
     case kTagged: return "tagged";
     case kTaggedPrimitive: return "primitive";
@@ -440,7 +442,7 @@ const char* HType::ToString() {
     case kUninitialized: return "uninitialized";
   }
   UNREACHABLE();
-  return "Unreachable code";
+  return "unreachable";
 }
 
 
@@ -694,16 +696,18 @@ void HValue::SetBlock(HBasicBlock* block) {
 
 void HValue::PrintTypeTo(StringStream* stream) {
   if (!representation().IsTagged() || type().Equals(HType::Tagged())) return;
-  stream->Add(" type[%s]", type().ToString());
+  stream->Add(" type:%s", type().ToString());
 }
 
 
 void HValue::PrintRangeTo(StringStream* stream) {
   if (range() == NULL || range()->IsMostGeneric()) return;
-  stream->Add(" range[%d,%d,m0=%d]",
+  // Note: The c1visualizer syntax for locals allows only a sequence of the
+  // following characters: A-Za-z0-9_-|:
+  stream->Add(" range:%d_%d%s",
               range()->lower(),
               range()->upper(),
-              static_cast<int>(range()->CanBeMinusZero()));
+              range()->CanBeMinusZero() ? "_m0" : "");
 }
 
 
@@ -1441,6 +1445,16 @@ HValue* HMul::Canonicalize() {
 }
 
 
+HValue* HMod::Canonicalize() {
+  return this;
+}
+
+
+HValue* HDiv::Canonicalize() {
+  return this;
+}
+
+
 HValue* HChange::Canonicalize() {
   return (from().Equals(to())) ? value() : this;
 }
@@ -1601,15 +1615,6 @@ void HCheckMaps::SetSideEffectDominator(GVNFlag side_effect,
 }
 
 
-void HLoadElements::PrintDataTo(StringStream* stream) {
-  value()->PrintNameTo(stream);
-  if (HasTypeCheck()) {
-    stream->Add(" ");
-    typecheck()->PrintNameTo(stream);
-  }
-}
-
-
 void HCheckMaps::PrintDataTo(StringStream* stream) {
   value()->PrintNameTo(stream);
   stream->Add(" [%p", *map_set()->first());
@@ -1687,6 +1692,7 @@ Range* HChange::InferRange(Zone* zone) {
       !value()->CheckFlag(HInstruction::kUint32) &&
       input_range != NULL && input_range->IsInSmiRange()) {
     set_type(HType::Smi());
+    ClearGVNFlag(kChangesNewSpacePromotion);
   }
   Range* result = (input_range != NULL)
       ? input_range->Copy(zone)
@@ -1777,20 +1783,22 @@ Range* HMul::InferRange(Zone* zone) {
 
 Range* HDiv::InferRange(Zone* zone) {
   if (representation().IsInteger32()) {
+    Range* a = left()->range();
+    Range* b = right()->range();
     Range* result = new(zone) Range();
-    if (left()->range()->CanBeMinusZero()) {
+    if (a->CanBeMinusZero()) {
       result->set_can_be_minus_zero(true);
     }
 
-    if (left()->range()->CanBeZero() && right()->range()->CanBeNegative()) {
+    if (a->CanBeZero() && b->CanBeNegative()) {
       result->set_can_be_minus_zero(true);
     }
 
-    if (right()->range()->Includes(-1) && left()->range()->Includes(kMinInt)) {
-      SetFlag(HValue::kCanOverflow);
+    if (!a->Includes(kMinInt) || !b->Includes(-1)) {
+      ClearFlag(HValue::kCanOverflow);
     }
 
-    if (!right()->range()->CanBeZero()) {
+    if (!b->CanBeZero()) {
       ClearFlag(HValue::kCanBeDivByZero);
     }
     return result;
@@ -1803,16 +1811,17 @@ Range* HDiv::InferRange(Zone* zone) {
 Range* HMod::InferRange(Zone* zone) {
   if (representation().IsInteger32()) {
     Range* a = left()->range();
+    Range* b = right()->range();
     Range* result = new(zone) Range();
     if (a->CanBeMinusZero() || a->CanBeNegative()) {
       result->set_can_be_minus_zero(true);
     }
 
-    if (right()->range()->Includes(-1) && left()->range()->Includes(kMinInt)) {
-      SetFlag(HValue::kCanOverflow);
+    if (!a->Includes(kMinInt) || !b->Includes(-1)) {
+      ClearFlag(HValue::kCanOverflow);
     }
 
-    if (!right()->range()->CanBeZero()) {
+    if (!b->CanBeZero()) {
       ClearFlag(HValue::kCanBeDivByZero);
     }
     return result;
@@ -1902,14 +1911,17 @@ void HPhi::PrintTo(StringStream* stream) {
     value->PrintNameTo(stream);
     stream->Add(" ");
   }
-  stream->Add(" uses%d_%di_%dd_%dt",
+  stream->Add(" uses:%d_%di_%dd_%dt",
               UseCount(),
               int32_non_phi_uses() + int32_indirect_uses(),
               double_non_phi_uses() + double_indirect_uses(),
               tagged_non_phi_uses() + tagged_indirect_uses());
-  stream->Add("%s%s]",
+  stream->Add("%s%s",
               is_live() ? "_live" : "",
               IsConvertibleToInteger() ? "" : "_ncti");
+  PrintRangeTo(stream);
+  PrintTypeTo(stream);
+  stream->Add("]");
 }
 
 
@@ -1958,6 +1970,10 @@ void HPhi::DeleteFromGraph() {
 void HPhi::InitRealUses(int phi_id) {
   // Initialize real uses.
   phi_id_ = phi_id;
+  // Compute a conservative approximation of truncating uses before inferring
+  // representations. The proper, exact computation will be done later, when
+  // inserting representation changes.
+  SetFlag(kTruncatingToInt32);
   for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
     HValue* value = it.value();
     if (!value->IsPhi()) {
@@ -1966,6 +1982,9 @@ void HPhi::InitRealUses(int phi_id) {
       if (FLAG_trace_representation) {
         PrintF("#%d Phi is used by real #%d %s as %s\n",
                id(), value->id(), value->Mnemonic(), rep.Mnemonic());
+      }
+      if (!value->IsSimulate() && !value->CheckFlag(kTruncatingToInt32)) {
+        ClearFlag(kTruncatingToInt32);
       }
     }
   }
@@ -2523,6 +2542,8 @@ HLoadNamedFieldPolymorphic::HLoadNamedFieldPolymorphic(HValue* context,
        i < types->length() && types_.length() < kMaxLoadPolymorphism;
        ++i) {
     Handle<Map> map = types->at(i);
+    // Deprecated maps are updated to the current map in the type oracle.
+    ASSERT(!map->is_deprecated());
     LookupResult lookup(map->GetIsolate());
     map->LookupDescriptor(NULL, *name, &lookup);
     if (lookup.IsFound()) {
@@ -2533,6 +2554,12 @@ HLoadNamedFieldPolymorphic::HLoadNamedFieldPolymorphic(HValue* context,
             SetGVNFlag(kDependsOnInobjectFields);
           } else {
             SetGVNFlag(kDependsOnBackingStoreFields);
+          }
+          if (FLAG_track_double_fields &&
+              lookup.representation().IsDouble()) {
+            // Since the value needs to be boxed, use a generic handler for
+            // loading doubles.
+            continue;
           }
           types_.Add(types->at(i), zone);
           break;
@@ -2675,7 +2702,12 @@ bool HLoadKeyed::UsesMustHandleHole() const {
     return false;
   }
 
-  if (hole_mode() == ALLOW_RETURN_HOLE) return true;
+  if (hole_mode() == ALLOW_RETURN_HOLE) {
+    if (IsFastDoubleElementsKind(elements_kind())) {
+      return AllUsesCanTreatHoleAsNaN();
+    }
+    return true;
+  }
 
   if (IsFastDoubleElementsKind(elements_kind())) {
     return false;
@@ -2684,6 +2716,22 @@ bool HLoadKeyed::UsesMustHandleHole() const {
   for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
     HValue* use = it.value();
     if (!use->IsChange()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+
+bool HLoadKeyed::AllUsesCanTreatHoleAsNaN() const {
+  if (!IsFastDoubleElementsKind(elements_kind())) {
+    return false;
+  }
+
+  for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
+    HValue* use = it.value();
+    if (use->CheckFlag(HValue::kDeoptimizeOnUndefined)) {
       return false;
     }
   }
@@ -2999,16 +3047,6 @@ HType HAllocate::CalculateInferredType() {
 void HAllocate::PrintDataTo(StringStream* stream) {
   size()->PrintNameTo(stream);
   if (!GuaranteedInNewSpace()) stream->Add(" (pretenure)");
-}
-
-
-HType HArrayLiteral::CalculateInferredType() {
-  return HType::JSArray();
-}
-
-
-HType HObjectLiteral::CalculateInferredType() {
-  return HType::JSObject();
 }
 
 
@@ -3344,6 +3382,9 @@ HInstruction* HMod::New(
     if (c_left->HasInteger32Value() && c_right->HasInteger32Value()) {
       int32_t dividend = c_left->Integer32Value();
       int32_t divisor = c_right->Integer32Value();
+      if (dividend == kMinInt && divisor == -1) {
+        return H_CONSTANT_DOUBLE(-0.0);
+      }
       if (divisor != 0) {
         int32_t res = dividend % divisor;
         if ((res == 0) && (dividend < 0)) {
@@ -3507,35 +3548,12 @@ void HPhi::SimplifyConstantInputs() {
 
 void HPhi::InferRepresentation(HInferRepresentation* h_infer) {
   ASSERT(CheckFlag(kFlexibleRepresentation));
-  // If there are non-Phi uses, and all of them have observed the same
-  // representation, than that's what this Phi is going to use.
-  Representation new_rep = RepresentationObservedByAllNonPhiUses();
-  if (!new_rep.IsNone()) {
-    UpdateRepresentation(new_rep, h_infer, "unanimous use observations");
-    return;
-  }
-  new_rep = RepresentationFromInputs();
+  Representation new_rep = RepresentationFromInputs();
   UpdateRepresentation(new_rep, h_infer, "inputs");
   new_rep = RepresentationFromUses();
   UpdateRepresentation(new_rep, h_infer, "uses");
   new_rep = RepresentationFromUseRequirements();
   UpdateRepresentation(new_rep, h_infer, "use requirements");
-}
-
-
-Representation HPhi::RepresentationObservedByAllNonPhiUses() {
-  int non_phi_use_count = 0;
-  for (int i = Representation::kInteger32;
-       i < Representation::kNumRepresentations; ++i) {
-    non_phi_use_count += non_phi_uses_[i];
-  }
-  if (non_phi_use_count <= 1) return Representation::None();
-  for (int i = 0; i < Representation::kNumRepresentations; ++i) {
-    if (non_phi_uses_[i] == non_phi_use_count) {
-      return Representation::FromKind(static_cast<Representation::Kind>(i));
-    }
-  }
-  return Representation::None();
 }
 
 
