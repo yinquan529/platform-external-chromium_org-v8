@@ -179,6 +179,7 @@ bool LCodeGen::GeneratePrologue() {
       __ Addu(fp, sp, Operand(2 * kPointerSize));
     }
     frame_is_built_ = true;
+    info_->AddNoFrameRange(0, masm_->pc_offset());
   }
 
   // Reserve space for the stack slots needed by the code.
@@ -349,9 +350,7 @@ bool LCodeGen::GenerateDeoptJumpTable() {
   for (int i = 0; i < deopt_jump_table_.length(); i++) {
     __ bind(&deopt_jump_table_[i].label);
     Address entry = deopt_jump_table_[i].address;
-    bool is_lazy_deopt = deopt_jump_table_[i].is_lazy_deopt;
-    Deoptimizer::BailoutType type =
-        is_lazy_deopt ? Deoptimizer::LAZY : Deoptimizer::EAGER;
+    Deoptimizer::BailoutType type = deopt_jump_table_[i].bailout_type;
     int id = Deoptimizer::GetDeoptimizationId(isolate(), entry, type);
     if (id == Deoptimizer::kNotDeoptimizationEntry) {
       Comment(";;; jump table entry %d.", i);
@@ -360,7 +359,7 @@ bool LCodeGen::GenerateDeoptJumpTable() {
     }
     __ li(t9, Operand(ExternalReference::ForDeoptEntry(entry)));
     if (deopt_jump_table_[i].needs_frame) {
-      if (is_lazy_deopt) {
+      if (type == Deoptimizer::LAZY) {
         if (needs_frame_is_call.is_bound()) {
           __ Branch(&needs_frame_is_call);
         } else {
@@ -392,7 +391,7 @@ bool LCodeGen::GenerateDeoptJumpTable() {
         }
       }
     } else {
-      if (is_lazy_deopt) {
+      if (type == Deoptimizer::LAZY) {
         __ Call(t9);
       } else {
         __ Jump(t9);
@@ -804,15 +803,13 @@ void LCodeGen::RegisterEnvironmentForDeoptimization(LEnvironment* environment,
 
 void LCodeGen::DeoptimizeIf(Condition cc,
                             LEnvironment* environment,
+                            Deoptimizer::BailoutType bailout_type,
                             Register src1,
                             const Operand& src2) {
   RegisterEnvironmentForDeoptimization(environment, Safepoint::kNoLazyDeopt);
   ASSERT(environment->HasBeenRegistered());
   int id = environment->deoptimization_index();
   ASSERT(info()->IsOptimizing() || info()->IsStub());
-  Deoptimizer::BailoutType bailout_type = info()->IsStub()
-      ? Deoptimizer::LAZY
-      : Deoptimizer::EAGER;
   Address entry =
       Deoptimizer::GetDeoptimizationEntry(isolate(), id, bailout_type);
   if (entry == NULL) {
@@ -850,13 +847,34 @@ void LCodeGen::DeoptimizeIf(Condition cc,
     // jump entry if this is the case.
     if (deopt_jump_table_.is_empty() ||
         (deopt_jump_table_.last().address != entry) ||
-        (deopt_jump_table_.last().is_lazy_deopt != needs_lazy_deopt) ||
+        (deopt_jump_table_.last().bailout_type != bailout_type) ||
         (deopt_jump_table_.last().needs_frame != !frame_is_built_)) {
-      JumpTableEntry table_entry(entry, !frame_is_built_, needs_lazy_deopt);
+      Deoptimizer::JumpTableEntry table_entry(entry,
+                                              bailout_type,
+                                              !frame_is_built_);
       deopt_jump_table_.Add(table_entry, zone());
     }
     __ Branch(&deopt_jump_table_.last().label, cc, src1, src2);
   }
+}
+
+
+void LCodeGen::DeoptimizeIf(Condition cc,
+                            LEnvironment* environment,
+                            Register src1,
+                            const Operand& src2) {
+  Deoptimizer::BailoutType bailout_type = info()->IsStub()
+      ? Deoptimizer::LAZY
+      : Deoptimizer::EAGER;
+  DeoptimizeIf(cc, environment, bailout_type, src1, src2);
+}
+
+
+void LCodeGen::SoftDeoptimize(LEnvironment* environment,
+                              Register src1,
+                              const Operand& src2) {
+  ASSERT(!info()->IsStub());
+  DeoptimizeIf(al, environment, Deoptimizer::SOFT, src1, src2);
 }
 
 
@@ -1809,6 +1827,11 @@ void LCodeGen::EmitBranchF(int left_block, int right_block,
 }
 
 
+void LCodeGen::DoDebugBreak(LDebugBreak* instr) {
+  __ stop("LDebugBreak");
+}
+
+
 void LCodeGen::DoBranch(LBranch* instr) {
   int true_block = chunk_->LookupDestination(instr->true_block_id());
   int false_block = chunk_->LookupDestination(instr->false_block_id());
@@ -2030,48 +2053,6 @@ void LCodeGen::DoCmpConstantEqAndBranch(LCmpConstantEqAndBranch* instr) {
 
   EmitBranch(true_block, false_block, eq, left,
              Operand(instr->hydrogen()->right()));
-}
-
-
-
-void LCodeGen::DoIsNilAndBranch(LIsNilAndBranch* instr) {
-  Register scratch = scratch0();
-  Register reg = ToRegister(instr->value());
-  int false_block = chunk_->LookupDestination(instr->false_block_id());
-
-  // If the expression is known to be untagged or a smi, then it's definitely
-  // not null, and it can't be a an undetectable object.
-  if (instr->hydrogen()->representation().IsSpecialization() ||
-      instr->hydrogen()->type().IsSmi()) {
-    EmitGoto(false_block);
-    return;
-  }
-
-  int true_block = chunk_->LookupDestination(instr->true_block_id());
-
-  Heap::RootListIndex nil_value = instr->nil() == kNullValue ?
-      Heap::kNullValueRootIndex :
-      Heap::kUndefinedValueRootIndex;
-  __ LoadRoot(at, nil_value);
-  if (instr->kind() == kStrictEquality) {
-    EmitBranch(true_block, false_block, eq, reg, Operand(at));
-  } else {
-    Heap::RootListIndex other_nil_value = instr->nil() == kNullValue ?
-        Heap::kUndefinedValueRootIndex :
-        Heap::kNullValueRootIndex;
-    Label* true_label = chunk_->GetAssemblyLabel(true_block);
-    Label* false_label = chunk_->GetAssemblyLabel(false_block);
-    __ Branch(USE_DELAY_SLOT, true_label, eq, reg, Operand(at));
-    __ LoadRoot(at, other_nil_value);  // In the delay slot.
-    __ Branch(USE_DELAY_SLOT, true_label, eq, reg, Operand(at));
-    __ JumpIfSmi(reg, false_label);  // In the delay slot.
-    // Check for undetectable objects by looking in the bit field in
-    // the map. The object has already been smi checked.
-    __ lw(scratch, FieldMemOperand(reg, HeapObject::kMapOffset));
-    __ lbu(scratch, FieldMemOperand(scratch, Map::kBitFieldOffset));
-    __ And(scratch, scratch, 1 << Map::kIsUndetectable);
-    EmitBranch(true_block, false_block, ne, scratch, Operand(zero_reg));
-  }
 }
 
 
@@ -2553,9 +2534,11 @@ void LCodeGen::DoReturn(LReturn* instr) {
       count++;
     }
   }
+  int no_frame_start = -1;
   if (NeedsEagerFrame()) {
     __ mov(sp, fp);
     __ Pop(ra, fp);
+    no_frame_start = masm_->pc_offset();
   }
   if (instr->has_constant_parameter_count()) {
     int parameter_count = ToInteger32(instr->constant_parameter_count());
@@ -2572,6 +2555,10 @@ void LCodeGen::DoReturn(LReturn* instr) {
   }
 
   __ Jump(ra);
+
+  if (no_frame_start != -1) {
+    info_->AddNoFrameRange(no_frame_start, masm_->pc_offset());
+  }
 }
 
 
@@ -5470,7 +5457,11 @@ void LCodeGen::DoLazyBailout(LLazyBailout* instr) {
 
 
 void LCodeGen::DoDeoptimize(LDeoptimize* instr) {
-  DeoptimizeIf(al, instr->environment(), zero_reg, Operand(zero_reg));
+  if (instr->hydrogen_value()->IsSoftDeoptimize()) {
+    SoftDeoptimize(instr->environment(), zero_reg, Operand(zero_reg));
+  } else {
+    DeoptimizeIf(al, instr->environment(), zero_reg, Operand(zero_reg));
+  }
 }
 
 
