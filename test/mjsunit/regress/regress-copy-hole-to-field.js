@@ -1,4 +1,4 @@
-// Copyright 2012 the V8 project authors. All rights reserved.
+// Copyright 2013 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,25 +25,33 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef V8_APIUTILS_H_
-#define V8_APIUTILS_H_
+// Flags: --allow-natives-syntax
 
-namespace v8 {
-class ImplementationUtilities {
- public:
-  static int GetNameCount(ExtensionConfiguration* that) {
-    return that->name_count_;
-  }
+// Copy a hole from HOLEY_DOUBLE to double field.
+var a = [1.5,,1.7];
+var o = {a:1.8};
 
-  static const char** GetNames(ExtensionConfiguration* that) {
-    return that->names_;
-  }
+function f1(o,a,i) {
+  o.a = a[i];
+}
 
-  // Introduce an alias for the handle scope data to allow non-friends
-  // to access the HandleScope data.
-  typedef v8::HandleScope::Data HandleScopeData;
-};
+f1(o,a,0);
+f1(o,a,0);
+assertEquals(1.5, o.a);
+%OptimizeFunctionOnNextCall(f1);
+f1(o,a,1);
+assertEquals(undefined, o.a);
 
-}  // namespace v8
+// Copy a hole from HOLEY_SMI to smi field.
+var a = [1,,3];
+var o = {ab:5};
 
-#endif  // V8_APIUTILS_H_
+function f2(o,a,i) {
+  o.ab = a[i];
+}
+
+f2(o,a,0);
+f2(o,a,0);
+%OptimizeFunctionOnNextCall(f2);
+f2(o,a,1);
+assertEquals(undefined, o.ab);
