@@ -27,6 +27,7 @@ LOCAL_SRC_FILES := \
 	v8/src/accessors.cc \
 	v8/src/allocation.cc \
 	v8/src/api.cc \
+	v8/src/arguments.cc \
 	v8/src/assembler.cc \
 	v8/src/ast.cc \
 	v8/src/atomicops_internals_x86_gcc.cc \
