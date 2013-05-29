@@ -16,8 +16,8 @@ GYP_TARGET_DEPENDENCIES := \
 
 ### Rules for action "run_mksnapshot":
 $(gyp_intermediate_dir)/snapshot.cc: gyp_local_path := $(LOCAL_PATH)
-$(gyp_intermediate_dir)/snapshot.cc: gyp_intermediate_dir := $(GYP_ABS_ANDROID_TOP_DIR)/$(gyp_intermediate_dir)
-$(gyp_intermediate_dir)/snapshot.cc: gyp_shared_intermediate_dir := $(GYP_ABS_ANDROID_TOP_DIR)/$(gyp_shared_intermediate_dir)
+$(gyp_intermediate_dir)/snapshot.cc: gyp_intermediate_dir := $(abspath $(gyp_intermediate_dir))
+$(gyp_intermediate_dir)/snapshot.cc: gyp_shared_intermediate_dir := $(abspath $(gyp_shared_intermediate_dir))
 $(gyp_intermediate_dir)/snapshot.cc: export PATH := $(subst $(ANDROID_BUILD_PATHS),,$(PATH))
 $(gyp_intermediate_dir)/snapshot.cc: $(gyp_shared_intermediate_dir)/mksnapshot.arm $(GYP_TARGET_DEPENDENCIES)
 	@echo "Gyp action: v8_tools_gyp_v8_gyp_v8_snapshot_target_run_mksnapshot ($@)"
