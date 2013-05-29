@@ -416,6 +416,26 @@ function ArrayPop() {
 }
 
 
+function ObservedArrayPush() {
+  var n = TO_UINT32(this.length);
+  var m = %_ArgumentsLength();
+
+  EnqueueSpliceRecord(this, n, [], 0, m);
+
+  try {
+    BeginPerformSplice(this);
+
+    for (var i = 0; i < m; i++) {
+      this[i+n] = %_Arguments(i);
+    }
+    this.length = n + m;
+  } finally {
+    EndPerformSplice(this);
+  }
+
+  return this.length;
+}
+
 // Appends the arguments to the end of the array and returns the new
 // length of the array. See ECMA-262, section 15.4.4.7.
 function ArrayPush() {
@@ -423,6 +443,9 @@ function ArrayPush() {
     throw MakeTypeError("called_on_null_or_undefined",
                         ["Array.prototype.push"]);
   }
+
+  if (%IsObserved(this))
+    return ObservedArrayPush.apply(this, arguments);
 
   var n = TO_UINT32(this.length);
   var m = %_ArgumentsLength();
@@ -978,11 +1001,13 @@ function ArraySort(comparefn) {
     max_prototype_element = CopyFromPrototype(this, length);
   }
 
-  var num_non_undefined = %RemoveArrayHoles(this, length);
+  var num_non_undefined = %IsObserved(this) ?
+      -1 : %RemoveArrayHoles(this, length);
+
   if (num_non_undefined == -1) {
-    // There were indexed accessors in the array.  Move array holes and
-    // undefineds to the end using a Javascript function that is safe
-    // in the presence of accessors.
+    // The array is observed, or there were indexed accessors in the array.
+    // Move array holes and undefineds to the end using a Javascript function
+    // that is safe in the presence of accessors and is observable.
     num_non_undefined = SafeRemoveArrayHoles(this);
   }
 

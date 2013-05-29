@@ -104,7 +104,9 @@ class LCodeGen BASE_EMBEDDED {
   Register ToRegister(LOperand* op) const;
   XMMRegister ToDoubleRegister(LOperand* op) const;
   bool IsInteger32Constant(LConstantOperand* op) const;
+  bool IsSmiConstant(LConstantOperand* op) const;
   int ToInteger32(LConstantOperand* op) const;
+  Smi* ToSmi(LConstantOperand* op) const;
   double ToDouble(LConstantOperand* op) const;
   bool IsTaggedConstant(LConstantOperand* op) const;
   Handle<Object> ToHandle(LConstantOperand* op) const;
@@ -133,8 +135,7 @@ class LCodeGen BASE_EMBEDDED {
   void DoDeferredInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
                                        Label* map_check);
 
-  void DoCheckMapCommon(Register reg, Handle<Map> map,
-                        CompareMapMode mode, LInstruction* instr);
+  void DoCheckMapCommon(Register reg, Handle<Map> map, LInstruction* instr);
 
 // Parallel move support.
   void DoParallelMove(LParallelMove* move);

@@ -108,10 +108,12 @@ Representation HValue::RepresentationFromUses() {
   int tagged_count = use_count[Representation::kTagged];
   int double_count = use_count[Representation::kDouble];
   int int32_count = use_count[Representation::kInteger32];
+  int smi_count = use_count[Representation::kSmi];
 
   if (tagged_count > 0) return Representation::Tagged();
   if (double_count > 0) return Representation::Double();
   if (int32_count > 0) return Representation::Integer32();
+  if (smi_count > 0) return Representation::Smi();
 
   return Representation::None();
 }
@@ -650,7 +652,6 @@ void HValue::SetOperandAt(int index, HValue* value) {
 void HValue::DeleteAndReplaceWith(HValue* other) {
   // We replace all uses first, so Delete can assert that there are none.
   if (other != NULL) ReplaceAllUsesWith(other);
-  ASSERT(HasNoUses());
   Kill();
   DeleteFromGraph();
 }
@@ -803,6 +804,14 @@ void HInstruction::PrintTo(StringStream* stream) {
   PrintTypeTo(stream);
   if (CheckFlag(HValue::kHasNoObservableSideEffects)) {
     stream->Add(" [noOSE]");
+  }
+}
+
+
+void HInstruction::PrintDataTo(StringStream *stream) {
+  for (int i = 0; i < OperandCount(); ++i) {
+    if (i > 0) stream->Add(" ");
+    OperandAt(i)->PrintNameTo(stream);
   }
 }
 
@@ -1136,16 +1145,15 @@ void HBoundsCheck::InferRepresentation(HInferRepresentation* h_infer) {
   HValue* actual_length = length()->ActualValue();
   HValue* actual_index = index()->ActualValue();
   if (key_mode_ == DONT_ALLOW_SMI_KEY ||
-      !actual_length->representation().IsTagged()) {
+      !actual_length->representation().IsSmiOrTagged()) {
     r = Representation::Integer32();
-  } else if (actual_index->representation().IsTagged() ||
-      (actual_index->IsConstant() &&
-       HConstant::cast(actual_index)->HasSmiValue())) {
-    // If the index is tagged, or a constant that holds a Smi, allow the length
-    // to be tagged, since it is usually already tagged from loading it out of
-    // the length field of a JSArray. This allows for direct comparison without
-    // untagging.
-    r = Representation::Tagged();
+  } else if (actual_index->representation().IsSmiOrTagged() ||
+             (actual_index->IsConstant() &&
+              HConstant::cast(actual_index)->HasSmiValue())) {
+    // If the index is smi, or a constant that holds a Smi, allow the length to
+    // be smi, since it is usually already smi from loading it out of the length
+    // field of a JSArray. This allows for direct comparison without untagging.
+    r = Representation::Smi();
   } else {
     r = Representation::Integer32();
   }
@@ -1250,14 +1258,6 @@ void HControlInstruction::PrintDataTo(StringStream* stream) {
 
 void HUnaryControlInstruction::PrintDataTo(StringStream* stream) {
   value()->PrintNameTo(stream);
-  HControlInstruction::PrintDataTo(stream);
-}
-
-
-void HIsNilAndBranch::PrintDataTo(StringStream* stream) {
-  value()->PrintNameTo(stream);
-  stream->Add(kind() == kStrictEquality ? " === " : " == ");
-  stream->Add(nil() == kNullValue ? "null" : "undefined");
   HControlInstruction::PrintDataTo(stream);
 }
 
@@ -1688,7 +1688,7 @@ Range* HValue::InferRange(Zone* zone) {
 Range* HChange::InferRange(Zone* zone) {
   Range* input_range = value()->range();
   if (from().IsInteger32() &&
-      to().IsTagged() &&
+      to().IsSmiOrTagged() &&
       !value()->CheckFlag(HInstruction::kUint32) &&
       input_range != NULL && input_range->IsInSmiRange()) {
     set_type(HType::Smi());
@@ -1911,14 +1911,13 @@ void HPhi::PrintTo(StringStream* stream) {
     value->PrintNameTo(stream);
     stream->Add(" ");
   }
-  stream->Add(" uses:%d_%di_%dd_%dt",
+  stream->Add(" uses:%d_%ds_%di_%dd_%dt",
               UseCount(),
+              smi_non_phi_uses() + smi_indirect_uses(),
               int32_non_phi_uses() + int32_indirect_uses(),
               double_non_phi_uses() + double_indirect_uses(),
               tagged_non_phi_uses() + tagged_indirect_uses());
-  stream->Add("%s%s",
-              is_live() ? "_live" : "",
-              IsConvertibleToInteger() ? "" : "_ncti");
+  if (!IsConvertibleToInteger()) stream->Add("_ncti");
   PrintRangeTo(stream);
   PrintTypeTo(stream);
   stream->Add("]");
@@ -1993,8 +1992,9 @@ void HPhi::InitRealUses(int phi_id) {
 
 void HPhi::AddNonPhiUsesFrom(HPhi* other) {
   if (FLAG_trace_representation) {
-    PrintF("adding to #%d Phi uses of #%d Phi: i%d d%d t%d\n",
+    PrintF("adding to #%d Phi uses of #%d Phi: s%d i%d d%d t%d\n",
            id(), other->id(),
+           other->non_phi_uses_[Representation::kSmi],
            other->non_phi_uses_[Representation::kInteger32],
            other->non_phi_uses_[Representation::kDouble],
            other->non_phi_uses_[Representation::kTagged]);
@@ -2019,8 +2019,9 @@ void HSimulate::MergeWith(ZoneList<HSimulate*>* list) {
     ZoneList<HValue*>* from_values = &from->values_;
     for (int i = 0; i < from_values->length(); ++i) {
       if (from->HasAssignedIndexAt(i)) {
-        AddAssignedValue(from->GetAssignedIndexAt(i),
-                         from_values->at(i));
+        int index = from->GetAssignedIndexAt(i);
+        if (HasValueForIndex(index)) continue;
+        AddAssignedValue(index, from_values->at(i));
       } else {
         if (pop_count_ > 0) {
           pop_count_--;
@@ -2041,13 +2042,13 @@ void HSimulate::PrintDataTo(StringStream* stream) {
   if (values_.length() > 0) {
     if (pop_count_ > 0) stream->Add(" /");
     for (int i = values_.length() - 1; i >= 0; --i) {
-      if (i > 0) stream->Add(",");
       if (HasAssignedIndexAt(i)) {
         stream->Add(" var[%d] = ", GetAssignedIndexAt(i));
       } else {
         stream->Add(" push ");
       }
       values_[i]->PrintNameTo(stream);
+      if (i > 0) stream->Add(",");
     }
   }
 }
@@ -2078,6 +2079,7 @@ static bool IsInteger32(double value) {
 HConstant::HConstant(Handle<Object> handle, Representation r)
   : handle_(handle),
     unique_id_(),
+    has_smi_value_(false),
     has_int32_value_(false),
     has_double_value_(false),
     is_internalized_string_(false),
@@ -2091,20 +2093,12 @@ HConstant::HConstant(Handle<Object> handle, Representation r)
     double n = handle_->Number();
     has_int32_value_ = IsInteger32(n);
     int32_value_ = DoubleToInt32(n);
+    has_smi_value_ = has_int32_value_ && Smi::IsValid(int32_value_);
     double_value_ = n;
     has_double_value_ = true;
   } else {
     type_from_value_ = HType::TypeFromValue(handle_);
     is_internalized_string_ = handle_->IsInternalizedString();
-  }
-  if (r.IsNone()) {
-    if (has_int32_value_) {
-      r = Representation::Integer32();
-    } else if (has_double_value_) {
-      r = Representation::Double();
-    } else {
-      r = Representation::Tagged();
-    }
   }
   Initialize(r);
 }
@@ -2119,6 +2113,7 @@ HConstant::HConstant(Handle<Object> handle,
                      bool boolean_value)
     : handle_(handle),
       unique_id_(unique_id),
+      has_smi_value_(false),
       has_int32_value_(false),
       has_double_value_(false),
       is_internalized_string_(is_internalize_string),
@@ -2145,6 +2140,7 @@ HConstant::HConstant(int32_t integer_value,
       boolean_value_(integer_value != 0),
       int32_value_(integer_value),
       double_value_(FastI2D(integer_value)) {
+  has_smi_value_ = Smi::IsValid(int32_value_);
   Initialize(r);
 }
 
@@ -2162,11 +2158,23 @@ HConstant::HConstant(double double_value,
       boolean_value_(double_value != 0 && !std::isnan(double_value)),
       int32_value_(DoubleToInt32(double_value)),
       double_value_(double_value) {
+  has_smi_value_ = has_int32_value_ && Smi::IsValid(int32_value_);
   Initialize(r);
 }
 
 
 void HConstant::Initialize(Representation r) {
+  if (r.IsNone()) {
+    if (has_smi_value_) {
+      r = Representation::Smi();
+    } else if (has_int32_value_) {
+      r = Representation::Integer32();
+    } else if (has_double_value_) {
+      r = Representation::Double();
+    } else {
+      r = Representation::Tagged();
+    }
+  }
   set_representation(r);
   SetFlag(kUseGVN);
   if (representation().IsInteger32()) {
@@ -2176,6 +2184,7 @@ void HConstant::Initialize(Representation r) {
 
 
 HConstant* HConstant::CopyToRepresentation(Representation r, Zone* zone) const {
+  if (r.IsSmi() && !has_smi_value_) return NULL;
   if (r.IsInteger32() && !has_int32_value_) return NULL;
   if (r.IsDouble() && !has_double_value_) return NULL;
   if (has_int32_value_) {
@@ -2445,18 +2454,20 @@ void HGoto::PrintDataTo(StringStream* stream) {
 
 
 void HCompareIDAndBranch::InferRepresentation(HInferRepresentation* h_infer) {
-  Representation rep = Representation::None();
   Representation left_rep = left()->representation();
   Representation right_rep = right()->representation();
-  bool observed_integers =
-      observed_input_representation(0).IsInteger32() &&
-      observed_input_representation(1).IsInteger32();
-  bool inputs_are_not_doubles =
-      !left_rep.IsDouble() && !right_rep.IsDouble();
-  if (observed_integers && inputs_are_not_doubles) {
-    rep = Representation::Integer32();
+  Representation observed_left = observed_input_representation(0);
+  Representation observed_right = observed_input_representation(1);
+
+  Representation rep = Representation::Smi();
+  if (observed_left.IsInteger32() && observed_right.IsInteger32()) {
+    if (!left_rep.IsTagged()) rep = rep.generalize(left_rep);
+    if (!right_rep.IsTagged()) rep = rep.generalize(right_rep);
   } else {
     rep = Representation::Double();
+  }
+
+  if (rep.IsDouble()) {
     // According to the ES5 spec (11.9.3, 11.8.5), Equality comparisons (==, ===
     // and !=) have special handling of undefined, e.g. undefined == undefined
     // is 'true'. Relational comparisons have a different semantic, first
@@ -2485,7 +2496,7 @@ void HParameter::PrintDataTo(StringStream* stream) {
 
 void HLoadNamedField::PrintDataTo(StringStream* stream) {
   object()->PrintNameTo(stream);
-  stream->Add(" @%d%s", offset(), is_in_object() ? "[in-object]" : "");
+  access_.PrintTo(stream);
   if (HasTypeCheck()) {
     stream->Add(" ");
     typecheck()->PrintNameTo(stream);
@@ -2713,11 +2724,14 @@ bool HLoadKeyed::UsesMustHandleHole() const {
     return false;
   }
 
+  // Holes are only returned as tagged values.
+  if (!representation().IsTagged()) {
+    return false;
+  }
+
   for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
     HValue* use = it.value();
-    if (!use->IsChange()) {
-      return false;
-    }
+    if (!use->IsChange()) return false;
   }
 
   return true;
@@ -2807,11 +2821,9 @@ void HStoreNamedGeneric::PrintDataTo(StringStream* stream) {
 
 void HStoreNamedField::PrintDataTo(StringStream* stream) {
   object()->PrintNameTo(stream);
-  stream->Add(".");
-  stream->Add(*String::cast(*name())->ToCString());
+  access_.PrintTo(stream);
   stream->Add(" = ");
   value()->PrintNameTo(stream);
-  stream->Add(" @%d%s", offset(), is_in_object() ? "[in-object]" : "");
   if (NeedsWriteBarrier()) {
     stream->Add(" (write-barrier)");
   }
@@ -2941,20 +2953,6 @@ HType HCheckFunction::CalculateInferredType() {
 HType HCheckNonSmi::CalculateInferredType() {
   // TODO(kasperl): Is there any way to signal that this isn't a smi?
   return HType::Tagged();
-}
-
-
-HType HCheckSmi::CalculateInferredType() {
-  return HType::Smi();
-}
-
-
-void HCheckSmiOrInt32::InferRepresentation(HInferRepresentation* h_infer) {
-  ASSERT(CheckFlag(kFlexibleRepresentation));
-  ASSERT(UseCount() == 1);
-  HUseIterator use = uses();
-  Representation r = use.value()->RequiredInputRepresentation(use.index());
-  UpdateRepresentation(r, h_infer, "checksmiorint32");
 }
 
 
@@ -3560,6 +3558,7 @@ void HPhi::InferRepresentation(HInferRepresentation* h_infer) {
 Representation HPhi::RepresentationFromInputs() {
   bool double_occurred = false;
   bool int32_occurred = false;
+  bool smi_occurred = false;
   for (int i = 0; i < OperandCount(); ++i) {
     HValue* value = OperandAt(i);
     if (value->IsUnknownOSRValue()) {
@@ -3569,11 +3568,13 @@ Representation HPhi::RepresentationFromInputs() {
         if (hint.IsTagged()) return hint;
         if (hint.IsDouble()) double_occurred = true;
         if (hint.IsInteger32()) int32_occurred = true;
+        if (hint.IsSmi()) smi_occurred = true;
       }
       continue;
     }
     if (value->representation().IsDouble()) double_occurred = true;
     if (value->representation().IsInteger32()) int32_occurred = true;
+    if (value->representation().IsSmi()) smi_occurred = true;
     if (value->representation().IsTagged()) {
       if (value->IsConstant()) {
         HConstant* constant = HConstant::cast(value);
@@ -3593,8 +3594,8 @@ Representation HPhi::RepresentationFromInputs() {
   }
 
   if (double_occurred) return Representation::Double();
-
   if (int32_occurred) return Representation::Integer32();
+  if (smi_occurred) return Representation::Smi();
 
   return Representation::None();
 }
@@ -3652,12 +3653,6 @@ void HSimulate::Verify() {
 }
 
 
-void HCheckSmi::Verify() {
-  HInstruction::Verify();
-  ASSERT(HasNoUses());
-}
-
-
 void HCheckNonSmi::Verify() {
   HInstruction::Verify();
   ASSERT(HasNoUses());
@@ -3670,5 +3665,142 @@ void HCheckFunction::Verify() {
 }
 
 #endif
+
+
+HObjectAccess HObjectAccess::ForFixedArrayHeader(int offset) {
+  ASSERT(offset >= 0);
+  ASSERT(offset < FixedArray::kHeaderSize);
+  if (offset == FixedArray::kLengthOffset) return ForFixedArrayLength();
+  return HObjectAccess(kInobject, offset);
+}
+
+
+HObjectAccess HObjectAccess::ForJSObjectOffset(int offset) {
+  ASSERT(offset >= 0);
+  Portion portion = kInobject;
+
+  if (offset == JSObject::kElementsOffset) {
+    portion = kElementsPointer;
+  } else if (offset == JSObject::kMapOffset) {
+    portion = kMaps;
+  }
+  return HObjectAccess(portion, offset, Handle<String>::null());
+}
+
+
+HObjectAccess HObjectAccess::ForJSArrayOffset(int offset) {
+  ASSERT(offset >= 0);
+  Portion portion = kInobject;
+
+  if (offset == JSObject::kElementsOffset) {
+    portion = kElementsPointer;
+  } else if (offset == JSArray::kLengthOffset) {
+    portion = kArrayLengths;
+  } else if (offset == JSObject::kMapOffset) {
+    portion = kMaps;
+  }
+  return HObjectAccess(portion, offset, Handle<String>::null());
+}
+
+
+HObjectAccess HObjectAccess::ForBackingStoreOffset(int offset) {
+  ASSERT(offset >= 0);
+  return HObjectAccess(kBackingStore, offset, Handle<String>::null());
+}
+
+
+HObjectAccess HObjectAccess::ForField(Handle<Map> map,
+    LookupResult *lookup, Handle<String> name) {
+  ASSERT(lookup->IsField() || lookup->IsTransitionToField(*map));
+  int index;
+  if (lookup->IsField()) {
+    index = lookup->GetLocalFieldIndexFromMap(*map);
+  } else {
+    Map* transition = lookup->GetTransitionMapFromMap(*map);
+    int descriptor = transition->LastAdded();
+    index = transition->instance_descriptors()->GetFieldIndex(descriptor) -
+        map->inobject_properties();
+  }
+  if (index < 0) {
+    // Negative property indices are in-object properties, indexed
+    // from the end of the fixed part of the object.
+    int offset = (index * kPointerSize) + map->instance_size();
+    return HObjectAccess(kInobject, offset);
+  } else {
+    // Non-negative property indices are in the properties array.
+    int offset = (index * kPointerSize) + FixedArray::kHeaderSize;
+    return HObjectAccess(kBackingStore, offset, name);
+  }
+}
+
+
+void HObjectAccess::SetGVNFlags(HValue *instr, bool is_store) {
+  // set the appropriate GVN flags for a given load or store instruction
+  if (is_store) {
+    // track dominating allocations in order to eliminate write barriers
+    instr->SetGVNFlag(kDependsOnNewSpacePromotion);
+    instr->SetFlag(HValue::kTrackSideEffectDominators);
+    instr->SetFlag(HValue::kDeoptimizeOnUndefined);
+  } else {
+    // try to GVN loads, but don't hoist above map changes
+    instr->SetFlag(HValue::kUseGVN);
+    instr->SetGVNFlag(kDependsOnMaps);
+  }
+
+  switch (portion()) {
+    case kArrayLengths:
+      instr->SetGVNFlag(is_store
+          ? kChangesArrayLengths : kDependsOnArrayLengths);
+      break;
+    case kInobject:
+      instr->SetGVNFlag(is_store
+          ? kChangesInobjectFields : kDependsOnInobjectFields);
+      break;
+    case kDouble:
+      instr->SetGVNFlag(is_store
+          ? kChangesDoubleFields : kDependsOnDoubleFields);
+      break;
+    case kBackingStore:
+      instr->SetGVNFlag(is_store
+          ? kChangesBackingStoreFields : kDependsOnBackingStoreFields);
+      break;
+    case kElementsPointer:
+      instr->SetGVNFlag(is_store
+          ? kChangesElementsPointer : kDependsOnElementsPointer);
+      break;
+    case kMaps:
+      instr->SetGVNFlag(is_store
+          ? kChangesMaps : kDependsOnMaps);
+      break;
+  }
+}
+
+
+void HObjectAccess::PrintTo(StringStream* stream) {
+  stream->Add(".");
+
+  switch (portion()) {
+    case kArrayLengths:
+      stream->Add("%length");
+      break;
+    case kElementsPointer:
+      stream->Add("%elements");
+      break;
+    case kMaps:
+      stream->Add("%map");
+      break;
+    case kDouble:  // fall through
+    case kInobject:
+      if (!name_.is_null()) stream->Add(*String::cast(*name_)->ToCString());
+      stream->Add("[in-object]");
+      break;
+    case kBackingStore:
+      if (!name_.is_null()) stream->Add(*String::cast(*name_)->ToCString());
+      stream->Add("[backing-store]");
+      break;
+  }
+
+  stream->Add("@%d", offset());
+}
 
 } }  // namespace v8::internal

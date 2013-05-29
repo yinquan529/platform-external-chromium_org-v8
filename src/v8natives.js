@@ -1225,20 +1225,27 @@ function ObjectFreeze(obj) {
   if (!IS_SPEC_OBJECT(obj)) {
     throw MakeTypeError("called_on_non_object", ["Object.freeze"]);
   }
-  if (%IsJSProxy(obj)) {
-    ProxyFix(obj);
-  }
-  var names = ObjectGetOwnPropertyNames(obj);
-  for (var i = 0; i < names.length; i++) {
-    var name = names[i];
-    var desc = GetOwnProperty(obj, name);
-    if (desc.isWritable() || desc.isConfigurable()) {
-      if (IsDataDescriptor(desc)) desc.setWritable(false);
-      desc.setConfigurable(false);
-      DefineOwnProperty(obj, name, desc, true);
+  var isProxy = %IsJSProxy(obj);
+  if (isProxy || %HasNonStrictArgumentsElements(obj)) {
+    if (isProxy) {
+      ProxyFix(obj);
     }
+    var names = ObjectGetOwnPropertyNames(obj);
+    for (var i = 0; i < names.length; i++) {
+      var name = names[i];
+      var desc = GetOwnProperty(obj, name);
+      if (desc.isWritable() || desc.isConfigurable()) {
+        if (IsDataDescriptor(desc)) desc.setWritable(false);
+        desc.setConfigurable(false);
+        DefineOwnProperty(obj, name, desc, true);
+      }
+    }
+    %PreventExtensions(obj);
+  } else {
+    // TODO(adamk): Is it worth going to this fast path if the
+    // object's properties are already in dictionary mode?
+    %ObjectFreeze(obj);
   }
-  %PreventExtensions(obj);
   return obj;
 }
 
@@ -1767,7 +1774,9 @@ function NewFunction(arg1) {  // length == 1
     // If the formal parameters string include ) - an illegal
     // character - it may make the combined function expression
     // compile. We avoid this problem by checking for this early on.
-    if (p.indexOf(')') != -1) throw MakeSyntaxError('paren_in_arg_string',[]);
+    if (%_CallFunction(p, ')', StringIndexOf) != -1) {
+      throw MakeSyntaxError('paren_in_arg_string',[]);
+    }
     // If the formal parameters include an unbalanced block comment, the
     // function must be rejected. Since JavaScript does not allow nested
     // comments we can include a trailing block comment to catch this.

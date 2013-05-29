@@ -339,13 +339,12 @@ MaybeObject* JSObject::GetPropertyWithCallback(Object* receiver,
     JSObject* self = JSObject::cast(receiver);
     Handle<String> key(String::cast(name));
     LOG(isolate, ApiNamedPropertyAccess("load", self, name));
-    CustomArguments args(isolate, data->data(), self, this);
-    v8::AccessorInfo info(args.end());
+    PropertyCallbackArguments args(isolate, data->data(), self, this);
     v8::Handle<v8::Value> result;
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = call_fun(v8::Utils::ToLocal(key), info);
+      result = args.Call(call_fun, v8::Utils::ToLocal(key));
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
     if (result.IsEmpty()) {
@@ -1802,7 +1801,9 @@ MaybeObject* JSObject::AddFastProperty(Name* name,
   int index = map()->NextFreePropertyIndex();
 
   // Allocate new instance descriptors with (name, index) added
-  Representation representation = value->OptimalRepresentation();
+  Representation representation = IsJSContextExtensionObject()
+      ? Representation::Tagged() : value->OptimalRepresentation();
+
   FieldDescriptor new_field(name, index, attributes, representation);
 
   ASSERT(index < map()->inobject_properties() ||
@@ -2055,8 +2056,8 @@ MaybeObject* JSObject::ConvertTransitionToMapTransition(
   Map* old_target = old_map->GetTransition(transition_index);
   Object* result;
 
-  MaybeObject* maybe_result =
-      ConvertDescriptorToField(name, new_value, attributes);
+  MaybeObject* maybe_result = ConvertDescriptorToField(
+      name, new_value, attributes, OMIT_TRANSITION_KEEP_REPRESENTATIONS);
   if (!maybe_result->To(&result)) return maybe_result;
 
   if (!HasFastProperties()) return result;
@@ -2097,7 +2098,8 @@ MaybeObject* JSObject::ConvertTransitionToMapTransition(
 
 MaybeObject* JSObject::ConvertDescriptorToField(Name* name,
                                                 Object* new_value,
-                                                PropertyAttributes attributes) {
+                                                PropertyAttributes attributes,
+                                                TransitionFlag flag) {
   if (map()->unused_property_fields() == 0 &&
       TooManyFastProperties(properties()->length(), MAY_BE_STORE_FROM_KEYED)) {
     Object* obj;
@@ -2106,14 +2108,14 @@ MaybeObject* JSObject::ConvertDescriptorToField(Name* name,
     return ReplaceSlowProperty(name, new_value, attributes);
   }
 
-  Representation representation = new_value->OptimalRepresentation();
+  Representation representation = IsJSContextExtensionObject()
+      ? Representation::Tagged() : new_value->OptimalRepresentation();
   int index = map()->NextFreePropertyIndex();
   FieldDescriptor new_field(name, index, attributes, representation);
 
   // Make a new map for the object.
   Map* new_map;
-  MaybeObject* maybe_new_map = map()->CopyInsertDescriptor(&new_field,
-                                                           OMIT_TRANSITION);
+  MaybeObject* maybe_new_map = map()->CopyInsertDescriptor(&new_field, flag);
   if (!maybe_new_map->To(&new_map)) return maybe_new_map;
 
   // Make new properties array if necessary.
@@ -2186,7 +2188,7 @@ static void RightTrimFixedArray(Heap* heap, FixedArray* elms, int to_trim) {
   Address new_end = elms->address() + FixedArray::SizeFor(len - to_trim);
 
   if (trim_mode != FROM_GC || Heap::ShouldZapGarbage()) {
-      ZapEndOfFixedArray(new_end, to_trim);
+    ZapEndOfFixedArray(new_end, to_trim);
   }
 
   int size_delta = to_trim * kPointerSize;
@@ -2437,6 +2439,7 @@ Map* Map::FindRootMap() {
 }
 
 
+// Returns NULL if the updated map is incompatible.
 Map* Map::FindUpdatedMap(int verbatim,
                          int length,
                          DescriptorArray* descriptors) {
@@ -2452,6 +2455,17 @@ Map* Map::FindUpdatedMap(int verbatim,
     int transition = transitions->Search(name);
     if (transition == TransitionArray::kNotFound) break;
     current = transitions->GetTarget(transition);
+    PropertyDetails details = descriptors->GetDetails(i);
+    PropertyDetails target_details =
+        current->instance_descriptors()->GetDetails(i);
+    if (details.attributes() != target_details.attributes()) return NULL;
+    if (details.type() == CALLBACKS) {
+      if (target_details.type() != CALLBACKS) return NULL;
+      if (descriptors->GetValue(i) !=
+              current->instance_descriptors()->GetValue(i)) {
+        return NULL;
+      }
+    }
   }
 
   return current;
@@ -2526,6 +2540,7 @@ MaybeObject* Map::GeneralizeRepresentation(int modify_index,
   int descriptors = old_map->NumberOfOwnDescriptors();
   Map* root_map = old_map->FindRootMap();
 
+  // Check the state of the root map.
   if (!old_map->EquivalentToForTransition(root_map)) {
     return CopyGeneralizeAllRepresentations();
   }
@@ -2534,7 +2549,8 @@ MaybeObject* Map::GeneralizeRepresentation(int modify_index,
 
   Map* updated = root_map->FindUpdatedMap(
       verbatim, descriptors, old_descriptors);
-  // Check the state of the root map.
+  if (updated == NULL) return CopyGeneralizeAllRepresentations();
+
   DescriptorArray* updated_descriptors = updated->instance_descriptors();
 
   int valid = updated->NumberOfOwnDescriptors();
@@ -2611,6 +2627,34 @@ MaybeObject* Map::GeneralizeRepresentation(int modify_index,
 }
 
 
+Map* Map::CurrentMapForDeprecated() {
+  AssertNoAllocation no_allocation;
+  if (!is_deprecated()) return this;
+
+  DescriptorArray* old_descriptors = instance_descriptors();
+
+  int descriptors = NumberOfOwnDescriptors();
+  Map* root_map = FindRootMap();
+
+  // Check the state of the root map.
+  if (!EquivalentToForTransition(root_map)) return NULL;
+  int verbatim = root_map->NumberOfOwnDescriptors();
+
+  Map* updated = root_map->FindUpdatedMap(
+      verbatim, descriptors, old_descriptors);
+  if (updated == NULL) return NULL;
+
+  DescriptorArray* updated_descriptors = updated->instance_descriptors();
+  int valid = updated->NumberOfOwnDescriptors();
+  if (!updated_descriptors->IsMoreGeneralThan(
+          verbatim, valid, descriptors, old_descriptors)) {
+    return NULL;
+  }
+
+  return updated;
+}
+
+
 MaybeObject* JSObject::SetPropertyWithInterceptor(
     Name* name,
     Object* value,
@@ -2626,8 +2670,7 @@ MaybeObject* JSObject::SetPropertyWithInterceptor(
   Handle<InterceptorInfo> interceptor(GetNamedInterceptor());
   if (!interceptor->setter()->IsUndefined()) {
     LOG(isolate, ApiNamedPropertyAccess("interceptor-named-set", this, name));
-    CustomArguments args(isolate, interceptor->data(), this, this);
-    v8::AccessorInfo info(args.end());
+    PropertyCallbackArguments args(isolate, interceptor->data(), this, this);
     v8::NamedPropertySetter setter =
         v8::ToCData<v8::NamedPropertySetter>(interceptor->setter());
     v8::Handle<v8::Value> result;
@@ -2638,9 +2681,9 @@ MaybeObject* JSObject::SetPropertyWithInterceptor(
                                   isolate->heap()->undefined_value() :
                                   value,
                                   isolate);
-      result = setter(v8::Utils::ToLocal(name_handle),
-                      v8::Utils::ToLocal(value_unhole),
-                      info);
+      result = args.Call(setter,
+                         v8::Utils::ToLocal(name_handle),
+                         v8::Utils::ToLocal(value_unhole));
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
     if (!result.IsEmpty()) return *value_handle;
@@ -2740,14 +2783,14 @@ MaybeObject* JSObject::SetPropertyWithCallback(Object* structure,
     if (call_fun == NULL) return value;
     Handle<String> key(String::cast(name));
     LOG(isolate, ApiNamedPropertyAccess("store", this, name));
-    CustomArguments args(isolate, data->data(), this, JSObject::cast(holder));
-    v8::AccessorInfo info(args.end());
+    PropertyCallbackArguments
+      args(isolate, data->data(), this, JSObject::cast(holder));
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      call_fun(v8::Utils::ToLocal(key),
-               v8::Utils::ToLocal(value_handle),
-               info);
+      args.Call(call_fun,
+                v8::Utils::ToLocal(key),
+                v8::Utils::ToLocal(value_handle));
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
     return *value_handle;
@@ -3601,6 +3644,19 @@ void JSObject::MigrateInstance(Handle<JSObject> object) {
 }
 
 
+Handle<Object> JSObject::TryMigrateInstance(Handle<JSObject> object) {
+  if (FLAG_trace_migration) {
+    PrintF("migrating instance (no new maps) %p (%p)\n",
+           static_cast<void*>(*object),
+           static_cast<void*>(object->map()));
+  }
+  CALL_HEAP_FUNCTION(
+      object->GetIsolate(),
+      object->MigrateInstance(),
+      Object);
+}
+
+
 Handle<Map> Map::GeneralizeRepresentation(Handle<Map> map,
                                           int modify_index,
                                           Representation representation) {
@@ -4049,8 +4105,7 @@ PropertyAttributes JSObject::GetPropertyAttributeWithInterceptor(
   Handle<JSObject> receiver_handle(receiver);
   Handle<JSObject> holder_handle(this);
   Handle<String> name_handle(String::cast(name));
-  CustomArguments args(isolate, interceptor->data(), receiver, this);
-  v8::AccessorInfo info(args.end());
+  PropertyCallbackArguments args(isolate, interceptor->data(), receiver, this);
   if (!interceptor->query()->IsUndefined()) {
     v8::NamedPropertyQuery query =
         v8::ToCData<v8::NamedPropertyQuery>(interceptor->query());
@@ -4060,7 +4115,7 @@ PropertyAttributes JSObject::GetPropertyAttributeWithInterceptor(
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = query(v8::Utils::ToLocal(name_handle), info);
+      result = args.Call(query, v8::Utils::ToLocal(name_handle));
     }
     if (!result.IsEmpty()) {
       ASSERT(result->IsInt32());
@@ -4075,7 +4130,7 @@ PropertyAttributes JSObject::GetPropertyAttributeWithInterceptor(
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = getter(v8::Utils::ToLocal(name_handle), info);
+      result = args.Call(getter, v8::Utils::ToLocal(name_handle));
     }
     if (!result.IsEmpty()) return DONT_ENUM;
   }
@@ -4190,8 +4245,7 @@ PropertyAttributes JSObject::GetElementAttributeWithInterceptor(
   Handle<InterceptorInfo> interceptor(GetIndexedInterceptor());
   Handle<JSReceiver> hreceiver(receiver);
   Handle<JSObject> holder(this);
-  CustomArguments args(isolate, interceptor->data(), receiver, this);
-  v8::AccessorInfo info(args.end());
+  PropertyCallbackArguments args(isolate, interceptor->data(), receiver, this);
   if (!interceptor->query()->IsUndefined()) {
     v8::IndexedPropertyQuery query =
         v8::ToCData<v8::IndexedPropertyQuery>(interceptor->query());
@@ -4201,7 +4255,7 @@ PropertyAttributes JSObject::GetElementAttributeWithInterceptor(
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = query(index, info);
+      result = args.Call(query, index);
     }
     if (!result.IsEmpty())
       return static_cast<PropertyAttributes>(result->Int32Value());
@@ -4214,7 +4268,7 @@ PropertyAttributes JSObject::GetElementAttributeWithInterceptor(
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = getter(index, info);
+      result = args.Call(getter, index);
     }
     if (!result.IsEmpty()) return NONE;
   }
@@ -4466,6 +4520,42 @@ MaybeObject* JSObject::TransformToFastProperties(int unused_property_fields) {
 }
 
 
+static MUST_USE_RESULT MaybeObject* CopyFastElementsToDictionary(
+    Isolate* isolate,
+    FixedArrayBase* array,
+    int length,
+    SeededNumberDictionary* dictionary) {
+  Heap* heap = isolate->heap();
+  bool has_double_elements = array->IsFixedDoubleArray();
+  for (int i = 0; i < length; i++) {
+    Object* value = NULL;
+    if (has_double_elements) {
+      FixedDoubleArray* double_array = FixedDoubleArray::cast(array);
+      if (double_array->is_the_hole(i)) {
+        value = isolate->heap()->the_hole_value();
+      } else {
+        // Objects must be allocated in the old object space, since the
+        // overall number of HeapNumbers needed for the conversion might
+        // exceed the capacity of new space, and we would fail repeatedly
+        // trying to convert the FixedDoubleArray.
+        MaybeObject* maybe_value_object =
+            heap->AllocateHeapNumber(double_array->get_scalar(i), TENURED);
+        if (!maybe_value_object->ToObject(&value)) return maybe_value_object;
+      }
+    } else {
+      value = FixedArray::cast(array)->get(i);
+    }
+    if (!value->IsTheHole()) {
+      PropertyDetails details = PropertyDetails(NONE, NORMAL, 0);
+      MaybeObject* maybe_result =
+          dictionary->AddNumberEntry(i, value, details);
+      if (!maybe_result->To(&dictionary)) return maybe_result;
+    }
+  }
+  return dictionary;
+}
+
+
 Handle<SeededNumberDictionary> JSObject::NormalizeElements(
     Handle<JSObject> object) {
   CALL_HEAP_FUNCTION(object->GetIsolate(),
@@ -4497,44 +4587,14 @@ MaybeObject* JSObject::NormalizeElements() {
   int old_capacity = 0;
   int used_elements = 0;
   GetElementsCapacityAndUsage(&old_capacity, &used_elements);
-  SeededNumberDictionary* dictionary = NULL;
-  { Object* object;
-    MaybeObject* maybe =
-        SeededNumberDictionary::Allocate(GetHeap(), used_elements);
-    if (!maybe->ToObject(&object)) return maybe;
-    dictionary = SeededNumberDictionary::cast(object);
-  }
+  SeededNumberDictionary* dictionary;
+  MaybeObject* maybe_dictionary =
+      SeededNumberDictionary::Allocate(GetHeap(), used_elements);
+  if (!maybe_dictionary->To(&dictionary)) return maybe_dictionary;
 
-  // Copy the elements to the new backing store.
-  bool has_double_elements = array->IsFixedDoubleArray();
-  for (int i = 0; i < length; i++) {
-    Object* value = NULL;
-    if (has_double_elements) {
-      FixedDoubleArray* double_array = FixedDoubleArray::cast(array);
-      if (double_array->is_the_hole(i)) {
-        value = GetIsolate()->heap()->the_hole_value();
-      } else {
-        // Objects must be allocated in the old object space, since the
-        // overall number of HeapNumbers needed for the conversion might
-        // exceed the capacity of new space, and we would fail repeatedly
-        // trying to convert the FixedDoubleArray.
-        MaybeObject* maybe_value_object =
-            GetHeap()->AllocateHeapNumber(double_array->get_scalar(i), TENURED);
-        if (!maybe_value_object->ToObject(&value)) return maybe_value_object;
-      }
-    } else {
-      ASSERT(old_map->has_fast_smi_or_object_elements());
-      value = FixedArray::cast(array)->get(i);
-    }
-    PropertyDetails details = PropertyDetails(NONE, NORMAL, 0);
-    if (!value->IsTheHole()) {
-      Object* result;
-      MaybeObject* maybe_result =
-          dictionary->AddNumberEntry(i, value, details);
-      if (!maybe_result->ToObject(&result)) return maybe_result;
-      dictionary = SeededNumberDictionary::cast(result);
-    }
-  }
+  maybe_dictionary = CopyFastElementsToDictionary(
+      GetIsolate(), array, length, dictionary);
+  if (!maybe_dictionary->To(&dictionary)) return maybe_dictionary;
 
   // Switch to using the dictionary as the backing storage for elements.
   if (is_arguments) {
@@ -4542,11 +4602,11 @@ MaybeObject* JSObject::NormalizeElements() {
   } else {
     // Set the new map first to satify the elements type assert in
     // set_elements().
-    Object* new_map;
+    Map* new_map;
     MaybeObject* maybe = GetElementsTransitionMap(GetIsolate(),
                                                   DICTIONARY_ELEMENTS);
-    if (!maybe->ToObject(&new_map)) return maybe;
-    set_map(Map::cast(new_map));
+    if (!maybe->To(&new_map)) return maybe;
+    set_map(new_map);
     set_elements(dictionary);
   }
 
@@ -4878,13 +4938,12 @@ MaybeObject* JSObject::DeletePropertyWithInterceptor(Name* name) {
         v8::ToCData<v8::NamedPropertyDeleter>(interceptor->deleter());
     LOG(isolate,
         ApiNamedPropertyAccess("interceptor-named-delete", *this_handle, name));
-    CustomArguments args(isolate, interceptor->data(), this, this);
-    v8::AccessorInfo info(args.end());
+    PropertyCallbackArguments args(isolate, interceptor->data(), this, this);
     v8::Handle<v8::Boolean> result;
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = deleter(v8::Utils::ToLocal(name_handle), info);
+      result = args.Call(deleter, v8::Utils::ToLocal(name_handle));
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
     if (!result.IsEmpty()) {
@@ -4915,13 +4974,12 @@ MaybeObject* JSObject::DeleteElementWithInterceptor(uint32_t index) {
   Handle<JSObject> this_handle(this);
   LOG(isolate,
       ApiIndexedPropertyAccess("interceptor-indexed-delete", this, index));
-  CustomArguments args(isolate, interceptor->data(), this, this);
-  v8::AccessorInfo info(args.end());
+  PropertyCallbackArguments args(isolate, interceptor->data(), this, this);
   v8::Handle<v8::Boolean> result;
   {
     // Leaving JavaScript.
     VMState<EXTERNAL> state(isolate);
-    result = deleter(index, info);
+    result = args.Call(deleter, index);
   }
   RETURN_IF_SCHEDULED_EXCEPTION(isolate);
   if (!result.IsEmpty()) {
@@ -5292,6 +5350,7 @@ MaybeObject* JSObject::PreventExtensions() {
 
   // Do a map transition, other objects with this map may still
   // be extensible.
+  // TODO(adamk): Extend the NormalizedMapCache to handle non-extensible maps.
   Map* new_map;
   MaybeObject* maybe = map()->Copy();
   if (!maybe->To(&new_map)) return maybe;
@@ -5300,6 +5359,145 @@ MaybeObject* JSObject::PreventExtensions() {
   set_map(new_map);
   ASSERT(!map()->is_extensible());
   return new_map;
+}
+
+
+template<typename Dictionary>
+static void FreezeDictionary(Dictionary* dictionary) {
+  int capacity = dictionary->Capacity();
+  for (int i = 0; i < capacity; i++) {
+    Object* k = dictionary->KeyAt(i);
+    if (dictionary->IsKey(k)) {
+      PropertyDetails details = dictionary->DetailsAt(i);
+      int attrs = DONT_DELETE;
+      // READ_ONLY is an invalid attribute for JS setters/getters.
+      if (details.type() != CALLBACKS ||
+          !dictionary->ValueAt(i)->IsAccessorPair()) {
+        attrs |= READ_ONLY;
+      }
+      details = details.CopyAddAttributes(
+          static_cast<PropertyAttributes>(attrs));
+      dictionary->DetailsAtPut(i, details);
+    }
+  }
+}
+
+
+MUST_USE_RESULT MaybeObject* JSObject::Freeze(Isolate* isolate) {
+  // Freezing non-strict arguments should be handled elsewhere.
+  ASSERT(!HasNonStrictArgumentsElements());
+
+  Heap* heap = isolate->heap();
+
+  if (map()->is_frozen()) return this;
+
+  if (IsAccessCheckNeeded() &&
+      !isolate->MayNamedAccess(this,
+                               heap->undefined_value(),
+                               v8::ACCESS_KEYS)) {
+    isolate->ReportFailedAccessCheck(this, v8::ACCESS_KEYS);
+    return heap->false_value();
+  }
+
+  if (IsJSGlobalProxy()) {
+    Object* proto = GetPrototype();
+    if (proto->IsNull()) return this;
+    ASSERT(proto->IsJSGlobalObject());
+    return JSObject::cast(proto)->Freeze(isolate);
+  }
+
+  // It's not possible to freeze objects with external array elements
+  if (HasExternalArrayElements()) {
+    HandleScope scope(isolate);
+    Handle<Object> object(this, isolate);
+    Handle<Object> error  =
+        isolate->factory()->NewTypeError(
+            "cant_prevent_ext_external_array_elements",
+            HandleVector(&object, 1));
+    return isolate->Throw(*error);
+  }
+
+  SeededNumberDictionary* new_element_dictionary = NULL;
+  if (!elements()->IsDictionary()) {
+    int length = IsJSArray()
+        ? Smi::cast(JSArray::cast(this)->length())->value()
+        : elements()->length();
+    if (length > 0) {
+      int capacity = 0;
+      int used = 0;
+      GetElementsCapacityAndUsage(&capacity, &used);
+      MaybeObject* maybe_dict = SeededNumberDictionary::Allocate(heap, used);
+      if (!maybe_dict->To(&new_element_dictionary)) return maybe_dict;
+
+      // Move elements to a dictionary; avoid calling NormalizeElements to avoid
+      // unnecessary transitions.
+      maybe_dict = CopyFastElementsToDictionary(isolate, elements(), length,
+                                                new_element_dictionary);
+      if (!maybe_dict->To(&new_element_dictionary)) return maybe_dict;
+    } else {
+      // No existing elements, use a pre-allocated empty backing store
+      new_element_dictionary = heap->empty_slow_element_dictionary();
+    }
+  }
+
+  LookupResult result(isolate);
+  map()->LookupTransition(this, heap->frozen_symbol(), &result);
+  if (result.IsTransition()) {
+    Map* transition_map = result.GetTransitionTarget();
+    ASSERT(transition_map->has_dictionary_elements());
+    ASSERT(transition_map->is_frozen());
+    ASSERT(!transition_map->is_extensible());
+    set_map(transition_map);
+  } else if (HasFastProperties() && map()->CanHaveMoreTransitions()) {
+    // Create a new descriptor array with fully-frozen properties
+    int num_descriptors = map()->NumberOfOwnDescriptors();
+    DescriptorArray* new_descriptors;
+    MaybeObject* maybe_descriptors =
+        map()->instance_descriptors()->CopyUpToAddAttributes(num_descriptors,
+                                                             FROZEN);
+    if (!maybe_descriptors->To(&new_descriptors)) return maybe_descriptors;
+
+    Map* new_map;
+    MaybeObject* maybe_new_map = map()->CopyReplaceDescriptors(
+        new_descriptors, INSERT_TRANSITION, heap->frozen_symbol());
+    if (!maybe_new_map->To(&new_map)) return maybe_new_map;
+    new_map->freeze();
+    new_map->set_is_extensible(false);
+    new_map->set_elements_kind(DICTIONARY_ELEMENTS);
+    set_map(new_map);
+  } else {
+    // Slow path: need to normalize properties for safety
+    MaybeObject* maybe = NormalizeProperties(CLEAR_INOBJECT_PROPERTIES, 0);
+    if (maybe->IsFailure()) return maybe;
+
+    // Create a new map, since other objects with this map may be extensible.
+    // TODO(adamk): Extend the NormalizedMapCache to handle non-extensible maps.
+    Map* new_map;
+    MaybeObject* maybe_copy = map()->Copy();
+    if (!maybe_copy->To(&new_map)) return maybe_copy;
+    new_map->freeze();
+    new_map->set_is_extensible(false);
+    new_map->set_elements_kind(DICTIONARY_ELEMENTS);
+    set_map(new_map);
+
+    // Freeze dictionary-mode properties
+    FreezeDictionary(property_dictionary());
+  }
+
+  ASSERT(map()->has_dictionary_elements());
+  if (new_element_dictionary != NULL) {
+    set_elements(new_element_dictionary);
+  }
+
+  if (elements() != heap->empty_slow_element_dictionary()) {
+    SeededNumberDictionary* dictionary = element_dictionary();
+    // Make sure we never go back to the fast case
+    dictionary->set_requires_slow_elements();
+    // Freeze all elements in the dictionary
+    FreezeDictionary(dictionary);
+  }
+
+  return this;
 }
 
 
@@ -6327,9 +6525,9 @@ MaybeObject* Map::ShareDescriptor(DescriptorArray* descriptors,
 
 
 MaybeObject* Map::CopyReplaceDescriptors(DescriptorArray* descriptors,
-                                         Name* name,
                                          TransitionFlag flag,
-                                         int descriptor_index) {
+                                         Name* name,
+                                         SimpleTransitionFlag simple_flag) {
   ASSERT(descriptors->IsSortedNoDuplicates());
 
   Map* result;
@@ -6340,17 +6538,11 @@ MaybeObject* Map::CopyReplaceDescriptors(DescriptorArray* descriptors,
 
   if (flag == INSERT_TRANSITION && CanHaveMoreTransitions()) {
     TransitionArray* transitions;
-    SimpleTransitionFlag simple_flag =
-        (descriptor_index == descriptors->number_of_descriptors() - 1)
-         ? SIMPLE_TRANSITION
-         : FULL_TRANSITION;
-    ASSERT(name == descriptors->GetKey(descriptor_index));
     MaybeObject* maybe_transitions = AddTransition(name, result, simple_flag);
     if (!maybe_transitions->To(&transitions)) return maybe_transitions;
-
     set_transitions(transitions);
     result->SetBackPointer(this);
-  } else {
+  } else if (flag != OMIT_TRANSITION_KEEP_REPRESENTATIONS) {
     descriptors->InitializeRepresentations(Representation::Tagged());
   }
 
@@ -6358,6 +6550,8 @@ MaybeObject* Map::CopyReplaceDescriptors(DescriptorArray* descriptors,
 }
 
 
+// Since this method is used to rewrite an existing transition tree, it can
+// always insert transitions without checking.
 MaybeObject* Map::CopyInstallDescriptors(int new_descriptor,
                                          DescriptorArray* descriptors) {
   ASSERT(descriptors->IsSortedNoDuplicates());
@@ -6380,18 +6574,14 @@ MaybeObject* Map::CopyInstallDescriptors(int new_descriptor,
   result->set_unused_property_fields(unused_property_fields);
   result->set_owns_descriptors(false);
 
-  if (CanHaveMoreTransitions()) {
-    Name* name = descriptors->GetKey(new_descriptor);
-    TransitionArray* transitions;
-    MaybeObject* maybe_transitions =
-        AddTransition(name, result, SIMPLE_TRANSITION);
-    if (!maybe_transitions->To(&transitions)) return maybe_transitions;
+  Name* name = descriptors->GetKey(new_descriptor);
+  TransitionArray* transitions;
+  MaybeObject* maybe_transitions =
+      AddTransition(name, result, SIMPLE_TRANSITION);
+  if (!maybe_transitions->To(&transitions)) return maybe_transitions;
 
-    set_transitions(transitions);
-    result->SetBackPointer(this);
-  } else {
-    descriptors->InitializeRepresentations(Representation::Tagged());
-  }
+  set_transitions(transitions);
+  result->SetBackPointer(this);
 
   return result;
 }
@@ -6465,7 +6655,7 @@ MaybeObject* Map::CopyWithPreallocatedFieldDescriptors() {
       descriptors->CopyUpTo(number_of_own_descriptors);
   if (!maybe_descriptors->To(&new_descriptors)) return maybe_descriptors;
 
-  return CopyReplaceDescriptors(new_descriptors, NULL, OMIT_TRANSITION, 0);
+  return CopyReplaceDescriptors(new_descriptors, OMIT_TRANSITION);
 }
 
 
@@ -6477,7 +6667,7 @@ MaybeObject* Map::Copy() {
       descriptors->CopyUpTo(number_of_own_descriptors);
   if (!maybe_descriptors->To(&new_descriptors)) return maybe_descriptors;
 
-  return CopyReplaceDescriptors(new_descriptors, NULL, OMIT_TRANSITION, 0);
+  return CopyReplaceDescriptors(new_descriptors, OMIT_TRANSITION);
 }
 
 
@@ -6518,9 +6708,7 @@ MaybeObject* Map::CopyAddDescriptor(Descriptor* descriptor,
   }
 
   Name* key = descriptor->GetKey();
-  int insertion_index = new_descriptors->number_of_descriptors() - 1;
-
-  return CopyReplaceDescriptors(new_descriptors, key, flag, insertion_index);
+  return CopyReplaceDescriptors(new_descriptors, flag, key, SIMPLE_TRANSITION);
 }
 
 
@@ -6541,7 +6729,8 @@ MaybeObject* Map::CopyInsertDescriptor(Descriptor* descriptor,
 }
 
 
-MaybeObject* DescriptorArray::CopyUpTo(int enumeration_index) {
+MaybeObject* DescriptorArray::CopyUpToAddAttributes(
+    int enumeration_index, PropertyAttributes attributes) {
   if (enumeration_index == 0) return GetHeap()->empty_descriptor_array();
 
   int size = enumeration_index;
@@ -6551,8 +6740,24 @@ MaybeObject* DescriptorArray::CopyUpTo(int enumeration_index) {
   if (!maybe_descriptors->To(&descriptors)) return maybe_descriptors;
   DescriptorArray::WhitenessWitness witness(descriptors);
 
-  for (int i = 0; i < size; ++i) {
-    descriptors->CopyFrom(i, this, i, witness);
+  if (attributes != NONE) {
+    for (int i = 0; i < size; ++i) {
+      Object* value = GetValue(i);
+      PropertyDetails details = GetDetails(i);
+      int mask = DONT_DELETE | DONT_ENUM;
+      // READ_ONLY is an invalid attribute for JS setters/getters.
+      if (details.type() != CALLBACKS || !value->IsAccessorPair()) {
+        mask |= READ_ONLY;
+      }
+      details = details.CopyAddAttributes(
+          static_cast<PropertyAttributes>(attributes & mask));
+      Descriptor desc(GetKey(i), value, details);
+      descriptors->Set(i, &desc, witness);
+    }
+  } else {
+    for (int i = 0; i < size; ++i) {
+      descriptors->CopyFrom(i, this, i, witness);
+    }
   }
 
   if (number_of_descriptors() != enumeration_index) descriptors->Sort();
@@ -6593,7 +6798,11 @@ MaybeObject* Map::CopyReplaceDescriptor(DescriptorArray* descriptors,
   // Re-sort if descriptors were removed.
   if (new_size != descriptors->length()) new_descriptors->Sort();
 
-  return CopyReplaceDescriptors(new_descriptors, key, flag, insertion_index);
+  SimpleTransitionFlag simple_flag =
+      (insertion_index == descriptors->number_of_descriptors() - 1)
+      ? SIMPLE_TRANSITION
+      : FULL_TRANSITION;
+  return CopyReplaceDescriptors(new_descriptors, flag, key, simple_flag);
 }
 
 
@@ -7509,18 +7718,12 @@ bool DescriptorArray::IsMoreGeneralThan(int verbatim,
   for (int descriptor = verbatim; descriptor < valid; descriptor++) {
     PropertyDetails details = GetDetails(descriptor);
     PropertyDetails other_details = other->GetDetails(descriptor);
-    if (details.type() != other_details.type()) {
-      if (details.type() != FIELD ||
-          other_details.type() != CONSTANT_FUNCTION) {
-        return false;
-      }
-    } else if (details.type() == CONSTANT_FUNCTION) {
-      if (GetValue(descriptor) != other->GetValue(descriptor)) {
-        return false;
-      }
-    } else if (!other_details.representation().fits_into(
-                   details.representation())) {
+    if (!other_details.representation().fits_into(details.representation())) {
       return false;
+    }
+    if (details.type() == CONSTANT_FUNCTION) {
+      if (other_details.type() != CONSTANT_FUNCTION) return false;
+      if (GetValue(descriptor) != other->GetValue(descriptor)) return false;
     }
   }
 
@@ -7641,6 +7844,7 @@ bool String::LooksValid() {
 
 
 String::FlatContent String::GetFlatContent() {
+  ASSERT(!GetHeap()->allow_allocation(false));
   int length = this->length();
   StringShape shape(this);
   String* string = this;
@@ -7867,6 +8071,8 @@ void FlatStringReader::PostGarbageCollection() {
   if (str_ == NULL) return;
   Handle<String> str(str_);
   ASSERT(str->IsFlat());
+  AssertNoAllocation no_gc;
+  // This does not actually prevent the vector from being relocated later.
   String::FlatContent content = str->GetFlatContent();
   ASSERT(content.IsFlat());
   is_ascii_ = content.IsAscii();
@@ -8418,6 +8624,7 @@ bool String::IsUtf8EqualTo(Vector<const char> str, bool allow_prefix_match) {
 bool String::IsOneByteEqualTo(Vector<const uint8_t> str) {
   int slen = length();
   if (str.length() != slen) return false;
+  AssertNoAllocation no_gc;
   FlatContent content = GetFlatContent();
   if (content.IsAscii()) {
     return CompareChars(content.ToOneByteVector().start(),
@@ -8433,6 +8640,7 @@ bool String::IsOneByteEqualTo(Vector<const uint8_t> str) {
 bool String::IsTwoByteEqualTo(Vector<const uc16> str) {
   int slen = length();
   if (str.length() != slen) return false;
+  AssertNoAllocation no_gc;
   FlatContent content = GetFlatContent();
   if (content.IsTwoByte()) {
     return CompareChars(content.ToUC16Vector().start(), str.start(), slen) == 0;
@@ -8976,33 +9184,49 @@ void SharedFunctionInfo::AddToOptimizedCodeMap(
     Handle<Context> native_context,
     Handle<Code> code,
     Handle<FixedArray> literals) {
+  CALL_HEAP_FUNCTION_VOID(
+      shared->GetIsolate(),
+      shared->AddToOptimizedCodeMap(*native_context, *code, *literals));
+}
+
+
+MaybeObject* SharedFunctionInfo::AddToOptimizedCodeMap(Context* native_context,
+                                                       Code* code,
+                                                       FixedArray* literals) {
   ASSERT(code->kind() == Code::OPTIMIZED_FUNCTION);
   ASSERT(native_context->IsNativeContext());
   STATIC_ASSERT(kEntryLength == 3);
-  Object* value = shared->optimized_code_map();
-  Handle<FixedArray> new_code_map;
+  Heap* heap = GetHeap();
+  FixedArray* new_code_map;
+  Object* value = optimized_code_map();
   if (value->IsSmi()) {
     // No optimized code map.
     ASSERT_EQ(0, Smi::cast(value)->value());
     // Crate 3 entries per context {context, code, literals}.
-    new_code_map = FACTORY->NewFixedArray(kEntryLength);
-    new_code_map->set(0, *native_context);
-    new_code_map->set(1, *code);
-    new_code_map->set(2, *literals);
+    MaybeObject* maybe = heap->AllocateFixedArray(kInitialLength);
+    if (!maybe->To(&new_code_map)) return maybe;
+    new_code_map->set(kEntriesStart + 0, native_context);
+    new_code_map->set(kEntriesStart + 1, code);
+    new_code_map->set(kEntriesStart + 2, literals);
   } else {
     // Copy old map and append one new entry.
-    Handle<FixedArray> old_code_map(FixedArray::cast(value));
-    ASSERT_EQ(-1, shared->SearchOptimizedCodeMap(*native_context));
+    FixedArray* old_code_map = FixedArray::cast(value);
+    ASSERT_EQ(-1, SearchOptimizedCodeMap(native_context));
     int old_length = old_code_map->length();
     int new_length = old_length + kEntryLength;
-    new_code_map = FACTORY->NewFixedArray(new_length);
-    old_code_map->CopyTo(0, *new_code_map, 0, old_length);
-    new_code_map->set(old_length, *native_context);
-    new_code_map->set(old_length + 1, *code);
-    new_code_map->set(old_length + 2, *literals);
+    MaybeObject* maybe = old_code_map->CopySize(new_length);
+    if (!maybe->To(&new_code_map)) return maybe;
+    new_code_map->set(old_length + 0, native_context);
+    new_code_map->set(old_length + 1, code);
+    new_code_map->set(old_length + 2, literals);
+    // Zap the old map for the sake of the heap verifier.
+    if (Heap::ShouldZapGarbage()) {
+      Object** data = old_code_map->data_start();
+      MemsetPointer(data, heap->the_hole_value(), old_length);
+    }
   }
 #ifdef DEBUG
-  for (int i = 0; i < new_code_map->length(); i += kEntryLength) {
+  for (int i = kEntriesStart; i < new_code_map->length(); i += kEntryLength) {
     ASSERT(new_code_map->get(i)->IsNativeContext());
     ASSERT(new_code_map->get(i + 1)->IsCode());
     ASSERT(Code::cast(new_code_map->get(i + 1))->kind() ==
@@ -9010,14 +9234,14 @@ void SharedFunctionInfo::AddToOptimizedCodeMap(
     ASSERT(new_code_map->get(i + 2)->IsFixedArray());
   }
 #endif
-  shared->set_optimized_code_map(*new_code_map);
+  set_optimized_code_map(new_code_map);
+  return new_code_map;
 }
 
 
 void SharedFunctionInfo::InstallFromOptimizedCodeMap(JSFunction* function,
                                                      int index) {
-  ASSERT(index > 0);
-  ASSERT(optimized_code_map()->IsFixedArray());
+  ASSERT(index > kEntriesStart);
   FixedArray* code_map = FixedArray::cast(optimized_code_map());
   if (!bound()) {
     FixedArray* cached_literals = FixedArray::cast(code_map->get(index + 1));
@@ -9031,15 +9255,18 @@ void SharedFunctionInfo::InstallFromOptimizedCodeMap(JSFunction* function,
 }
 
 
-void SharedFunctionInfo::ClearOptimizedCodeMap(const char* reason) {
-  if (!optimized_code_map()->IsSmi()) {
-    if (FLAG_trace_opt) {
-      PrintF("[clearing entire optimizing code map (%s) for ", reason);
-      ShortPrint();
-      PrintF("]\n");
-    }
-    set_optimized_code_map(Smi::FromInt(0));
+void SharedFunctionInfo::ClearOptimizedCodeMap() {
+  FixedArray* code_map = FixedArray::cast(optimized_code_map());
+
+  // If the next map link slot is already used then the function was
+  // enqueued with code flushing and we remove it now.
+  if (!code_map->get(kNextMapIndex)->IsUndefined()) {
+    CodeFlusher* flusher = GetHeap()->mark_compact_collector()->code_flusher();
+    flusher->EvictOptimizedCodeMap(this);
   }
+
+  ASSERT(code_map->get(kNextMapIndex)->IsUndefined());
+  set_optimized_code_map(Smi::FromInt(0));
 }
 
 
@@ -9050,11 +9277,11 @@ void SharedFunctionInfo::EvictFromOptimizedCodeMap(Code* optimized_code,
   int i;
   bool removed_entry = false;
   FixedArray* code_map = FixedArray::cast(optimized_code_map());
-  for (i = 0; i < code_map->length(); i += kEntryLength) {
+  for (i = kEntriesStart; i < code_map->length(); i += kEntryLength) {
     ASSERT(code_map->get(i)->IsNativeContext());
     if (Code::cast(code_map->get(i + 1)) == optimized_code) {
       if (FLAG_trace_opt) {
-        PrintF("[clearing optimizing code map (%s) for ", reason);
+        PrintF("[evicting entry from optimizing code map (%s) for ", reason);
         ShortPrint();
         PrintF("]\n");
       }
@@ -9069,11 +9296,23 @@ void SharedFunctionInfo::EvictFromOptimizedCodeMap(Code* optimized_code,
     i += kEntryLength;
   }
   if (removed_entry) {
-    if (code_map->length() > kEntryLength) {
-      RightTrimFixedArray<FROM_MUTATOR>(GetHeap(), code_map, kEntryLength);
-    } else {
-      ClearOptimizedCodeMap(reason);
+    // Always trim even when array is cleared because of heap verifier.
+    RightTrimFixedArray<FROM_MUTATOR>(GetHeap(), code_map, kEntryLength);
+    if (code_map->length() == kEntriesStart) {
+      ClearOptimizedCodeMap();
     }
+  }
+}
+
+
+void SharedFunctionInfo::TrimOptimizedCodeMap(int shrink_by) {
+  FixedArray* code_map = FixedArray::cast(optimized_code_map());
+  ASSERT(shrink_by % kEntryLength == 0);
+  ASSERT(shrink_by <= code_map->length() - kEntriesStart);
+  // Always trim even when array is cleared because of heap verifier.
+  RightTrimFixedArray<FROM_GC>(GetHeap(), code_map, shrink_by);
+  if (code_map->length() == kEntriesStart) {
+    ClearOptimizedCodeMap();
   }
 }
 
@@ -9717,7 +9956,7 @@ int SharedFunctionInfo::SearchOptimizedCodeMap(Context* native_context) {
   if (!value->IsSmi()) {
     FixedArray* optimized_code_map = FixedArray::cast(value);
     int length = optimized_code_map->length();
-    for (int i = 0; i < length; i += 3) {
+    for (int i = kEntriesStart; i < length; i += kEntryLength) {
       if (optimized_code_map->get(i) == native_context) {
         return i + 1;
       }
@@ -9808,9 +10047,10 @@ void ObjectVisitor::VisitExternalReference(RelocInfo* rinfo) {
   VisitExternalReferences(p, p + 1);
 }
 
-byte Code::compare_nil_state() {
+byte Code::compare_nil_types() {
   ASSERT(is_compare_nil_ic_stub());
-  return CompareNilICStub::TypesFromExtraICState(extended_extra_ic_state());
+  return CompareNilICStub::ExtractTypesFromExtraICState(
+      extended_extra_ic_state());
 }
 
 
@@ -11087,13 +11327,12 @@ MaybeObject* JSObject::SetElementWithInterceptor(uint32_t index,
         v8::ToCData<v8::IndexedPropertySetter>(interceptor->setter());
     LOG(isolate,
         ApiIndexedPropertyAccess("interceptor-indexed-set", this, index));
-    CustomArguments args(isolate, interceptor->data(), this, this);
-    v8::AccessorInfo info(args.end());
+    PropertyCallbackArguments args(isolate, interceptor->data(), this, this);
     v8::Handle<v8::Value> result;
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = setter(index, v8::Utils::ToLocal(value_handle), info);
+      result = args.Call(setter, index, v8::Utils::ToLocal(value_handle));
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
     if (!result.IsEmpty()) return *value_handle;
@@ -11130,13 +11369,13 @@ MaybeObject* JSObject::GetElementWithCallback(Object* receiver,
     Handle<Object> number = isolate->factory()->NewNumberFromUint(index);
     Handle<String> key = isolate->factory()->NumberToString(number);
     LOG(isolate, ApiNamedPropertyAccess("load", *self, *key));
-    CustomArguments args(isolate, data->data(), *self, *holder_handle);
-    v8::AccessorInfo info(args.end());
+    PropertyCallbackArguments
+        args(isolate, data->data(), *self, *holder_handle);
     v8::Handle<v8::Value> result;
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = call_fun(v8::Utils::ToLocal(key), info);
+      result = args.Call(call_fun, v8::Utils::ToLocal(key));
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
     if (result.IsEmpty()) return isolate->heap()->undefined_value();
@@ -11197,14 +11436,14 @@ MaybeObject* JSObject::SetElementWithCallback(Object* structure,
     Handle<Object> number = isolate->factory()->NewNumberFromUint(index);
     Handle<String> key(isolate->factory()->NumberToString(number));
     LOG(isolate, ApiNamedPropertyAccess("store", *self, *key));
-    CustomArguments args(isolate, data->data(), *self, *holder_handle);
-    v8::AccessorInfo info(args.end());
+    PropertyCallbackArguments
+        args(isolate, data->data(), *self, *holder_handle);
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      call_fun(v8::Utils::ToLocal(key),
-               v8::Utils::ToLocal(value_handle),
-               info);
+      args.Call(call_fun,
+                v8::Utils::ToLocal(key),
+                v8::Utils::ToLocal(value_handle));
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
     return *value_handle;
@@ -12088,13 +12327,13 @@ MaybeObject* JSObject::GetElementWithInterceptor(Object* receiver,
         v8::ToCData<v8::IndexedPropertyGetter>(interceptor->getter());
     LOG(isolate,
         ApiIndexedPropertyAccess("interceptor-indexed-get", this, index));
-    CustomArguments args(isolate, interceptor->data(), receiver, this);
-    v8::AccessorInfo info(args.end());
+    PropertyCallbackArguments
+        args(isolate, interceptor->data(), receiver, this);
     v8::Handle<v8::Value> result;
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = getter(index, info);
+      result = args.Call(getter, index);
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
     if (!result.IsEmpty()) {
@@ -12398,13 +12637,13 @@ MaybeObject* JSObject::GetPropertyWithInterceptor(
         v8::ToCData<v8::NamedPropertyGetter>(interceptor->getter());
     LOG(isolate,
         ApiNamedPropertyAccess("interceptor-named-get", *holder_handle, name));
-    CustomArguments args(isolate, interceptor->data(), receiver, this);
-    v8::AccessorInfo info(args.end());
+    PropertyCallbackArguments
+        args(isolate, interceptor->data(), receiver, this);
     v8::Handle<v8::Value> result;
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
-      result = getter(v8::Utils::ToLocal(name_handle), info);
+      result = args.Call(getter, v8::Utils::ToLocal(name_handle));
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
     if (!result.IsEmpty()) {
@@ -13321,13 +13560,13 @@ template class Dictionary<SeededNumberDictionaryShape, uint32_t>;
 template class Dictionary<UnseededNumberDictionaryShape, uint32_t>;
 
 template MaybeObject* Dictionary<SeededNumberDictionaryShape, uint32_t>::
-    Allocate(Heap* heap, int at_least_space_for);
+    Allocate(Heap* heap, int at_least_space_for, PretenureFlag pretenure);
 
 template MaybeObject* Dictionary<UnseededNumberDictionaryShape, uint32_t>::
-    Allocate(Heap* heap, int at_least_space_for);
+    Allocate(Heap* heap, int at_least_space_for, PretenureFlag pretenure);
 
 template MaybeObject* Dictionary<NameDictionaryShape, Name*>::
-    Allocate(Heap* heap, int n);
+    Allocate(Heap* heap, int n, PretenureFlag pretenure);
 
 template MaybeObject* Dictionary<SeededNumberDictionaryShape, uint32_t>::AtPut(
     uint32_t, Object*);
@@ -13519,6 +13758,7 @@ MaybeObject* JSObject::PrepareSlowElementsForSort(uint32_t limit) {
 MaybeObject* JSObject::PrepareElementsForSort(uint32_t limit) {
   Heap* heap = GetHeap();
 
+  ASSERT(!map()->is_observed());
   if (HasDictionaryElements()) {
     // Convert to fast elements containing only the existing properties.
     // Ordering is irrelevant, since we are going to sort anyway.
@@ -14271,10 +14511,15 @@ MaybeObject* MapCache::Put(FixedArray* array, Map* value) {
 
 template<typename Shape, typename Key>
 MaybeObject* Dictionary<Shape, Key>::Allocate(Heap* heap,
-                                              int at_least_space_for) {
+                                              int at_least_space_for,
+                                              PretenureFlag pretenure) {
   Object* obj;
   { MaybeObject* maybe_obj =
-        HashTable<Shape, Key>::Allocate(heap, at_least_space_for);
+      HashTable<Shape, Key>::Allocate(
+          heap,
+          at_least_space_for,
+          HashTable<Shape, Key>::USE_DEFAULT_MINIMUM_CAPACITY,
+          pretenure);
     if (!maybe_obj->ToObject(&obj)) return maybe_obj;
   }
   // Initialize the next enumeration index.

@@ -29,9 +29,6 @@
 #include <stdio.h>
 #include <string.h>
 
-// TODO(dcarney): remove
-#define V8_ALLOW_ACCESS_TO_PERSISTENT_IMPLICIT
-
 #include "v8.h"
 
 #include "cctest.h"
@@ -388,8 +385,7 @@ TEST(PreParseOverflow) {
       reinterpret_cast<uintptr_t>(&marker) - 128 * 1024);
 
   size_t kProgramSize = 1024 * 1024;
-  i::SmartArrayPointer<char> program(
-      reinterpret_cast<char*>(malloc(kProgramSize + 1)));
+  i::SmartArrayPointer<char> program(i::NewArray<char>(kProgramSize + 1));
   memset(*program, '(', kProgramSize);
   program[kProgramSize] = '\0';
 

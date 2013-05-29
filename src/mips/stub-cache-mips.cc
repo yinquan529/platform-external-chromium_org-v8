@@ -453,7 +453,7 @@ void StubCompiler::GenerateStoreTransition(MacroAssembler* masm,
 
   // Check that the map of the object hasn't changed.
   __ CheckMap(receiver_reg, scratch1, Handle<Map>(object->map()), miss_label,
-              DO_SMI_CHECK, REQUIRE_EXACT_MAP);
+              DO_SMI_CHECK);
 
   // Perform global security token check if needed.
   if (object->IsJSGlobalProxy()) {
@@ -571,6 +571,8 @@ void StubCompiler::GenerateStoreTransition(MacroAssembler* masm,
   index -= object->map()->inobject_properties();
 
   // TODO(verwaest): Share this code as a code stub.
+  SmiCheck smi_check = representation.IsTagged()
+      ? INLINE_SMI_CHECK : OMIT_SMI_CHECK;
   if (index < 0) {
     // Set the property straight into the object.
     int offset = object->map()->instance_size() + (index * kPointerSize);
@@ -596,7 +598,9 @@ void StubCompiler::GenerateStoreTransition(MacroAssembler* masm,
                           name_reg,
                           scratch1,
                           kRAHasNotBeenSaved,
-                          kDontSaveFPRegs);
+                          kDontSaveFPRegs,
+                          EMIT_REMEMBERED_SET,
+                          smi_check);
     }
   } else {
     // Write to the properties array.
@@ -621,13 +625,14 @@ void StubCompiler::GenerateStoreTransition(MacroAssembler* masm,
       } else {
         ASSERT(storage_reg.is(name_reg));
       }
-      __ mov(name_reg, value_reg);
       __ RecordWriteField(scratch1,
                           offset,
                           name_reg,
                           receiver_reg,
                           kRAHasNotBeenSaved,
-                          kDontSaveFPRegs);
+                          kDontSaveFPRegs,
+                          EMIT_REMEMBERED_SET,
+                          smi_check);
     }
   }
 
@@ -657,7 +662,7 @@ void StubCompiler::GenerateStoreField(MacroAssembler* masm,
 
   // Check that the map of the object hasn't changed.
   __ CheckMap(receiver_reg, scratch1, Handle<Map>(object->map()), miss_label,
-              DO_SMI_CHECK, ALLOW_ELEMENT_TRANSITION_MAPS);
+              DO_SMI_CHECK);
 
   // Perform global security token check if needed.
   if (object->IsJSGlobalProxy()) {
@@ -716,6 +721,8 @@ void StubCompiler::GenerateStoreField(MacroAssembler* masm,
   }
 
   // TODO(verwaest): Share this code as a code stub.
+  SmiCheck smi_check = representation.IsTagged()
+      ? INLINE_SMI_CHECK : OMIT_SMI_CHECK;
   if (index < 0) {
     // Set the property straight into the object.
     int offset = object->map()->instance_size() + (index * kPointerSize);
@@ -733,7 +740,9 @@ void StubCompiler::GenerateStoreField(MacroAssembler* masm,
                           name_reg,
                           scratch1,
                           kRAHasNotBeenSaved,
-                          kDontSaveFPRegs);
+                          kDontSaveFPRegs,
+                          EMIT_REMEMBERED_SET,
+                          smi_check);
     }
   } else {
     // Write to the properties array.
@@ -755,7 +764,9 @@ void StubCompiler::GenerateStoreField(MacroAssembler* masm,
                           name_reg,
                           receiver_reg,
                           kRAHasNotBeenSaved,
-                          kDontSaveFPRegs);
+                          kDontSaveFPRegs,
+                          EMIT_REMEMBERED_SET,
+                          smi_check);
     }
   }
 
@@ -843,8 +854,7 @@ static void CompileCallLoadPropertyWithInterceptor(
 }
 
 
-static const int kFastApiCallArguments = 4;
-
+static const int kFastApiCallArguments = FunctionCallbackArguments::kArgsLength;
 
 // Reserves space for the extra arguments to API function in the
 // caller's frame.
@@ -873,10 +883,11 @@ static void GenerateFastApiDirectCall(MacroAssembler* masm,
   //  -- sp[4]              : callee JS function
   //  -- sp[8]              : call data
   //  -- sp[12]             : isolate
-  //  -- sp[16]             : last JS argument
+  //  -- sp[16]             : ReturnValue
+  //  -- sp[20]             : last JS argument
   //  -- ...
-  //  -- sp[(argc + 3) * 4] : first JS argument
-  //  -- sp[(argc + 4) * 4] : receiver
+  //  -- sp[(argc + 4) * 4] : first JS argument
+  //  -- sp[(argc + 5) * 4] : receiver
   // -----------------------------------
   // Get the function and setup the context.
   Handle<JSFunction> function = optimization.constant_function();
@@ -894,13 +905,15 @@ static void GenerateFastApiDirectCall(MacroAssembler* masm,
   }
 
   __ li(t3, Operand(ExternalReference::isolate_address(masm->isolate())));
-  // Store JS function, call data and isolate.
+  // Store JS function, call data, isolate and ReturnValue.
   __ sw(t1, MemOperand(sp, 1 * kPointerSize));
   __ sw(t2, MemOperand(sp, 2 * kPointerSize));
   __ sw(t3, MemOperand(sp, 3 * kPointerSize));
+  __ LoadRoot(t1, Heap::kUndefinedValueRootIndex);
+  __ sw(t1, MemOperand(sp, 4 * kPointerSize));
 
   // Prepare arguments.
-  __ Addu(a2, sp, Operand(3 * kPointerSize));
+  __ Addu(a2, sp, Operand(4 * kPointerSize));
 
   // Allocate the v8::Arguments structure in the arguments' space since
   // it's not controlled by GC.
@@ -911,33 +924,45 @@ static void GenerateFastApiDirectCall(MacroAssembler* masm,
 
   // NOTE: the O32 abi requires a0 to hold a special pointer when returning a
   // struct from the function (which is currently the case). This means we pass
-  // the first argument in a1 instead of a0. TryCallApiFunctionAndReturn
-  // will handle setting up a0.
+  // the first argument in a1 instead of a0, if returns_handle is true.
+  // CallApiFunctionAndReturn will set up a0.
 
-  // a1 = v8::Arguments&
+  Address function_address = v8::ToCData<Address>(api_call_info->callback());
+  bool returns_handle =
+      !CallbackTable::ReturnsVoid(masm->isolate(), function_address);
+
+  Register first_arg = returns_handle ? a1 : a0;
+
+  // first_arg = v8::Arguments&
   // Arguments is built at sp + 1 (sp is a reserved spot for ra).
-  __ Addu(a1, sp, kPointerSize);
+  __ Addu(first_arg, sp, kPointerSize);
 
   // v8::Arguments::implicit_args_
-  __ sw(a2, MemOperand(a1, 0 * kPointerSize));
+  __ sw(a2, MemOperand(first_arg, 0 * kPointerSize));
   // v8::Arguments::values_
   __ Addu(t0, a2, Operand(argc * kPointerSize));
-  __ sw(t0, MemOperand(a1, 1 * kPointerSize));
+  __ sw(t0, MemOperand(first_arg, 1 * kPointerSize));
   // v8::Arguments::length_ = argc
   __ li(t0, Operand(argc));
-  __ sw(t0, MemOperand(a1, 2 * kPointerSize));
+  __ sw(t0, MemOperand(first_arg, 2 * kPointerSize));
   // v8::Arguments::is_construct_call = 0
-  __ sw(zero_reg, MemOperand(a1, 3 * kPointerSize));
+  __ sw(zero_reg, MemOperand(first_arg, 3 * kPointerSize));
 
   const int kStackUnwindSpace = argc + kFastApiCallArguments + 1;
-  Address function_address = v8::ToCData<Address>(api_call_info->callback());
   ApiFunction fun(function_address);
+  ExternalReference::Type type =
+      returns_handle ?
+          ExternalReference::DIRECT_API_CALL :
+          ExternalReference::DIRECT_API_CALL_NEW;
   ExternalReference ref =
       ExternalReference(&fun,
-                        ExternalReference::DIRECT_API_CALL,
+                        type,
                         masm->isolate());
   AllowExternalCallThatCantCauseGC scope(masm);
-  __ CallApiFunctionAndReturn(ref, kStackUnwindSpace);
+  __ CallApiFunctionAndReturn(ref,
+                              kStackUnwindSpace,
+                              returns_handle,
+                              kFastApiCallArguments + 1);
 }
 
 class CallInterceptorCompiler BASE_EMBEDDED {
@@ -1239,8 +1264,7 @@ Register StubCompiler::CheckPrototypes(Handle<JSObject> object,
       if (!current.is_identical_to(first) || check == CHECK_ALL_MAPS) {
         Handle<Map> current_map(current->map());
         // CheckMap implicitly loads the map of |reg| into |map_reg|.
-        __ CheckMap(reg, map_reg, current_map, miss, DONT_DO_SMI_CHECK,
-                    ALLOW_ELEMENT_TRANSITION_MAPS);
+        __ CheckMap(reg, map_reg, current_map, miss, DONT_DO_SMI_CHECK);
       } else {
         __ lw(map_reg, FieldMemOperand(reg, HeapObject::kMapOffset));
       }
@@ -1276,7 +1300,7 @@ Register StubCompiler::CheckPrototypes(Handle<JSObject> object,
   if (!holder.is_identical_to(first) || check == CHECK_ALL_MAPS) {
     // Check the holder map.
     __ CheckMap(reg, scratch1, Handle<Map>(holder->map()), miss,
-                DONT_DO_SMI_CHECK, ALLOW_ELEMENT_TRANSITION_MAPS);
+                DONT_DO_SMI_CHECK);
   }
 
   // Perform security check for access to the global object.
@@ -1411,21 +1435,30 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
   } else {
     __ li(scratch3(), Handle<Object>(callback->data(), isolate()));
   }
-  __ Subu(sp, sp, 4 * kPointerSize);
-  __ sw(reg, MemOperand(sp, 3 * kPointerSize));
-  __ sw(scratch3(), MemOperand(sp, 2 * kPointerSize));
-  __ li(scratch3(),
+  __ Subu(sp, sp, 5 * kPointerSize);
+  __ sw(reg, MemOperand(sp, 4 * kPointerSize));
+  __ sw(scratch3(), MemOperand(sp, 3 * kPointerSize));
+  __ LoadRoot(scratch3(), Heap::kUndefinedValueRootIndex);
+  __ li(scratch4(),
         Operand(ExternalReference::isolate_address(isolate())));
-  __ sw(scratch3(), MemOperand(sp, 1 * kPointerSize));
+  __ sw(scratch3(), MemOperand(sp, 2 * kPointerSize));
+  __ sw(scratch4(), MemOperand(sp, 1 * kPointerSize));
   __ sw(name(), MemOperand(sp, 0 * kPointerSize));
 
+  Address getter_address = v8::ToCData<Address>(callback->getter());
+  bool returns_handle =
+      !CallbackTable::ReturnsVoid(isolate(), getter_address);
+
+  Register first_arg = returns_handle ? a1 : a0;
+  Register second_arg = returns_handle ? a2 : a1;
+
   __ mov(a2, scratch2());  // Saved in case scratch2 == a1.
-  __ mov(a1, sp);  // a1 (first argument - see note below) = Handle<Name>
+  __ mov(first_arg, sp);  // (first argument - see note below) = Handle<Name>
 
   // NOTE: the O32 abi requires a0 to hold a special pointer when returning a
   // struct from the function (which is currently the case). This means we pass
-  // the arguments in a1-a2 instead of a0-a1. TryCallApiFunctionAndReturn
-  // will handle setting up a0.
+  // the arguments in a1-a2 instead of a0-a1, if returns_handle is true.
+  // CallApiFunctionAndReturn will set up a0.
 
   const int kApiStackSpace = 1;
   FrameScope frame_scope(masm(), StackFrame::MANUAL);
@@ -1434,15 +1467,21 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
   // Create AccessorInfo instance on the stack above the exit frame with
   // scratch2 (internal::Object** args_) as the data.
   __ sw(a2, MemOperand(sp, kPointerSize));
-  // a2 (second argument - see note above) = AccessorInfo&
-  __ Addu(a2, sp, kPointerSize);
+  // (second argument - see note above) = AccessorInfo&
+  __ Addu(second_arg, sp, kPointerSize);
 
-  const int kStackUnwindSpace = 5;
-  Address getter_address = v8::ToCData<Address>(callback->getter());
+  const int kStackUnwindSpace = kFastApiCallArguments + 1;
   ApiFunction fun(getter_address);
-  ExternalReference ref = ExternalReference(
-      &fun, ExternalReference::DIRECT_GETTER_CALL, isolate());
-  __ CallApiFunctionAndReturn(ref, kStackUnwindSpace);
+  ExternalReference::Type type =
+      returns_handle ?
+          ExternalReference::DIRECT_GETTER_CALL :
+          ExternalReference::DIRECT_GETTER_CALL_NEW;
+
+  ExternalReference ref = ExternalReference(&fun, type, isolate());
+  __ CallApiFunctionAndReturn(ref,
+                              kStackUnwindSpace,
+                              returns_handle,
+                              4);
 }
 
 
@@ -2828,7 +2867,7 @@ Handle<Code> StoreStubCompiler::CompileStoreInterceptor(
 
   // Check that the map of the object hasn't changed.
   __ CheckMap(receiver(), scratch1(), Handle<Map>(object->map()), &miss,
-              DO_SMI_CHECK, ALLOW_ELEMENT_TRANSITION_MAPS);
+              DO_SMI_CHECK);
 
   // Perform global security token check if needed.
   if (object->IsJSGlobalProxy()) {

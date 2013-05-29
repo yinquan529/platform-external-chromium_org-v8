@@ -179,6 +179,7 @@ void FullCodeGenerator::Generate() {
   __ LoadRoot(at, Heap::kUndefinedValueRootIndex);
   // Adjust fp to point to caller's fp.
   __ Addu(fp, sp, Operand(2 * kPointerSize));
+  info->AddNoFrameRange(0, masm_->pc_offset());
 
   { Comment cmnt(masm_, "[ Allocate locals");
     int locals_count = info->scope()->num_stack_slots();
@@ -438,9 +439,11 @@ void FullCodeGenerator::EmitReturnSequence() {
       CodeGenerator::RecordPositions(masm_, function()->end_position() - 1);
       __ RecordJSReturn();
       masm_->mov(sp, fp);
+      int no_frame_start = masm_->pc_offset();
       masm_->MultiPop(static_cast<RegList>(fp.bit() | ra.bit()));
       masm_->Addu(sp, sp, Operand(sp_delta));
       masm_->Jump(ra);
+      info_->AddNoFrameRange(no_frame_start, masm_->pc_offset());
     }
 
 #ifdef DEBUG
@@ -1965,8 +1968,108 @@ void FullCodeGenerator::VisitYield(Yield* expr) {
       break;
     }
 
-    case Yield::DELEGATING:
-      UNIMPLEMENTED();
+    case Yield::DELEGATING: {
+      VisitForStackValue(expr->generator_object());
+
+      // Initial stack layout is as follows:
+      // [sp + 1 * kPointerSize] iter
+      // [sp + 0 * kPointerSize] g
+
+      Label l_catch, l_try, l_resume, l_send, l_call, l_loop;
+      // Initial send value is undefined.
+      __ LoadRoot(a0, Heap::kUndefinedValueRootIndex);
+      __ Branch(&l_send);
+
+      // catch (e) { receiver = iter; f = iter.throw; arg = e; goto l_call; }
+      __ bind(&l_catch);
+      __ mov(a0, v0);
+      handler_table()->set(expr->index(), Smi::FromInt(l_catch.pos()));
+      __ lw(a3, MemOperand(sp, 1 * kPointerSize));       // iter
+      __ push(a3);                                       // iter
+      __ push(a0);                                       // exception
+      __ mov(a0, a3);                                    // iter
+      __ push(a0);                                       // push LoadIC state
+      __ LoadRoot(a2, Heap::kthrow_stringRootIndex);     // "throw"
+      Handle<Code> throw_ic = isolate()->builtins()->LoadIC_Initialize();
+      CallIC(throw_ic);                                  // iter.throw in a0
+      __ mov(a0, v0);
+      __ Addu(sp, sp, Operand(kPointerSize));            // drop LoadIC state
+      __ jmp(&l_call);
+
+      // try { received = yield result.value }
+      __ bind(&l_try);
+      __ pop(a0);                                        // result.value
+      __ PushTryHandler(StackHandler::CATCH, expr->index());
+      const int handler_size = StackHandlerConstants::kSize;
+      __ push(a0);                                       // result.value
+      __ lw(a3, MemOperand(sp, (0 + 1) * kPointerSize + handler_size));  // g
+      __ push(a3);                                       // g
+      __ CallRuntime(Runtime::kSuspendJSGeneratorObject, 1);
+      __ mov(a0, v0);
+      __ lw(context_register(),
+            MemOperand(fp, StandardFrameConstants::kContextOffset));
+      __ LoadRoot(at, Heap::kTheHoleValueRootIndex);
+      __ Branch(&l_resume, ne, a0, Operand(at));
+      EmitReturnIteratorResult(false);
+      __ mov(a0, v0);
+      __ bind(&l_resume);                                // received in a0
+      __ PopTryHandler();
+
+      // receiver = iter; f = iter.send; arg = received;
+      __ bind(&l_send);
+      __ lw(a3, MemOperand(sp, 1 * kPointerSize));       // iter
+      __ push(a3);                                       // iter
+      __ push(a0);                                       // received
+      __ mov(a0, a3);                                    // iter
+      __ push(a0);                                       // push LoadIC state
+      __ LoadRoot(a2, Heap::ksend_stringRootIndex);      // "send"
+      Handle<Code> send_ic = isolate()->builtins()->LoadIC_Initialize();
+      CallIC(send_ic);                                   // iter.send in a0
+      __ mov(a0, v0);
+      __ Addu(sp, sp, Operand(kPointerSize));            // drop LoadIC state
+
+      // result = f.call(receiver, arg);
+      __ bind(&l_call);
+      Label l_call_runtime;
+      __ JumpIfSmi(a0, &l_call_runtime);
+      __ GetObjectType(a0, a1, a1);
+      __ Branch(&l_call_runtime, ne, a1, Operand(JS_FUNCTION_TYPE));
+      __ mov(a1, a0);
+      ParameterCount count(1);
+      __ InvokeFunction(a1, count, CALL_FUNCTION,
+                        NullCallWrapper(), CALL_AS_METHOD);
+      __ lw(cp, MemOperand(fp, StandardFrameConstants::kContextOffset));
+      __ jmp(&l_loop);
+      __ bind(&l_call_runtime);
+      __ push(a0);
+      __ CallRuntime(Runtime::kCall, 3);
+
+      // val = result.value; if (!result.done) goto l_try;
+      __ bind(&l_loop);
+      __ mov(a0, v0);
+      // result.value
+      __ push(a0);                                       // save result
+      __ LoadRoot(a2, Heap::kvalue_stringRootIndex);     // "value"
+      Handle<Code> value_ic = isolate()->builtins()->LoadIC_Initialize();
+      CallIC(value_ic);                                  // result.value in a0
+      __ mov(a0, v0);
+      __ pop(a1);                                        // result
+      __ push(a0);                                       // result.value
+      __ mov(a0, a1);                                    // result
+      __ push(a0);                                       // push LoadIC state
+      __ LoadRoot(a2, Heap::kdone_stringRootIndex);      // "done"
+      Handle<Code> done_ic = isolate()->builtins()->LoadIC_Initialize();
+      CallIC(done_ic);                                   // result.done in v0
+      __ Addu(sp, sp, Operand(kPointerSize));            // drop LoadIC state
+      ToBooleanStub stub(v0);
+      __ CallStub(&stub);
+      __ Branch(&l_try, eq, v0, Operand(zero_reg));
+
+      // result.value
+      __ pop(v0);                                        // result.value
+      context()->DropAndPlug(2, v0);                     // drop iter and g
+      break;
+    }
   }
 }
 
@@ -3342,19 +3445,56 @@ void FullCodeGenerator::EmitDateField(CallRuntime* expr) {
 }
 
 
+void FullCodeGenerator::EmitSeqStringSetCharCheck(Register string,
+                                                  Register index,
+                                                  Register value,
+                                                  uint32_t encoding_mask) {
+  __ And(at, index, Operand(kSmiTagMask));
+  __ Check(eq, "Non-smi index", at, Operand(zero_reg));
+  __ And(at, value, Operand(kSmiTagMask));
+  __ Check(eq, "Non-smi value", at, Operand(zero_reg));
+
+  __ lw(at, FieldMemOperand(string, String::kLengthOffset));
+  __ Check(lt, "Index is too large", index, Operand(at));
+
+  __ Check(ge, "Index is negative", index, Operand(zero_reg));
+
+  __ lw(at, FieldMemOperand(string, HeapObject::kMapOffset));
+  __ lbu(at, FieldMemOperand(at, Map::kInstanceTypeOffset));
+
+  __ And(at, at, Operand(kStringRepresentationMask | kStringEncodingMask));
+  __ Subu(at, at, Operand(encoding_mask));
+  __ Check(eq, "Unexpected string type", at, Operand(zero_reg));
+}
+
+
 void FullCodeGenerator::EmitOneByteSeqStringSetChar(CallRuntime* expr) {
   ZoneList<Expression*>* args = expr->arguments();
   ASSERT_EQ(3, args->length());
 
+  Register string = v0;
+  Register index = a1;
+  Register value = a2;
+
   VisitForStackValue(args->at(1));  // index
   VisitForStackValue(args->at(2));  // value
-  __ pop(a2);
-  __ pop(a1);
+  __ pop(value);
+  __ pop(index);
   VisitForAccumulatorValue(args->at(0));  // string
 
-  static const String::Encoding encoding = String::ONE_BYTE_ENCODING;
-  SeqStringSetCharGenerator::Generate(masm_, encoding, v0, a1, a2);
-  context()->Plug(v0);
+  if (FLAG_debug_code) {
+    static const uint32_t one_byte_seq_type = kSeqStringTag | kOneByteStringTag;
+    EmitSeqStringSetCharCheck(string, index, value, one_byte_seq_type);
+  }
+
+  __ SmiUntag(value, value);
+  __ Addu(at,
+          string,
+          Operand(SeqOneByteString::kHeaderSize - kHeapObjectTag));
+  __ SmiUntag(index);
+  __ Addu(at, at, index);
+  __ sb(value, MemOperand(at));
+  context()->Plug(string);
 }
 
 
@@ -3362,15 +3502,29 @@ void FullCodeGenerator::EmitTwoByteSeqStringSetChar(CallRuntime* expr) {
   ZoneList<Expression*>* args = expr->arguments();
   ASSERT_EQ(3, args->length());
 
+  Register string = v0;
+  Register index = a1;
+  Register value = a2;
+
   VisitForStackValue(args->at(1));  // index
   VisitForStackValue(args->at(2));  // value
-  __ pop(a2);
-  __ pop(a1);
+  __ pop(value);
+  __ pop(index);
   VisitForAccumulatorValue(args->at(0));  // string
 
-  static const String::Encoding encoding = String::TWO_BYTE_ENCODING;
-  SeqStringSetCharGenerator::Generate(masm_, encoding, v0, a1, a2);
-  context()->Plug(v0);
+  if (FLAG_debug_code) {
+    static const uint32_t two_byte_seq_type = kSeqStringTag | kTwoByteStringTag;
+    EmitSeqStringSetCharCheck(string, index, value, two_byte_seq_type);
+  }
+
+  __ SmiUntag(value, value);
+  __ Addu(at,
+          string,
+          Operand(SeqTwoByteString::kHeaderSize - kHeapObjectTag));
+  __ Addu(at, at, index);
+  STATIC_ASSERT(kSmiTagSize == 1 && kSmiTag == 0);
+  __ sh(value, MemOperand(at));
+    context()->Plug(string);
 }
 
 

@@ -658,28 +658,37 @@ static void ArrayBufferWeakCallback(v8::Isolate* external_isolate,
   Isolate* isolate = reinterpret_cast<Isolate*>(external_isolate);
   HandleScope scope(isolate);
   Handle<Object> internal_object = Utils::OpenHandle(**object);
+  Handle<JSArrayBuffer> array_buffer(JSArrayBuffer::cast(*internal_object));
 
-  size_t allocated_length = NumberToSize(
-      isolate, JSArrayBuffer::cast(*internal_object)->byte_length());
-  isolate->heap()->AdjustAmountOfExternalAllocatedMemory(
-      -static_cast<intptr_t>(allocated_length));
-  if (data != NULL)
+  if (!array_buffer->is_external()) {
+    size_t allocated_length = NumberToSize(
+        isolate, array_buffer->byte_length());
+    isolate->heap()->AdjustAmountOfExternalAllocatedMemory(
+        -static_cast<intptr_t>(allocated_length));
     free(data);
+  }
   object->Dispose(external_isolate);
 }
 
 
-bool Runtime::SetupArrayBuffer(Isolate* isolate,
+void Runtime::SetupArrayBuffer(Isolate* isolate,
                                Handle<JSArrayBuffer> array_buffer,
+                               bool is_external,
                                void* data,
                                size_t allocated_length) {
+  ASSERT(array_buffer->GetInternalFieldCount() ==
+      v8::ArrayBuffer::kInternalFieldCount);
+  for (int i = 0; i < v8::ArrayBuffer::kInternalFieldCount; i++) {
+    array_buffer->SetInternalField(i, Smi::FromInt(0));
+  }
   array_buffer->set_backing_store(data);
+  array_buffer->set_flag(Smi::FromInt(0));
+  array_buffer->set_is_external(is_external);
 
   Handle<Object> byte_length =
-      isolate->factory()->NewNumber(static_cast<double>(allocated_length));
+      isolate->factory()->NewNumberFromSize(allocated_length);
   CHECK(byte_length->IsSmi() || byte_length->IsHeapNumber());
   array_buffer->set_byte_length(*byte_length);
-  return true;
 }
 
 
@@ -696,8 +705,7 @@ bool Runtime::SetupArrayBufferAllocatingData(
     data = NULL;
   }
 
-  if (!SetupArrayBuffer(isolate, array_buffer, data, allocated_length))
-    return false;
+  SetupArrayBuffer(isolate, array_buffer, false, data, allocated_length);
 
   v8::Isolate* external_isolate = reinterpret_cast<v8::Isolate*>(isolate);
   v8::Persistent<v8::Value> weak_handle = v8::Persistent<v8::Value>::New(
@@ -795,51 +803,41 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_TypedArrayInitialize) {
   CONVERT_ARG_HANDLE_CHECKED(Object, byte_length_object, 4);
 
   ExternalArrayType arrayType;
-  ElementsKind elementsKind;
   size_t elementSize;
   switch (arrayId) {
     case ARRAY_ID_UINT8:
-      elementsKind = EXTERNAL_UNSIGNED_BYTE_ELEMENTS;
       arrayType = kExternalUnsignedByteArray;
       elementSize = 1;
       break;
     case ARRAY_ID_INT8:
-      elementsKind = EXTERNAL_BYTE_ELEMENTS;
       arrayType = kExternalByteArray;
       elementSize = 1;
       break;
     case ARRAY_ID_UINT16:
-      elementsKind = EXTERNAL_UNSIGNED_SHORT_ELEMENTS;
       arrayType = kExternalUnsignedShortArray;
       elementSize = 2;
       break;
     case ARRAY_ID_INT16:
-      elementsKind = EXTERNAL_SHORT_ELEMENTS;
       arrayType = kExternalShortArray;
       elementSize = 2;
       break;
     case ARRAY_ID_UINT32:
-      elementsKind = EXTERNAL_UNSIGNED_INT_ELEMENTS;
       arrayType = kExternalUnsignedIntArray;
       elementSize = 4;
       break;
     case ARRAY_ID_INT32:
-      elementsKind = EXTERNAL_INT_ELEMENTS;
       arrayType = kExternalIntArray;
       elementSize = 4;
       break;
     case ARRAY_ID_FLOAT32:
-      elementsKind = EXTERNAL_FLOAT_ELEMENTS;
       arrayType = kExternalFloatArray;
       elementSize = 4;
       break;
     case ARRAY_ID_FLOAT64:
-      elementsKind = EXTERNAL_DOUBLE_ELEMENTS;
       arrayType = kExternalDoubleArray;
       elementSize = 8;
       break;
     case ARRAY_ID_UINT8C:
-      elementsKind = EXTERNAL_PIXEL_ELEMENTS;
       arrayType = kExternalPixelArray;
       elementSize = 1;
       break;
@@ -857,16 +855,13 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_TypedArrayInitialize) {
   ASSERT(byte_length % elementSize == 0);
   size_t length = byte_length / elementSize;
 
-  Handle<Object> length_obj =
-      isolate->factory()->NewNumber(static_cast<double>(length));
+  Handle<Object> length_obj = isolate->factory()->NewNumberFromSize(length);
   holder->set_length(*length_obj);
+
   Handle<ExternalArray> elements =
       isolate->factory()->NewExternalArray(
           static_cast<int>(length), arrayType,
           static_cast<uint8_t*>(buffer->backing_store()) + byte_offset);
-  Handle<Map> map =
-      isolate->factory()->GetElementsTransitionMap(holder, elementsKind);
-  holder->set_map(*map);
   holder->set_elements(*elements);
   return isolate->heap()->undefined_value();
 }
@@ -2702,6 +2697,14 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_ThrowGeneratorStateError) {
   Vector< Handle<Object> > argv = HandleVector<Object>(NULL, 0);
   Handle<Object> error = isolate->factory()->NewError(message, argv);
   return isolate->Throw(*error);
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_ObjectFreeze) {
+  NoHandleAllocation ha(isolate);
+  ASSERT(args.length() == 1);
+  CONVERT_ARG_CHECKED(JSObject, object, 0);
+  return object->Freeze(isolate);
 }
 
 
@@ -5660,11 +5663,10 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_URIEscape) {
   ASSERT(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(String, source, 0);
   Handle<String> string = FlattenGetString(source);
-  String::FlatContent content = string->GetFlatContent();
-  ASSERT(content.IsFlat());
-  Handle<String> result =
-      content.IsAscii() ? URIEscape::Escape<uint8_t>(isolate, source)
-                        : URIEscape::Escape<uc16>(isolate, source);
+  ASSERT(string->IsFlat());
+  Handle<String> result = string->IsOneByteRepresentationUnderneath()
+      ? URIEscape::Escape<uint8_t>(isolate, source)
+      : URIEscape::Escape<uc16>(isolate, source);
   if (result.is_null()) return Failure::OutOfMemoryException(0x12);
   return *result;
 }
@@ -5675,10 +5677,10 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_URIUnescape) {
   ASSERT(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(String, source, 0);
   Handle<String> string = FlattenGetString(source);
-  String::FlatContent content = string->GetFlatContent();
-  ASSERT(content.IsFlat());
-  return content.IsAscii() ? *URIUnescape::Unescape<uint8_t>(isolate, source)
-                           : *URIUnescape::Unescape<uc16>(isolate, source);
+  ASSERT(string->IsFlat());
+  return string->IsOneByteRepresentationUnderneath()
+      ? *URIUnescape::Unescape<uint8_t>(isolate, source)
+      : *URIUnescape::Unescape<uc16>(isolate, source);
 }
 
 
@@ -6207,6 +6209,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_StringToArray) {
       if (!maybe_obj->ToObject(&obj)) return maybe_obj;
     }
     elements = Handle<FixedArray>(FixedArray::cast(obj), isolate);
+    AssertNoAllocation no_gc;
     String::FlatContent content = s->GetFlatContent();
     if (content.IsAscii()) {
       Vector<const uint8_t> chars = content.ToOneByteVector();
@@ -7073,6 +7076,7 @@ static Object* FlatStringCompare(String* x, String* y) {
     equal_prefix_result = Smi::FromInt(LESS);
   }
   int r;
+  AssertNoAllocation no_gc;
   String::FlatContent x_content = x->GetFlatContent();
   String::FlatContent y_content = y->GetFlatContent();
   if (x_content.IsAscii()) {
@@ -9004,7 +9008,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_DebugPrint) {
 RUNTIME_FUNCTION(MaybeObject*, Runtime_DebugTrace) {
   NoHandleAllocation ha(isolate);
   ASSERT(args.length() == 0);
-  isolate->PrintStack();
+  isolate->PrintStack(stdout);
   return isolate->heap()->undefined_value();
 }
 
@@ -9227,20 +9231,25 @@ RUNTIME_FUNCTION(ObjectPair, Runtime_ResolvePossiblyDirectEval) {
 }
 
 
-RUNTIME_FUNCTION(MaybeObject*, Runtime_AllocateInNewSpace) {
-  // Allocate a block of memory in NewSpace (filled with a filler).
-  // Use as fallback for allocation in generated code when NewSpace
+static MaybeObject* Allocate(Isolate* isolate,
+                             int size,
+                             AllocationSpace space) {
+  // Allocate a block of memory in the given space (filled with a filler).
+  // Use as fallback for allocation in generated code when the space
   // is full.
   NoHandleAllocation ha(isolate);
-  ASSERT(args.length() == 1);
-  CONVERT_ARG_HANDLE_CHECKED(Smi, size_smi, 0);
-  int size = size_smi->value();
   RUNTIME_ASSERT(IsAligned(size, kPointerSize));
   RUNTIME_ASSERT(size > 0);
   Heap* heap = isolate->heap();
-  RUNTIME_ASSERT(size <= heap->MaxNewSpaceAllocationSize());
+  RUNTIME_ASSERT(size <= heap->MaxRegularSpaceAllocationSize());
   Object* allocation;
-  { MaybeObject* maybe_allocation = heap->new_space()->AllocateRaw(size);
+  { MaybeObject* maybe_allocation;
+    if (space == NEW_SPACE) {
+      maybe_allocation = heap->new_space()->AllocateRaw(size);
+    } else {
+      ASSERT(space == OLD_POINTER_SPACE || space == OLD_DATA_SPACE);
+      maybe_allocation = heap->paged_space(space)->AllocateRaw(size);
+    }
     if (maybe_allocation->ToObject(&allocation)) {
       heap->CreateFillerObjectAt(HeapObject::cast(allocation)->address(), size);
     }
@@ -9249,24 +9258,27 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_AllocateInNewSpace) {
 }
 
 
-RUNTIME_FUNCTION(MaybeObject*, Runtime_AllocateInOldPointerSpace) {
-  // Allocate a block of memory in old pointer space (filled with a filler).
-  // Use as fallback for allocation in generated code when old pointer space
-  // is full.
+RUNTIME_FUNCTION(MaybeObject*, Runtime_AllocateInNewSpace) {
+  NoHandleAllocation ha(isolate);
   ASSERT(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(Smi, size_smi, 0);
-  int size = size_smi->value();
-  RUNTIME_ASSERT(IsAligned(size, kPointerSize));
-  RUNTIME_ASSERT(size > 0);
-  Heap* heap = isolate->heap();
-  Object* allocation;
-  { MaybeObject* maybe_allocation =
-        heap->old_pointer_space()->AllocateRaw(size);
-    if (maybe_allocation->ToObject(&allocation)) {
-      heap->CreateFillerObjectAt(HeapObject::cast(allocation)->address(), size);
-    }
-    return maybe_allocation;
-  }
+  return Allocate(isolate, size_smi->value(), NEW_SPACE);
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_AllocateInOldPointerSpace) {
+  NoHandleAllocation ha(isolate);
+  ASSERT(args.length() == 1);
+  CONVERT_ARG_HANDLE_CHECKED(Smi, size_smi, 0);
+  return Allocate(isolate, size_smi->value(), OLD_POINTER_SPACE);
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_AllocateInOldDataSpace) {
+  NoHandleAllocation ha(isolate);
+  ASSERT(args.length() == 1);
+  CONVERT_ARG_HANDLE_CHECKED(Smi, size_smi, 0);
+  return Allocate(isolate, size_smi->value(), OLD_DATA_SPACE);
 }
 
 
@@ -13112,7 +13124,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_Abort) {
   ASSERT(args.length() == 2);
   OS::PrintError("abort: %s\n",
                  reinterpret_cast<char*>(args[0]) + args.smi_at(1));
-  isolate->PrintStack();
+  isolate->PrintStack(stderr);
   OS::Abort();
   UNREACHABLE();
   return NULL;
@@ -13292,6 +13304,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_Log) {
   ASSERT(args.length() == 2);
   CONVERT_ARG_CHECKED(String, format, 0);
   CONVERT_ARG_CHECKED(JSArray, elms, 1);
+  AssertNoAllocation no_gc;
   String::FlatContent format_content = format->GetFlatContent();
   RUNTIME_ASSERT(format_content.IsAscii());
   Vector<const uint8_t> chars = format_content.ToOneByteVector();
@@ -13318,6 +13331,7 @@ ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(FastSmiOrObjectElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(FastDoubleElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(FastHoleyElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(DictionaryElements)
+ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(NonStrictArgumentsElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(ExternalPixelElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(ExternalArrayElements)
 ELEMENTS_KIND_CHECK_RUNTIME_FUNCTION(ExternalByteElements)

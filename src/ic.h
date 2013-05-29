@@ -787,8 +787,6 @@ class CompareNilIC: public IC {
 
   static Handle<Code> GetUninitialized();
 
-  static Code* GetRawUninitialized(EqualityKind kind, NilValue nil);
-
   static void Clear(Address address, Code* target);
 
   void patch(Code* code);
@@ -813,6 +811,7 @@ void PatchInlinedSmiCode(Address address, InlinedSmiCheck check);
 
 DECLARE_RUNTIME_FUNCTION(MaybeObject*, KeyedLoadIC_MissFromStubFailure);
 DECLARE_RUNTIME_FUNCTION(MaybeObject*, KeyedStoreIC_MissFromStubFailure);
+DECLARE_RUNTIME_FUNCTION(MaybeObject*, CompareNilIC_MissLight);
 DECLARE_RUNTIME_FUNCTION(MaybeObject*, CompareNilIC_Miss);
 
 

@@ -26,6 +26,7 @@ LOCAL_SRC_FILES := \
 	v8/src/accessors.cc \
 	v8/src/allocation.cc \
 	v8/src/api.cc \
+	v8/src/arguments.cc \
 	v8/src/assembler.cc \
 	v8/src/ast.cc \
 	v8/src/atomicops_internals_x86_gcc.cc \
@@ -75,6 +76,7 @@ LOCAL_SRC_FILES := \
 	v8/src/heap.cc \
 	v8/src/hydrogen-instructions.cc \
 	v8/src/hydrogen.cc \
+	v8/src/hydrogen-gvn.cc \
 	v8/src/ic.cc \
 	v8/src/incremental-marking.cc \
 	v8/src/interface.cc \
@@ -126,6 +128,7 @@ LOCAL_SRC_FILES := \
 	v8/src/token.cc \
 	v8/src/transitions.cc \
 	v8/src/type-info.cc \
+	v8/src/typing.cc \
 	v8/src/unicode.cc \
 	v8/src/utils.cc \
 	v8/src/v8-counters.cc \
@@ -203,6 +206,7 @@ MY_DEFS := \
 	'-DNO_TCMALLOC' \
 	'-DDISABLE_NACL' \
 	'-DCHROMIUM_BUILD' \
+	'-DENABLE_DOUBLE_RESOURCE_LOAD_TIMING' \
 	'-DUSE_LIBJPEG_TURBO=1' \
 	'-DUSE_PROPRIETARY_CODECS' \
 	'-DENABLE_GPU=1' \
@@ -231,9 +235,9 @@ LOCAL_CFLAGS := $(MY_CFLAGS_C) $(MY_CFLAGS) $(MY_DEFS)
 # Include paths placed before CFLAGS/CPPFLAGS
 LOCAL_C_INCLUDES := \
 	$(LOCAL_PATH)/v8/src \
-	$(GYP_ABS_ANDROID_TOP_DIR)/frameworks/wilhelm/include \
-	$(GYP_ABS_ANDROID_TOP_DIR)/bionic \
-	$(GYP_ABS_ANDROID_TOP_DIR)/external/stlport/stlport
+	$(PWD)/frameworks/wilhelm/include \
+	$(PWD)/bionic \
+	$(PWD)/external/stlport/stlport
 
 LOCAL_C_INCLUDES := $(GYP_COPIED_SOURCE_ORIGIN_DIRS) $(LOCAL_C_INCLUDES)
 
