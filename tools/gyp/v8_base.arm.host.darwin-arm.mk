@@ -75,6 +75,7 @@ LOCAL_SRC_FILES := \
 	v8/src/heap-profiler.cc \
 	v8/src/heap-snapshot-generator.cc \
 	v8/src/heap.cc \
+	v8/src/hydrogen-environment-liveness.cc \
 	v8/src/hydrogen-instructions.cc \
 	v8/src/hydrogen.cc \
 	v8/src/hydrogen-gvn.cc \
@@ -129,6 +130,7 @@ LOCAL_SRC_FILES := \
 	v8/src/token.cc \
 	v8/src/transitions.cc \
 	v8/src/type-info.cc \
+	v8/src/types.cc \
 	v8/src/typing.cc \
 	v8/src/unicode.cc \
 	v8/src/utils.cc \
@@ -191,7 +193,6 @@ MY_DEFS := \
 	'-DNO_TCMALLOC' \
 	'-DDISABLE_NACL' \
 	'-DCHROMIUM_BUILD' \
-	'-DENABLE_DOUBLE_RESOURCE_LOAD_TIMING' \
 	'-DUSE_LIBJPEG_TURBO=1' \
 	'-DUSE_PROPRIETARY_CODECS' \
 	'-DENABLE_GPU=1' \
@@ -200,10 +201,9 @@ MY_DEFS := \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_TARGET_ARCH_ARM' \
-	'-DCAN_USE_UNALIGNED_ACCESSES=0' \
+	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DARM_TEST' \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
-	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \

@@ -427,7 +427,14 @@ void LStoreKeyed::PrintDataTo(StringStream* stream) {
   } else {
     stream->Add("] <- ");
   }
-  value()->PrintTo(stream);
+
+  if (value() == NULL) {
+    ASSERT(hydrogen()->IsConstantHoleStore() &&
+           hydrogen()->value()->representation().IsDouble());
+    stream->Add("<the hole(nan)>");
+  } else {
+    value()->PrintTo(stream);
+  }
 }
 
 
@@ -703,6 +710,12 @@ LInstruction* LChunkBuilder::DoBlockEntry(HBlockEntry* instr) {
 
 LInstruction* LChunkBuilder::DoDummyUse(HDummyUse* instr) {
   return DefineAsRegister(new(zone()) LDummyUse(UseAny(instr->value())));
+}
+
+
+LInstruction* LChunkBuilder::DoEnvironmentMarker(HEnvironmentMarker* instr) {
+  UNREACHABLE();
+  return NULL;
 }
 
 
@@ -1424,43 +1437,54 @@ LInstruction* LChunkBuilder::DoMathFloorOfDiv(HMathFloorOfDiv* instr) {
 
 
 LInstruction* LChunkBuilder::DoMod(HMod* instr) {
+  HValue* left = instr->left();
+  HValue* right = instr->right();
   if (instr->representation().IsInteger32()) {
-    ASSERT(instr->left()->representation().IsInteger32());
-    ASSERT(instr->right()->representation().IsInteger32());
-
-    LInstruction* result;
+    ASSERT(left->representation().IsInteger32());
+    ASSERT(right->representation().IsInteger32());
     if (instr->HasPowerOf2Divisor()) {
-      ASSERT(!instr->CheckFlag(HValue::kCanBeDivByZero));
-      LOperand* value = UseRegisterAtStart(instr->left());
-      LModI* mod =
-          new(zone()) LModI(value, UseOrConstant(instr->right()), NULL);
-      result = DefineSameAsFirst(mod);
+      ASSERT(!right->CanBeZero());
+      LModI* mod = new(zone()) LModI(UseRegisterAtStart(left),
+                                     UseOrConstant(right),
+                                     NULL);
+      LInstruction* result = DefineSameAsFirst(mod);
+      return (left->CanBeNegative() &&
+              instr->CheckFlag(HValue::kBailoutOnMinusZero))
+          ? AssignEnvironment(result)
+          : result;
+    } else if (instr->has_fixed_right_arg()) {
+      LModI* mod = new(zone()) LModI(UseRegister(left),
+                                     UseRegisterAtStart(right),
+                                     NULL);
+      return AssignEnvironment(DefineSameAsFirst(mod));
     } else {
       // The temporary operand is necessary to ensure that right is not
       // allocated into edx.
-      LOperand* temp = FixedTemp(rdx);
-      LOperand* value = UseFixed(instr->left(), rax);
-      LOperand* divisor = UseRegister(instr->right());
-      LModI* mod = new(zone()) LModI(value, divisor, temp);
-      result = DefineFixed(mod, rdx);
+      LModI* mod = new(zone()) LModI(UseFixed(left, rax),
+                                     UseRegister(right),
+                                     FixedTemp(rdx));
+      LInstruction* result = DefineFixed(mod, rdx);
+      return (right->CanBeZero() ||
+              (left->RangeCanInclude(kMinInt) &&
+               right->RangeCanInclude(-1) &&
+               instr->CheckFlag(HValue::kBailoutOnMinusZero)) ||
+              (left->CanBeNegative() &&
+               instr->CanBeZero() &&
+               instr->CheckFlag(HValue::kBailoutOnMinusZero)))
+          ? AssignEnvironment(result)
+          : result;
     }
-
-    return (instr->CheckFlag(HValue::kBailoutOnMinusZero) ||
-            instr->CheckFlag(HValue::kCanBeDivByZero) ||
-            instr->CheckFlag(HValue::kCanOverflow))
-        ? AssignEnvironment(result)
-        : result;
   } else if (instr->representation().IsSmiOrTagged()) {
     return DoArithmeticT(Token::MOD, instr);
   } else {
     ASSERT(instr->representation().IsDouble());
-    // We call a C function for double modulo. It can't trigger a GC.
-    // We need to use fixed result register for the call.
+    // We call a C function for double modulo. It can't trigger a GC. We need to
+    // use fixed result register for the call.
     // TODO(fschneider): Allow any register as input registers.
-    LOperand* left = UseFixedDouble(instr->left(), xmm2);
-    LOperand* right = UseFixedDouble(instr->right(), xmm1);
-    LArithmeticD* result = new(zone()) LArithmeticD(Token::MOD, left, right);
-    return MarkAsCall(DefineFixedDouble(result, xmm1), instr);
+    LArithmeticD* mod = new(zone()) LArithmeticD(Token::MOD,
+                                                 UseFixedDouble(left, xmm2),
+                                                 UseFixedDouble(right, xmm1));
+    return MarkAsCall(DefineFixedDouble(mod, xmm1), instr);
   }
 }
 
@@ -1969,12 +1993,14 @@ LInstruction* LChunkBuilder::DoReturn(HReturn* instr) {
 
 LInstruction* LChunkBuilder::DoConstant(HConstant* instr) {
   Representation r = instr->representation();
-  if (r.IsInteger32()) {
+  if (r.IsSmi()) {
+    return DefineAsRegister(new(zone()) LConstantS);
+  } else if (r.IsInteger32()) {
     return DefineAsRegister(new(zone()) LConstantI);
   } else if (r.IsDouble()) {
     LOperand* temp = TempRegister();
     return DefineAsRegister(new(zone()) LConstantD(temp));
-  } else if (r.IsSmiOrTagged()) {
+  } else if (r.IsTagged()) {
     return DefineAsRegister(new(zone()) LConstantT);
   } else {
     UNREACHABLE();
@@ -2279,10 +2305,11 @@ LInstruction* LChunkBuilder::DoStoreNamedField(HStoreNamedField* instr) {
       needs_write_barrier_for_map) ? TempRegister() : NULL;
 
   LStoreNamedField* result = new(zone()) LStoreNamedField(obj, val, temp);
-  if ((FLAG_track_fields && instr->field_representation().IsSmi()) ||
-      (FLAG_track_heap_object_fields &&
-       instr->field_representation().IsHeapObject())) {
-    return AssignEnvironment(result);
+  if (FLAG_track_heap_object_fields &&
+      instr->field_representation().IsHeapObject()) {
+    if (!instr->value()->type().IsHeapObject()) {
+      return AssignEnvironment(result);
+    }
   }
   return result;
 }
@@ -2323,13 +2350,6 @@ LInstruction* LChunkBuilder::DoStringCharFromCode(HStringCharFromCode* instr) {
 LInstruction* LChunkBuilder::DoStringLength(HStringLength* instr) {
   LOperand* string = UseRegisterAtStart(instr->value());
   return DefineAsRegister(new(zone()) LStringLength(string));
-}
-
-
-LInstruction* LChunkBuilder::DoAllocateObject(HAllocateObject* instr) {
-  info()->MarkAsDeferredCalling();
-  LAllocateObject* result = new(zone()) LAllocateObject(TempRegister());
-  return AssignPointerMap(DefineAsRegister(result));
 }
 
 

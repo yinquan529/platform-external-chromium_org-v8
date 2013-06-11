@@ -155,6 +155,41 @@ MaybeObject* Object::GetPropertyWithReceiver(Object* receiver,
 }
 
 
+bool Object::ToInt32(int32_t* value) {
+  if (IsSmi()) {
+    *value = Smi::cast(this)->value();
+    return true;
+  }
+  if (IsHeapNumber()) {
+    double num = HeapNumber::cast(this)->value();
+    if (FastI2D(FastD2I(num)) == num) {
+      *value = FastD2I(num);
+      return true;
+    }
+  }
+  return false;
+}
+
+
+bool Object::ToUint32(uint32_t* value) {
+  if (IsSmi()) {
+    int num = Smi::cast(this)->value();
+    if (num >= 0) {
+      *value = static_cast<uint32_t>(num);
+      return true;
+    }
+  }
+  if (IsHeapNumber()) {
+    double num = HeapNumber::cast(this)->value();
+    if (num >= 0 && FastUI2D(FastD2UI(num)) == num) {
+      *value = FastD2UI(num);
+      return true;
+    }
+  }
+  return false;
+}
+
+
 template<typename To>
 static inline To* CheckedCast(void *from) {
   uintptr_t temp = reinterpret_cast<uintptr_t>(from);
@@ -344,6 +379,8 @@ MaybeObject* JSObject::GetPropertyWithCallback(Object* receiver,
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
+      ExternalCallbackScope call_scope(isolate,
+                                       v8::ToCData<Address>(fun_obj));
       result = args.Call(call_fun, v8::Utils::ToLocal(key));
     }
     RETURN_IF_SCHEDULED_EXCEPTION(isolate);
@@ -1045,7 +1082,7 @@ MaybeObject* String::SlowTryFlatten(PretenureFlag pretenure) {
   // allowed.  This is to avoid an assertion failure when allocating.
   // Flattening strings is the only case where we always allow
   // allocation because no GC is performed if the allocation fails.
-  if (!HEAP->IsAllocationAllowed()) return this;
+  if (!AllowHeapAllocation::IsAllowed()) return this;
 #endif
 
   Heap* heap = GetHeap();
@@ -1168,6 +1205,11 @@ bool String::MakeExternal(v8::String::ExternalAsciiStringResource* resource) {
   if (FLAG_enable_slow_asserts) {
     // Assert that the resource and the string are equivalent.
     ASSERT(static_cast<size_t>(this->length()) == resource->length());
+    if (this->IsTwoByteRepresentation()) {
+      ScopedVector<uint16_t> smart_chars(this->length());
+      String::WriteToFlat(this, smart_chars.start(), 0, this->length());
+      ASSERT(String::IsOneByte(smart_chars.start(), this->length()));
+    }
     ScopedVector<char> smart_chars(this->length());
     String::WriteToFlat(this, smart_chars.start(), 0, this->length());
     ASSERT(memcmp(smart_chars.start(),
@@ -1775,7 +1817,8 @@ static bool IsIdentifier(UnicodeCache* cache, Name* name) {
 MaybeObject* JSObject::AddFastProperty(Name* name,
                                        Object* value,
                                        PropertyAttributes attributes,
-                                       StoreFromKeyed store_mode) {
+                                       StoreFromKeyed store_mode,
+                                       ValueType value_type) {
   ASSERT(!IsJSGlobalProxy());
   ASSERT(DescriptorArray::kNotFound ==
          map()->instance_descriptors()->Search(
@@ -1801,8 +1844,8 @@ MaybeObject* JSObject::AddFastProperty(Name* name,
   int index = map()->NextFreePropertyIndex();
 
   // Allocate new instance descriptors with (name, index) added
-  Representation representation = IsJSContextExtensionObject()
-      ? Representation::Tagged() : value->OptimalRepresentation();
+  if (IsJSContextExtensionObject()) value_type = FORCE_TAGGED;
+  Representation representation = value->OptimalRepresentation(value_type);
 
   FieldDescriptor new_field(name, index, attributes, representation);
 
@@ -1824,14 +1867,17 @@ MaybeObject* JSObject::AddFastProperty(Name* name,
 
   Heap* heap = isolate->heap();
 
-  Map* new_map;
-  MaybeObject* maybe_new_map = map()->CopyAddDescriptor(&new_field, flag);
-  if (!maybe_new_map->To(&new_map)) return maybe_new_map;
-
   Object* storage;
   MaybeObject* maybe_storage =
       value->AllocateNewStorageFor(heap, representation);
   if (!maybe_storage->To(&storage)) return maybe_storage;
+
+  // Note that Map::CopyAddDescriptor has side-effects, the new map is already
+  // inserted in the transition tree. No more allocations that might fail are
+  // allowed after this point.
+  Map* new_map;
+  MaybeObject* maybe_new_map = map()->CopyAddDescriptor(&new_field, flag);
+  if (!maybe_new_map->To(&new_map)) return maybe_new_map;
 
   if (map()->unused_property_fields() == 0) {
     ASSERT(values != NULL);
@@ -1916,7 +1962,8 @@ MaybeObject* JSObject::AddProperty(Name* name,
                                    PropertyAttributes attributes,
                                    StrictModeFlag strict_mode,
                                    JSReceiver::StoreFromKeyed store_mode,
-                                   ExtensibilityCheck extensibility_check) {
+                                   ExtensibilityCheck extensibility_check,
+                                   ValueType value_type) {
   ASSERT(!IsJSGlobalProxy());
   Map* map_of_this = map();
   Heap* heap = GetHeap();
@@ -1929,8 +1976,8 @@ MaybeObject* JSObject::AddProperty(Name* name,
     } else {
       Handle<Object> args[1] = {Handle<Name>(name)};
       return isolate->Throw(
-          *FACTORY->NewTypeError("object_not_extensible",
-                                 HandleVector(args, 1)));
+          *isolate->factory()->NewTypeError("object_not_extensible",
+                                            HandleVector(args, 1)));
     }
   }
 
@@ -1943,7 +1990,8 @@ MaybeObject* JSObject::AddProperty(Name* name,
                                              JSFunction::cast(value),
                                              attributes);
       } else {
-        result = AddFastProperty(name, value, attributes, store_mode);
+        result = AddFastProperty(
+            name, value, attributes, store_mode, value_type);
       }
     } else {
       // Normalize the object to prevent very large instance descriptors.
@@ -2227,7 +2275,7 @@ bool Map::InstancesNeedRewriting(Map* target,
     int limit = NumberOfOwnDescriptors();
     for (int i = 0; i < limit; i++) {
       if (new_desc->GetDetails(i).representation().IsDouble() &&
-          old_desc->GetDetails(i).representation().IsSmi()) {
+          !old_desc->GetDetails(i).representation().IsDouble()) {
         return true;
       }
     }
@@ -2298,8 +2346,9 @@ MaybeObject* JSObject::MigrateToMap(Map* new_map) {
         ? old_descriptors->GetValue(i)
         : RawFastPropertyAt(old_descriptors->GetFieldIndex(i));
     if (FLAG_track_double_fields &&
-        old_details.representation().IsSmi() &&
+        !old_details.representation().IsDouble() &&
         details.representation().IsDouble()) {
+      if (old_details.representation().IsNone()) value = Smi::FromInt(0);
       // Objects must be allocated in the old object space, since the
       // overall number of HeapNumbers needed for the conversion might
       // exceed the capacity of new space, and we would fail repeatedly
@@ -2352,7 +2401,7 @@ MaybeObject* JSObject::GeneralizeFieldRepresentation(
   MaybeObject* maybe_new_map =
       map()->GeneralizeRepresentation(modify_index, new_representation);
   if (!maybe_new_map->To(&new_map)) return maybe_new_map;
-  ASSERT(map() != new_map || new_map->FindRootMap()->is_deprecated());
+  if (map() == new_map) return this;
 
   return MigrateToMap(new_map);
 }
@@ -2497,8 +2546,6 @@ Map* Map::FindLastMatchMap(int verbatim,
     if (details.type() != next_details.type()) break;
     if (details.attributes() != next_details.attributes()) break;
     if (!details.representation().Equals(next_details.representation())) break;
-    ASSERT(!details.IsDeleted());
-    ASSERT(!next_details.IsDeleted());
 
     current = next;
   }
@@ -2531,10 +2578,21 @@ MaybeObject* Map::GeneralizeRepresentation(int modify_index,
   Representation old_representation =
       old_descriptors->GetDetails(modify_index).representation();
 
-  if (old_representation.IsNone()) {
-    UNREACHABLE();
+  // It's fine to transition from None to anything but double without any
+  // modification to the object, because the default uninitialized value for
+  // representation None can be overwritten by both smi and tagged values.
+  // Doubles, however, would require a box allocation.
+  if (old_representation.IsNone() &&
+      !new_representation.IsNone() &&
+      !new_representation.IsDouble()) {
+    if (FLAG_trace_generalization) {
+      PrintF("initializing representation %i: %p -> %s\n",
+             modify_index,
+             static_cast<void*>(this),
+             new_representation.Mnemonic());
+    }
     old_descriptors->SetRepresentation(modify_index, new_representation);
-    return this;
+    return old_map;
   }
 
   int descriptors = old_map->NumberOfOwnDescriptors();
@@ -2560,7 +2618,7 @@ MaybeObject* Map::GeneralizeRepresentation(int modify_index,
         updated_descriptors->GetDetails(modify_index).representation();
     if (new_representation.fits_into(updated_representation)) {
       if (FLAG_trace_generalization &&
-          !(modify_index == 0 && new_representation.IsSmi())) {
+          !(modify_index == 0 && new_representation.IsNone())) {
         PropertyDetails old_details = old_descriptors->GetDetails(modify_index);
         PrintF("migrating to existing map %p(%s) -> %p(%s)\n",
                static_cast<void*>(this),
@@ -2598,7 +2656,7 @@ MaybeObject* Map::GeneralizeRepresentation(int modify_index,
       old_descriptors->GetKey(descriptor), new_descriptors);
 
   if (FLAG_trace_generalization &&
-      !(modify_index == 0 && new_representation.IsSmi())) {
+      !(modify_index == 0 && new_representation.IsNone())) {
     PrintF("migrating to new map %i: %p(%s) -> %p(%s) (%i steps)\n",
            modify_index,
            static_cast<void*>(this),
@@ -2628,7 +2686,7 @@ MaybeObject* Map::GeneralizeRepresentation(int modify_index,
 
 
 Map* Map::CurrentMapForDeprecated() {
-  AssertNoAllocation no_allocation;
+  DisallowHeapAllocation no_allocation;
   if (!is_deprecated()) return this;
 
   DescriptorArray* old_descriptors = instance_descriptors();
@@ -2788,6 +2846,8 @@ MaybeObject* JSObject::SetPropertyWithCallback(Object* structure,
     {
       // Leaving JavaScript.
       VMState<EXTERNAL> state(isolate);
+      ExternalCallbackScope call_scope(isolate,
+                                       v8::ToCData<Address>(call_obj));
       args.Call(call_fun,
                 v8::Utils::ToLocal(key),
                 v8::Utils::ToLocal(value_handle));
@@ -3888,10 +3948,12 @@ Handle<Object> JSObject::SetLocalPropertyIgnoreAttributes(
     Handle<JSObject> object,
     Handle<Name> key,
     Handle<Object> value,
-    PropertyAttributes attributes) {
+    PropertyAttributes attributes,
+    ValueType value_type) {
   CALL_HEAP_FUNCTION(
     object->GetIsolate(),
-    object->SetLocalPropertyIgnoreAttributes(*key, *value, attributes),
+    object->SetLocalPropertyIgnoreAttributes(
+        *key, *value, attributes, value_type),
     Object);
 }
 
@@ -3899,7 +3961,8 @@ Handle<Object> JSObject::SetLocalPropertyIgnoreAttributes(
 MaybeObject* JSObject::SetLocalPropertyIgnoreAttributes(
     Name* name_raw,
     Object* value_raw,
-    PropertyAttributes attributes) {
+    PropertyAttributes attributes,
+    ValueType value_type) {
   // Make sure that the top context does not change when doing callbacks or
   // interceptor calls.
   AssertNoContextChange ncc;
@@ -3925,13 +3988,16 @@ MaybeObject* JSObject::SetLocalPropertyIgnoreAttributes(
     return JSObject::cast(proto)->SetLocalPropertyIgnoreAttributes(
         name_raw,
         value_raw,
-        attributes);
+        attributes,
+        value_type);
   }
 
   // Check for accessor in prototype chain removed here in clone.
   if (!lookup.IsFound()) {
     // Neither properties nor transitions found.
-    return AddProperty(name_raw, value_raw, attributes, kNonStrictMode);
+    return AddProperty(
+        name_raw, value_raw, attributes, kNonStrictMode,
+        MAY_BE_STORE_FROM_KEYED, PERFORM_EXTENSIBILITY_CHECK, value_type);
   }
 
   // From this point on everything needs to be handlified.
@@ -3958,9 +4024,12 @@ MaybeObject* JSObject::SetLocalPropertyIgnoreAttributes(
     }
     case FIELD: {
       Representation representation = lookup.representation();
-      if (!value->FitsRepresentation(representation)) {
+      Representation value_representation =
+          value->OptimalRepresentation(value_type);
+      if (value_representation.IsNone()) break;
+      if (!value_representation.fits_into(representation)) {
         MaybeObject* maybe_failure = self->GeneralizeFieldRepresentation(
-            lookup.GetDescriptorIndex(), value->OptimalRepresentation());
+            lookup.GetDescriptorIndex(), value_representation);
         if (maybe_failure->IsFailure()) return maybe_failure;
         DescriptorArray* desc = self->map()->instance_descriptors();
         int descriptor = lookup.GetDescriptorIndex();
@@ -4001,9 +4070,11 @@ MaybeObject* JSObject::SetLocalPropertyIgnoreAttributes(
       if (details.type() == FIELD) {
         if (attributes == details.attributes()) {
           Representation representation = details.representation();
-          if (!value->FitsRepresentation(representation)) {
+          Representation value_representation =
+              value->OptimalRepresentation(value_type);
+          if (!value_representation.fits_into(representation)) {
             MaybeObject* maybe_map = transition_map->GeneralizeRepresentation(
-                descriptor, value->OptimalRepresentation());
+                descriptor, value_representation);
             if (!maybe_map->To(&transition_map)) return maybe_map;
             Object* back = transition_map->GetBackPointer();
             if (back->IsMap()) {
@@ -5201,7 +5272,7 @@ bool JSObject::ReferencesObjectFromElements(FixedArray* elements,
 bool JSObject::ReferencesObject(Object* obj) {
   Map* map_of_this = map();
   Heap* heap = GetHeap();
-  AssertNoAllocation no_alloc;
+  DisallowHeapAllocation no_allocation;
 
   // Is the object the constructor for this object?
   if (map_of_this->constructor() == obj) {
@@ -7545,7 +7616,7 @@ MaybeObject* FixedArray::CopySize(int new_length) {
   }
   FixedArray* result = FixedArray::cast(obj);
   // Copy the content
-  AssertNoAllocation no_gc;
+  DisallowHeapAllocation no_gc;
   int len = length();
   if (new_length < len) len = new_length;
   // We are taking the map from the old fixed array so the map is sure to
@@ -7560,7 +7631,7 @@ MaybeObject* FixedArray::CopySize(int new_length) {
 
 
 void FixedArray::CopyTo(int pos, FixedArray* dest, int dest_pos, int len) {
-  AssertNoAllocation no_gc;
+  DisallowHeapAllocation no_gc;
   WriteBarrierMode mode = dest->GetWriteBarrierMode(no_gc);
   for (int index = 0; index < len; index++) {
     dest->set(dest_pos+index, get(pos+index), mode);
@@ -7844,7 +7915,7 @@ bool String::LooksValid() {
 
 
 String::FlatContent String::GetFlatContent() {
-  ASSERT(!GetHeap()->allow_allocation(false));
+  ASSERT(!AllowHeapAllocation::IsAllowed());
   int length = this->length();
   StringShape shape(this);
   String* string = this;
@@ -8071,7 +8142,7 @@ void FlatStringReader::PostGarbageCollection() {
   if (str_ == NULL) return;
   Handle<String> str(str_);
   ASSERT(str->IsFlat());
-  AssertNoAllocation no_gc;
+  DisallowHeapAllocation no_gc;
   // This does not actually prevent the vector from being relocated later.
   String::FlatContent content = str->GetFlatContent();
   ASSERT(content.IsFlat());
@@ -8470,6 +8541,8 @@ class StringComparator {
       const uint8_t* buffer8_;
       const uint16_t* buffer16_;
     };
+
+   private:
     DISALLOW_IMPLICIT_CONSTRUCTORS(State);
   };
 
@@ -8624,7 +8697,7 @@ bool String::IsUtf8EqualTo(Vector<const char> str, bool allow_prefix_match) {
 bool String::IsOneByteEqualTo(Vector<const uint8_t> str) {
   int slen = length();
   if (str.length() != slen) return false;
-  AssertNoAllocation no_gc;
+  DisallowHeapAllocation no_gc;
   FlatContent content = GetFlatContent();
   if (content.IsAscii()) {
     return CompareChars(content.ToOneByteVector().start(),
@@ -8640,7 +8713,7 @@ bool String::IsOneByteEqualTo(Vector<const uint8_t> str) {
 bool String::IsTwoByteEqualTo(Vector<const uc16> str) {
   int slen = length();
   if (str.length() != slen) return false;
-  AssertNoAllocation no_gc;
+  DisallowHeapAllocation no_gc;
   FlatContent content = GetFlatContent();
   if (content.IsTwoByte()) {
     return CompareChars(content.ToUC16Vector().start(), str.start(), slen) == 0;
@@ -9607,114 +9680,6 @@ int SharedFunctionInfo::CalculateInObjectProperties() {
 }
 
 
-bool SharedFunctionInfo::CanGenerateInlineConstructor(Object* prototype) {
-  // Check the basic conditions for generating inline constructor code.
-  if (!FLAG_inline_new
-      || !has_only_simple_this_property_assignments()
-      || is_generator()
-      || this_property_assignments_count() == 0) {
-    return false;
-  }
-
-  Isolate* isolate = GetIsolate();
-  Heap* heap = isolate->heap();
-
-  // Traverse the proposed prototype chain looking for properties of the
-  // same names as are set by the inline constructor.
-  for (Object* obj = prototype;
-       obj != heap->null_value();
-       obj = obj->GetPrototype(isolate)) {
-    JSReceiver* receiver = JSReceiver::cast(obj);
-    for (int i = 0; i < this_property_assignments_count(); i++) {
-      LookupResult result(heap->isolate());
-      String* name = GetThisPropertyAssignmentName(i);
-      receiver->LocalLookup(name, &result);
-      if (result.IsFound()) {
-        switch (result.type()) {
-          case NORMAL:
-          case FIELD:
-          case CONSTANT_FUNCTION:
-            break;
-          case INTERCEPTOR:
-          case CALLBACKS:
-          case HANDLER:
-            return false;
-          case TRANSITION:
-          case NONEXISTENT:
-            UNREACHABLE();
-            break;
-        }
-      }
-    }
-  }
-
-  return true;
-}
-
-
-void SharedFunctionInfo::ForbidInlineConstructor() {
-  set_compiler_hints(BooleanBit::set(compiler_hints(),
-                                     kHasOnlySimpleThisPropertyAssignments,
-                                     false));
-}
-
-
-void SharedFunctionInfo::SetThisPropertyAssignmentsInfo(
-    bool only_simple_this_property_assignments,
-    FixedArray* assignments) {
-  set_compiler_hints(BooleanBit::set(compiler_hints(),
-                                     kHasOnlySimpleThisPropertyAssignments,
-                                     only_simple_this_property_assignments));
-  set_this_property_assignments(assignments);
-  set_this_property_assignments_count(assignments->length() / 3);
-}
-
-
-void SharedFunctionInfo::ClearThisPropertyAssignmentsInfo() {
-  Heap* heap = GetHeap();
-  set_compiler_hints(BooleanBit::set(compiler_hints(),
-                                     kHasOnlySimpleThisPropertyAssignments,
-                                     false));
-  set_this_property_assignments(heap->undefined_value());
-  set_this_property_assignments_count(0);
-}
-
-
-String* SharedFunctionInfo::GetThisPropertyAssignmentName(int index) {
-  Object* obj = this_property_assignments();
-  ASSERT(obj->IsFixedArray());
-  ASSERT(index < this_property_assignments_count());
-  obj = FixedArray::cast(obj)->get(index * 3);
-  ASSERT(obj->IsString());
-  return String::cast(obj);
-}
-
-
-bool SharedFunctionInfo::IsThisPropertyAssignmentArgument(int index) {
-  Object* obj = this_property_assignments();
-  ASSERT(obj->IsFixedArray());
-  ASSERT(index < this_property_assignments_count());
-  obj = FixedArray::cast(obj)->get(index * 3 + 1);
-  return Smi::cast(obj)->value() != -1;
-}
-
-
-int SharedFunctionInfo::GetThisPropertyAssignmentArgument(int index) {
-  ASSERT(IsThisPropertyAssignmentArgument(index));
-  Object* obj =
-      FixedArray::cast(this_property_assignments())->get(index * 3 + 1);
-  return Smi::cast(obj)->value();
-}
-
-
-Object* SharedFunctionInfo::GetThisPropertyAssignmentConstant(int index) {
-  ASSERT(!IsThisPropertyAssignmentArgument(index));
-  Object* obj =
-      FixedArray::cast(this_property_assignments())->get(index * 3 + 2);
-  return obj;
-}
-
-
 // Support function for printing the source code to a StringStream
 // without any allocation in the heap.
 void SharedFunctionInfo::SourceCodePrint(StringStream* accumulator,
@@ -9771,7 +9736,7 @@ static bool IsCodeEquivalent(Code* code, Code* recompiled) {
 
 void SharedFunctionInfo::EnableDeoptimizationSupport(Code* recompiled) {
   ASSERT(!has_deoptimization_support());
-  AssertNoAllocation no_allocation;
+  DisallowHeapAllocation no_allocation;
   Code* code = this->code();
   if (IsCodeEquivalent(code, recompiled)) {
     // Copy the deoptimization data from the recompiled code.
@@ -10088,7 +10053,7 @@ void Code::CopyFrom(const CodeDesc& desc) {
                   RelocInfo::kApplyMask;
   // Needed to find target_object and runtime_entry on X64
   Assembler* origin = desc.origin;
-  ALLOW_HANDLE_DEREF(GetIsolate(), "embedding raw addresses into code");
+  AllowDeferredHandleDereference embedding_raw_address;
   for (RelocIterator it(this, mode_mask); !it.done(); it.next()) {
     RelocInfo::Mode mode = it.rinfo()->rmode();
     if (mode == RelocInfo::EMBEDDED_OBJECT) {
@@ -10179,7 +10144,7 @@ SafepointEntry Code::GetSafepointEntry(Address pc) {
 
 Map* Code::FindFirstMap() {
   ASSERT(is_inline_cache_stub());
-  AssertNoAllocation no_allocation;
+  DisallowHeapAllocation no_allocation;
   int mask = RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT);
   for (RelocIterator it(this, mask); !it.done(); it.next()) {
     RelocInfo* info = it.rinfo();
@@ -10192,7 +10157,7 @@ Map* Code::FindFirstMap() {
 
 void Code::ReplaceFirstMap(Map* replace_with) {
   ASSERT(is_inline_cache_stub());
-  AssertNoAllocation no_allocation;
+  DisallowHeapAllocation no_allocation;
   int mask = RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT);
   for (RelocIterator it(this, mask); !it.done(); it.next()) {
     RelocInfo* info = it.rinfo();
@@ -10208,7 +10173,7 @@ void Code::ReplaceFirstMap(Map* replace_with) {
 
 void Code::FindAllMaps(MapHandleList* maps) {
   ASSERT(is_inline_cache_stub());
-  AssertNoAllocation no_allocation;
+  DisallowHeapAllocation no_allocation;
   int mask = RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT);
   for (RelocIterator it(this, mask); !it.done(); it.next()) {
     RelocInfo* info = it.rinfo();
@@ -10220,7 +10185,7 @@ void Code::FindAllMaps(MapHandleList* maps) {
 
 Code* Code::FindFirstCode() {
   ASSERT(is_inline_cache_stub());
-  AssertNoAllocation no_allocation;
+  DisallowHeapAllocation no_allocation;
   int mask = RelocInfo::ModeMask(RelocInfo::CODE_TARGET);
   for (RelocIterator it(this, mask); !it.done(); it.next()) {
     RelocInfo* info = it.rinfo();
@@ -10232,7 +10197,7 @@ Code* Code::FindFirstCode() {
 
 void Code::FindAllCode(CodeHandleList* code_list, int length) {
   ASSERT(is_inline_cache_stub());
-  AssertNoAllocation no_allocation;
+  DisallowHeapAllocation no_allocation;
   int mask = RelocInfo::ModeMask(RelocInfo::CODE_TARGET);
   int i = 0;
   for (RelocIterator it(this, mask); !it.done(); it.next()) {
@@ -10248,7 +10213,7 @@ void Code::FindAllCode(CodeHandleList* code_list, int length) {
 
 Name* Code::FindFirstName() {
   ASSERT(is_inline_cache_stub());
-  AssertNoAllocation no_allocation;
+  DisallowHeapAllocation no_allocation;
   int mask = RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT);
   for (RelocIterator it(this, mask); !it.done(); it.next()) {
     RelocInfo* info = it.rinfo();
@@ -10902,15 +10867,61 @@ static bool GetOldValue(Isolate* isolate,
                         Handle<JSObject> object,
                         uint32_t index,
                         List<Handle<Object> >* old_values,
-                        List<Handle<String> >* indices) {
+                        List<uint32_t>* indices) {
   PropertyAttributes attributes = object->GetLocalElementAttribute(index);
   ASSERT(attributes != ABSENT);
   if (attributes == DONT_DELETE) return false;
   old_values->Add(object->GetLocalElementAccessorPair(index) == NULL
       ? Object::GetElement(object, index)
       : Handle<Object>::cast(isolate->factory()->the_hole_value()));
-  indices->Add(isolate->factory()->Uint32ToString(index));
+  indices->Add(index);
   return true;
+}
+
+static void EnqueueSpliceRecord(Handle<JSArray> object,
+                                uint32_t index,
+                                Handle<JSArray> deleted,
+                                uint32_t add_count) {
+  Isolate* isolate = object->GetIsolate();
+  HandleScope scope(isolate);
+  Handle<Object> index_object = isolate->factory()->NewNumberFromUint(index);
+  Handle<Object> add_count_object =
+      isolate->factory()->NewNumberFromUint(add_count);
+
+  Handle<Object> args[] =
+      { object, index_object, deleted, add_count_object };
+
+  bool threw;
+  Execution::Call(Handle<JSFunction>(isolate->observers_enqueue_splice()),
+                  isolate->factory()->undefined_value(), ARRAY_SIZE(args), args,
+                  &threw);
+  ASSERT(!threw);
+}
+
+
+static void BeginPerformSplice(Handle<JSArray> object) {
+  Isolate* isolate = object->GetIsolate();
+  HandleScope scope(isolate);
+  Handle<Object> args[] = { object };
+
+  bool threw;
+  Execution::Call(Handle<JSFunction>(isolate->observers_begin_perform_splice()),
+                  isolate->factory()->undefined_value(), ARRAY_SIZE(args), args,
+                  &threw);
+  ASSERT(!threw);
+}
+
+
+static void EndPerformSplice(Handle<JSArray> object) {
+  Isolate* isolate = object->GetIsolate();
+  HandleScope scope(isolate);
+  Handle<Object> args[] = { object };
+
+  bool threw;
+  Execution::Call(Handle<JSFunction>(isolate->observers_end_perform_splice()),
+                  isolate->factory()->undefined_value(), ARRAY_SIZE(args), args,
+                  &threw);
+  ASSERT(!threw);
 }
 
 
@@ -10923,7 +10934,7 @@ MaybeObject* JSArray::SetElementsLength(Object* len) {
   Isolate* isolate = GetIsolate();
   HandleScope scope(isolate);
   Handle<JSArray> self(this);
-  List<Handle<String> > indices;
+  List<uint32_t> indices;
   List<Handle<Object> > old_values;
   Handle<Object> old_length_handle(self->length(), isolate);
   Handle<Object> new_length_handle(len, isolate);
@@ -10963,15 +10974,38 @@ MaybeObject* JSArray::SetElementsLength(Object* len) {
   if (!result->ToHandle(&hresult, isolate)) return result;
 
   CHECK(self->length()->ToArrayIndex(&new_length));
-  if (old_length != new_length) {
-    for (int i = 0; i < indices.length(); ++i) {
-      JSObject::EnqueueChangeRecord(
-          self, "deleted", indices[i], old_values[i]);
-    }
+  if (old_length == new_length) return *hresult;
+
+  BeginPerformSplice(self);
+
+  for (int i = 0; i < indices.length(); ++i) {
     JSObject::EnqueueChangeRecord(
-        self, "updated", isolate->factory()->length_string(),
-        old_length_handle);
+        self, "deleted", isolate->factory()->Uint32ToString(indices[i]),
+        old_values[i]);
   }
+  JSObject::EnqueueChangeRecord(
+      self, "updated", isolate->factory()->length_string(),
+      old_length_handle);
+
+  EndPerformSplice(self);
+
+  uint32_t index = Min(old_length, new_length);
+  uint32_t add_count = new_length > old_length ? new_length - old_length : 0;
+  uint32_t delete_count = new_length < old_length ? old_length - new_length : 0;
+  Handle<JSArray> deleted = isolate->factory()->NewJSArray(0);
+  if (delete_count > 0) {
+    for (int i = indices.length() - 1; i >= 0; i--) {
+      JSObject::SetElement(deleted, indices[i] - index, old_values[i], NONE,
+                           kNonStrictMode);
+    }
+
+    SetProperty(deleted, isolate->factory()->length_string(),
+                isolate->factory()->NewNumberFromUint(delete_count),
+                NONE, kNonStrictMode);
+  }
+
+  EnqueueSpliceRecord(self, index, deleted, add_count);
+
   return *hresult;
 }
 
@@ -11057,6 +11091,24 @@ void Map::ZapPrototypeTransitions() {
 }
 
 
+void Map::AddDependentCompilationInfo(DependentCode::DependencyGroup group,
+                                      CompilationInfo* info) {
+  Handle<DependentCode> dep(dependent_code());
+  Handle<DependentCode> codes =
+      DependentCode::Insert(dep, group, info->object_wrapper());
+  if (*codes != dependent_code()) set_dependent_code(*codes);
+  info->dependent_maps(group)->Add(Handle<Map>(this), info->zone());
+}
+
+
+void Map::AddDependentCode(DependentCode::DependencyGroup group,
+                           Handle<Code> code) {
+  Handle<DependentCode> codes = DependentCode::Insert(
+      Handle<DependentCode>(dependent_code()), group, code);
+  if (*codes != dependent_code()) set_dependent_code(*codes);
+}
+
+
 DependentCode::GroupStartIndexes::GroupStartIndexes(DependentCode* entries) {
   Recompute(entries);
 }
@@ -11073,13 +11125,13 @@ void DependentCode::GroupStartIndexes::Recompute(DependentCode* entries) {
 
 Handle<DependentCode> DependentCode::Insert(Handle<DependentCode> entries,
                                             DependencyGroup group,
-                                            Handle<Code> value) {
+                                            Handle<Object> object) {
   GroupStartIndexes starts(*entries);
   int start = starts.at(group);
   int end = starts.at(group + 1);
   int number_of_entries = starts.number_of_entries();
-  if (start < end && entries->code_at(end - 1) == *value) {
-    // Do not append the code if it is already in the array.
+  if (start < end && entries->object_at(end - 1) == *object) {
+    // Do not append the compilation info if it is already in the array.
     // It is sufficient to just check only the last element because
     // we process embedded maps of an optimized code in one batch.
     return entries;
@@ -11096,7 +11148,7 @@ Handle<DependentCode> DependentCode::Insert(Handle<DependentCode> entries,
     end = starts.at(group + 1);
     number_of_entries = starts.number_of_entries();
     for (int i = 0; i < number_of_entries; i++) {
-      entries->clear_code_at(i);
+      entries->clear_at(i);
     }
     // If the old fixed array was empty, we need to reset counters of the
     // new array.
@@ -11108,17 +11160,78 @@ Handle<DependentCode> DependentCode::Insert(Handle<DependentCode> entries,
     entries = new_entries;
   }
   entries->ExtendGroup(group);
-  entries->set_code_at(end, *value);
+  entries->set_object_at(end, *object);
   entries->set_number_of_entries(group, end + 1 - start);
   return entries;
 }
 
 
+void DependentCode::UpdateToFinishedCode(DependencyGroup group,
+                                         CompilationInfo* info,
+                                         Code* code) {
+  DisallowHeapAllocation no_gc;
+  AllowDeferredHandleDereference get_object_wrapper;
+  Foreign* info_wrapper = *info->object_wrapper();
+  GroupStartIndexes starts(this);
+  int start = starts.at(group);
+  int end = starts.at(group + 1);
+  for (int i = start; i < end; i++) {
+    if (object_at(i) == info_wrapper) {
+      set_object_at(i, code);
+      break;
+    }
+  }
+
+#ifdef DEBUG
+  for (int i = start; i < end; i++) {
+    ASSERT(is_code_at(i) || compilation_info_at(i) != info);
+  }
+#endif
+}
+
+
+void DependentCode::RemoveCompilationInfo(DependentCode::DependencyGroup group,
+                                          CompilationInfo* info) {
+  DisallowHeapAllocation no_allocation;
+  AllowDeferredHandleDereference get_object_wrapper;
+  Foreign* info_wrapper = *info->object_wrapper();
+  GroupStartIndexes starts(this);
+  int start = starts.at(group);
+  int end = starts.at(group + 1);
+  // Find compilation info wrapper.
+  int info_pos = -1;
+  for (int i = start; i < end; i++) {
+    if (object_at(i) == info_wrapper) {
+      info_pos = i;
+      break;
+    }
+  }
+  if (info_pos == -1) return;  // Not found.
+  int gap = info_pos;
+  // Use the last of each group to fill the gap in the previous group.
+  for (int i = group; i < kGroupCount; i++) {
+    int last_of_group = starts.at(group + 1) - 1;
+    ASSERT(last_of_group >= gap);
+    if (last_of_group == gap) continue;
+    copy(last_of_group, gap);
+    gap = last_of_group;
+  }
+  clear_at(gap);  // Clear last gap.
+  set_number_of_entries(group, end - start - 1);
+
+#ifdef DEBUG
+  for (int i = start; i < end - 1; i++) {
+    ASSERT(is_code_at(i) || compilation_info_at(i) != info);
+  }
+#endif
+}
+
+
 bool DependentCode::Contains(DependencyGroup group, Code* code) {
   GroupStartIndexes starts(this);
-  int number_of_entries = starts.at(kGroupCount);
+  int number_of_entries = starts.number_of_code_entries();
   for (int i = 0; i < number_of_entries; i++) {
-    if (code_at(i) == code) return true;
+    if (object_at(i) == code) return true;
   }
   return false;
 }
@@ -11135,24 +11248,29 @@ class DeoptimizeDependentCodeFilter : public OptimizedFunctionFilter {
 void DependentCode::DeoptimizeDependentCodeGroup(
     Isolate* isolate,
     DependentCode::DependencyGroup group) {
-  AssertNoAllocation no_allocation_scope;
+  DisallowHeapAllocation no_allocation_scope;
   DependentCode::GroupStartIndexes starts(this);
   int start = starts.at(group);
   int end = starts.at(group + 1);
-  int number_of_entries = starts.at(DependentCode::kGroupCount);
+  int code_entries = starts.number_of_code_entries();
   if (start == end) return;
   for (int i = start; i < end; i++) {
-    Code* code = code_at(i);
-    code->set_marked_for_deoptimization(true);
+    if (is_code_at(i)) {
+      Code* code = code_at(i);
+      code->set_marked_for_deoptimization(true);
+    } else {
+      CompilationInfo* info = compilation_info_at(i);
+      info->AbortDueToDependentMap();
+    }
   }
   // Compact the array by moving all subsequent groups to fill in the new holes.
-  for (int src = end, dst = start; src < number_of_entries; src++, dst++) {
-    set_code_at(dst, code_at(src));
+  for (int src = end, dst = start; src < code_entries; src++, dst++) {
+    copy(src, dst);
   }
   // Now the holes are at the end of the array, zap them for heap-verifier.
   int removed = end - start;
-  for (int i = number_of_entries - removed; i < number_of_entries; i++) {
-    clear_code_at(i);
+  for (int i = code_entries - removed; i < code_entries; i++) {
+    clear_at(i);
   }
   set_number_of_entries(group, 0);
   DeoptimizeDependentCodeFilter filter;
@@ -11199,7 +11317,8 @@ MaybeObject* JSReceiver::SetPrototype(Object* value,
       // Cycle detected.
       HandleScope scope(isolate);
       return isolate->Throw(
-          *FACTORY->NewError("cyclic_proto", HandleVector<Object>(NULL, 0)));
+          *isolate->factory()->NewError("cyclic_proto",
+                                        HandleVector<Object>(NULL, 0)));
     }
   }
 
@@ -11996,14 +12115,15 @@ MaybeObject* JSObject::SetElement(uint32_t index,
   Handle<Object> value(value_raw, isolate);
   PropertyAttributes old_attributes = self->GetLocalElementAttribute(index);
   Handle<Object> old_value = isolate->factory()->the_hole_value();
-  Handle<Object> old_length;
+  Handle<Object> old_length_handle;
+  Handle<Object> new_length_handle;
 
   if (old_attributes != ABSENT) {
     if (self->GetLocalElementAccessorPair(index) == NULL)
       old_value = Object::GetElement(self, index);
   } else if (self->IsJSArray()) {
     // Store old array length in case adding an element grows the array.
-    old_length = handle(Handle<JSArray>::cast(self)->length(), isolate);
+    old_length_handle = handle(Handle<JSArray>::cast(self)->length(), isolate);
   }
 
   // Check for lookup interceptor
@@ -12019,11 +12139,25 @@ MaybeObject* JSObject::SetElement(uint32_t index,
   Handle<String> name = isolate->factory()->Uint32ToString(index);
   PropertyAttributes new_attributes = self->GetLocalElementAttribute(index);
   if (old_attributes == ABSENT) {
-    EnqueueChangeRecord(self, "new", name, old_value);
     if (self->IsJSArray() &&
-        !old_length->SameValue(Handle<JSArray>::cast(self)->length())) {
-      EnqueueChangeRecord(
-          self, "updated", isolate->factory()->length_string(), old_length);
+        !old_length_handle->SameValue(Handle<JSArray>::cast(self)->length())) {
+      new_length_handle = handle(Handle<JSArray>::cast(self)->length(),
+                                 isolate);
+      uint32_t old_length = 0;
+      uint32_t new_length = 0;
+      CHECK(old_length_handle->ToArrayIndex(&old_length));
+      CHECK(new_length_handle->ToArrayIndex(&new_length));
+
+      BeginPerformSplice(Handle<JSArray>::cast(self));
+      EnqueueChangeRecord(self, "new", name, old_value);
+      EnqueueChangeRecord(self, "updated", isolate->factory()->length_string(),
+                          old_length_handle);
+      EndPerformSplice(Handle<JSArray>::cast(self));
+      Handle<JSArray> deleted = isolate->factory()->NewJSArray(0);
+      EnqueueSpliceRecord(Handle<JSArray>::cast(self), old_length, deleted,
+                          new_length - old_length);
+    } else {
+      EnqueueChangeRecord(self, "new", name, old_value);
     }
   } else if (old_value->IsTheHole()) {
     EnqueueChangeRecord(self, "reconfigured", name, old_value);
@@ -12554,7 +12688,7 @@ template<typename Shape, typename Key>
 void Dictionary<Shape, Key>::CopyValuesTo(FixedArray* elements) {
   int pos = 0;
   int capacity = HashTable<Shape, Key>::Capacity();
-  AssertNoAllocation no_gc;
+  DisallowHeapAllocation no_gc;
   WriteBarrierMode mode = elements->GetWriteBarrierMode(no_gc);
   for (int i = 0; i < capacity; i++) {
     Object* k =  Dictionary<Shape, Key>::KeyAt(i);
@@ -13435,7 +13569,7 @@ template<typename Shape, typename Key>
 MaybeObject* HashTable<Shape, Key>::Rehash(HashTable* new_table, Key key) {
   ASSERT(NumberOfElements() < new_table->Capacity());
 
-  AssertNoAllocation no_gc;
+  DisallowHeapAllocation no_gc;
   WriteBarrierMode mode = new_table->GetWriteBarrierMode(no_gc);
 
   // Copy prefix to new array.
@@ -13678,7 +13812,7 @@ MaybeObject* JSObject::PrepareSlowElementsForSort(uint32_t limit) {
   }
   SeededNumberDictionary* new_dict = SeededNumberDictionary::cast(obj);
 
-  AssertNoAllocation no_alloc;
+  DisallowHeapAllocation no_alloc;
 
   uint32_t pos = 0;
   uint32_t undefs = 0;
@@ -13850,11 +13984,11 @@ MaybeObject* JSObject::PrepareElementsForSort(uint32_t limit) {
     }
   } else {
     FixedArray* elements = FixedArray::cast(elements_base);
-    AssertNoAllocation no_alloc;
+    DisallowHeapAllocation no_gc;
 
     // Split elements into defined, undefined and the_hole, in that order.  Only
     // count locations for undefined and the hole, and fill them afterwards.
-    WriteBarrierMode write_barrier = elements->GetWriteBarrierMode(no_alloc);
+    WriteBarrierMode write_barrier = elements->GetWriteBarrierMode(no_gc);
     unsigned int undefs = limit;
     unsigned int holes = limit;
     // Assume most arrays contain no holes and undefined values, so minimize the
@@ -15242,7 +15376,7 @@ Handle<DeclaredAccessorDescriptor> DeclaredAccessorDescriptor::Create(
   value->set_serialized_data(*serialized_descriptor);
   // Copy in the data.
   {
-    AssertNoAllocation no_allocation;
+    DisallowHeapAllocation no_allocation;
     uint8_t* array = serialized_descriptor->GetDataStartAddress();
     if (previous_length != 0) {
       uint8_t* previous_array =
@@ -15450,6 +15584,8 @@ void BreakPointInfo::ClearBreakPoint(Handle<BreakPointInfo> break_point_info,
 // Add the specified break point object.
 void BreakPointInfo::SetBreakPoint(Handle<BreakPointInfo> break_point_info,
                                    Handle<Object> break_point_object) {
+  Isolate* isolate = break_point_info->GetIsolate();
+
   // If there was no break point objects before just set it.
   if (break_point_info->break_point_objects()->IsUndefined()) {
     break_point_info->set_break_point_objects(*break_point_object);
@@ -15459,7 +15595,7 @@ void BreakPointInfo::SetBreakPoint(Handle<BreakPointInfo> break_point_info,
   if (break_point_info->break_point_objects() == *break_point_object) return;
   // If there was one break point object before replace with array.
   if (!break_point_info->break_point_objects()->IsFixedArray()) {
-    Handle<FixedArray> array = FACTORY->NewFixedArray(2);
+    Handle<FixedArray> array = isolate->factory()->NewFixedArray(2);
     array->set(0, break_point_info->break_point_objects());
     array->set(1, *break_point_object);
     break_point_info->set_break_point_objects(*array);
@@ -15470,7 +15606,7 @@ void BreakPointInfo::SetBreakPoint(Handle<BreakPointInfo> break_point_info,
       Handle<FixedArray>(
           FixedArray::cast(break_point_info->break_point_objects()));
   Handle<FixedArray> new_array =
-      FACTORY->NewFixedArray(old_array->length() + 1);
+      isolate->factory()->NewFixedArray(old_array->length() + 1);
   for (int i = 0; i < old_array->length(); i++) {
     // If the break point was there before just ignore.
     if (old_array->get(i) == *break_point_object) return;
@@ -15641,6 +15777,21 @@ void JSDate::SetLocalFields(int64_t local_time_ms, DateCache* date_cache) {
   set_hour(Smi::FromInt(hour), SKIP_WRITE_BARRIER);
   set_min(Smi::FromInt(min), SKIP_WRITE_BARRIER);
   set_sec(Smi::FromInt(sec), SKIP_WRITE_BARRIER);
+}
+
+
+void JSArrayBuffer::Neuter() {
+  ASSERT(is_external());
+  set_backing_store(NULL);
+  set_byte_length(Smi::FromInt(0));
+}
+
+
+void JSTypedArray::Neuter() {
+  set_byte_offset(Smi::FromInt(0));
+  set_byte_length(Smi::FromInt(0));
+  set_length(Smi::FromInt(0));
+  set_elements(GetHeap()->EmptyExternalArrayForMap(map()));
 }
 
 } }  // namespace v8::internal

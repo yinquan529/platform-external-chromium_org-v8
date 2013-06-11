@@ -655,17 +655,15 @@ void Call::RecordTypeFeedback(TypeFeedbackOracle* oracle,
 
 
 void CallNew::RecordTypeFeedback(TypeFeedbackOracle* oracle) {
+  allocation_info_cell_ = oracle->GetCallNewAllocationInfoCell(this);
   is_monomorphic_ = oracle->CallNewIsMonomorphic(this);
   if (is_monomorphic_) {
     target_ = oracle->GetCallNewTarget(this);
-    elements_kind_ = oracle->GetCallNewElementsKind(this);
+    Object* value = allocation_info_cell_->value();
+    if (value->IsSmi()) {
+      elements_kind_ = static_cast<ElementsKind>(Smi::cast(value)->value());
+    }
   }
-  Handle<Object> alloc_elements_kind = oracle->GetInfo(CallNewFeedbackId());
-//  if (alloc_elements_kind->IsSmi())
-//    alloc_elements_kind_ = Handle<Smi>::cast(alloc_elements_kind);
-  alloc_elements_kind_ = alloc_elements_kind->IsSmi()
-      ? Handle<Smi>::cast(alloc_elements_kind)
-      : handle(Smi::FromInt(GetInitialFastElementsKind()), oracle->isolate());
 }
 
 
@@ -682,7 +680,8 @@ void UnaryOperation::RecordTypeFeedback(TypeFeedbackOracle* oracle) {
 
 
 void BinaryOperation::RecordTypeFeedback(TypeFeedbackOracle* oracle) {
-  oracle->BinaryType(this, &left_type_, &right_type_, &result_type_);
+  oracle->BinaryType(this, &left_type_, &right_type_, &result_type_,
+                     &has_fixed_right_arg_, &fixed_right_arg_value_);
 }
 
 
@@ -791,12 +790,12 @@ Interval RegExpQuantifier::CaptureRegisters() {
 
 
 bool RegExpAssertion::IsAnchoredAtStart() {
-  return type() == RegExpAssertion::START_OF_INPUT;
+  return assertion_type() == RegExpAssertion::START_OF_INPUT;
 }
 
 
 bool RegExpAssertion::IsAnchoredAtEnd() {
-  return type() == RegExpAssertion::END_OF_INPUT;
+  return assertion_type() == RegExpAssertion::END_OF_INPUT;
 }
 
 
@@ -928,7 +927,7 @@ void* RegExpUnparser::VisitCharacterClass(RegExpCharacterClass* that,
 
 
 void* RegExpUnparser::VisitAssertion(RegExpAssertion* that, void* data) {
-  switch (that->type()) {
+  switch (that->assertion_type()) {
     case RegExpAssertion::START_OF_INPUT:
       stream()->Add("@^i");
       break;
@@ -1155,6 +1154,7 @@ DONT_SELFOPTIMIZE_NODE(DoWhileStatement)
 DONT_SELFOPTIMIZE_NODE(WhileStatement)
 DONT_SELFOPTIMIZE_NODE(ForStatement)
 DONT_SELFOPTIMIZE_NODE(ForInStatement)
+DONT_SELFOPTIMIZE_NODE(ForOfStatement)
 
 DONT_CACHE_NODE(ModuleLiteral)
 
@@ -1183,6 +1183,7 @@ void AstConstructionVisitor::VisitCallRuntime(CallRuntime* node) {
 
 Handle<String> Literal::ToString() {
   if (handle_->IsString()) return Handle<String>::cast(handle_);
+  Factory* factory = Isolate::Current()->factory();
   ASSERT(handle_->IsNumber());
   char arr[100];
   Vector<char> buffer(arr, ARRAY_SIZE(arr));
@@ -1194,7 +1195,7 @@ Handle<String> Literal::ToString() {
   } else {
     str = DoubleToCString(handle_->Number(), buffer);
   }
-  return FACTORY->NewStringFromAscii(CStrVector(str));
+  return factory->NewStringFromAscii(CStrVector(str));
 }
 
 

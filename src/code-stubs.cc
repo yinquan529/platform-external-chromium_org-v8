@@ -305,6 +305,27 @@ void BinaryOpStub::GenerateStringStub(MacroAssembler* masm) {
 }
 
 
+InlineCacheState ICCompareStub::GetICState() {
+  CompareIC::State state = Max(left_, right_);
+  switch (state) {
+    case CompareIC::UNINITIALIZED:
+      return ::v8::internal::UNINITIALIZED;
+    case CompareIC::SMI:
+    case CompareIC::NUMBER:
+    case CompareIC::INTERNALIZED_STRING:
+    case CompareIC::STRING:
+    case CompareIC::UNIQUE_NAME:
+    case CompareIC::OBJECT:
+    case CompareIC::KNOWN_OBJECT:
+      return MONOMORPHIC;
+    case CompareIC::GENERIC:
+      return ::v8::internal::GENERIC;
+  }
+  UNREACHABLE();
+  return ::v8::internal::UNINITIALIZED;
+}
+
+
 void ICCompareStub::AddToSpecialCache(Handle<Code> new_object) {
   ASSERT(*known_map_ != NULL);
   Isolate* isolate = new_object->GetIsolate();
@@ -572,6 +593,14 @@ void CallConstructStub::PrintName(StringStream* stream) {
 }
 
 
+bool ToBooleanStub::Record(Handle<Object> object) {
+  Types old_types(types_);
+  bool to_boolean_value = types_.Record(object);
+  old_types.TraceTransition(types_);
+  return to_boolean_value;
+}
+
+
 void ToBooleanStub::PrintName(StringStream* stream) {
   stream->Add("ToBooleanStub_");
   types_.Print(stream);
@@ -766,6 +795,21 @@ ArrayConstructorStub::ArrayConstructorStub(Isolate* isolate,
     UNREACHABLE();
   }
   ArrayConstructorStubBase::GenerateStubsAheadOfTime(isolate);
+}
+
+
+void InternalArrayConstructorStubBase::InstallDescriptors(Isolate* isolate) {
+  InternalArrayNoArgumentConstructorStub stub1(FAST_ELEMENTS);
+  InstallDescriptor(isolate, &stub1);
+  InternalArraySingleArgumentConstructorStub stub2(FAST_ELEMENTS);
+  InstallDescriptor(isolate, &stub2);
+  InternalArrayNArgumentsConstructorStub stub3(FAST_ELEMENTS);
+  InstallDescriptor(isolate, &stub3);
+}
+
+InternalArrayConstructorStub::InternalArrayConstructorStub(
+    Isolate* isolate) {
+  InternalArrayConstructorStubBase::GenerateStubsAheadOfTime(isolate);
 }
 
 

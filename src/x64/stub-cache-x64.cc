@@ -449,12 +449,13 @@ static void GenerateFastApiCall(MacroAssembler* masm,
   //                           (first fast api call extra argument)
   //  -- rsp[24]             : api call data
   //  -- rsp[32]             : isolate
-  //  -- rsp[40]             : ReturnValue
+  //  -- rsp[40]             : ReturnValue default value
+  //  -- rsp[48]             : ReturnValue
   //
-  //  -- rsp[48]             : last argument
+  //  -- rsp[56]             : last argument
   //  -- ...
-  //  -- rsp[(argc + 5) * 8] : first argument
-  //  -- rsp[(argc + 6) * 8] : receiver
+  //  -- rsp[(argc + 6) * 8] : first argument
+  //  -- rsp[(argc + 7) * 8] : receiver
   // -----------------------------------
   // Get the function and setup the context.
   Handle<JSFunction> function = optimization.constant_function();
@@ -477,9 +478,10 @@ static void GenerateFastApiCall(MacroAssembler* masm,
   __ movq(Operand(rsp, 4 * kPointerSize), kScratchRegister);
   __ LoadRoot(kScratchRegister, Heap::kUndefinedValueRootIndex);
   __ movq(Operand(rsp, 5 * kPointerSize), kScratchRegister);
+  __ movq(Operand(rsp, 6 * kPointerSize), kScratchRegister);
 
   // Prepare arguments.
-  STATIC_ASSERT(kFastApiCallArguments == 5);
+  STATIC_ASSERT(kFastApiCallArguments == 6);
   __ lea(rbx, Operand(rsp, kFastApiCallArguments * kPointerSize));
 
   // Function address is a foreign pointer outside V8's heap.
@@ -1305,6 +1307,7 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
   }
   __ LoadRoot(kScratchRegister, Heap::kUndefinedValueRootIndex);
   __ push(kScratchRegister);  // return value
+  __ push(kScratchRegister);  // return value default
   __ PushAddress(ExternalReference::isolate_address(isolate()));
   __ push(name());  // name
   // Save a pointer to where we pushed the arguments pointer.  This will be
@@ -1337,8 +1340,8 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
   const int kArgStackSpace = 1;
 
   __ PrepareCallApiFunction(kArgStackSpace, returns_handle);
-  STATIC_ASSERT(PropertyCallbackArguments::kArgsLength == 5);
-  __ lea(rax, Operand(name_arg, 5 * kPointerSize));
+  STATIC_ASSERT(PropertyCallbackArguments::kArgsLength == 6);
+  __ lea(rax, Operand(name_arg, 6 * kPointerSize));
 
   // v8::AccessorInfo::args_.
   __ movq(StackSpaceOperand(0), rax);
@@ -1350,7 +1353,7 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
   __ CallApiFunctionAndReturn(getter_address,
                               kStackSpace,
                               returns_handle,
-                              4);
+                              5);
 }
 
 
@@ -2958,139 +2961,6 @@ Handle<Code> BaseLoadStubCompiler::CompilePolymorphicIC(
   InlineCacheState state =
       number_of_handled_maps > 1 ? POLYMORPHIC : MONOMORPHIC;
   return GetICCode(kind(), type, name, state);
-}
-
-
-// Specialized stub for constructing objects from functions which only have only
-// simple assignments of the form this.x = ...; in their body.
-Handle<Code> ConstructStubCompiler::CompileConstructStub(
-    Handle<JSFunction> function) {
-  // ----------- S t a t e -------------
-  //  -- rax : argc
-  //  -- rdi : constructor
-  //  -- rsp[0] : return address
-  //  -- rsp[4] : last argument
-  // -----------------------------------
-  Label generic_stub_call;
-
-  // Use r8 for holding undefined which is used in several places below.
-  __ Move(r8, factory()->undefined_value());
-
-#ifdef ENABLE_DEBUGGER_SUPPORT
-  // Check to see whether there are any break points in the function code. If
-  // there are jump to the generic constructor stub which calls the actual
-  // code for the function thereby hitting the break points.
-  __ movq(rbx, FieldOperand(rdi, JSFunction::kSharedFunctionInfoOffset));
-  __ movq(rbx, FieldOperand(rbx, SharedFunctionInfo::kDebugInfoOffset));
-  __ cmpq(rbx, r8);
-  __ j(not_equal, &generic_stub_call);
-#endif
-
-  // Load the initial map and verify that it is in fact a map.
-  // rdi: constructor
-  __ movq(rbx, FieldOperand(rdi, JSFunction::kPrototypeOrInitialMapOffset));
-  // Will both indicate a NULL and a Smi.
-  STATIC_ASSERT(kSmiTag == 0);
-  __ JumpIfSmi(rbx, &generic_stub_call);
-  __ CmpObjectType(rbx, MAP_TYPE, rcx);
-  __ j(not_equal, &generic_stub_call);
-
-#ifdef DEBUG
-  // Cannot construct functions this way.
-  // rbx: initial map
-  __ CmpInstanceType(rbx, JS_FUNCTION_TYPE);
-  __ Check(not_equal, "Function constructed by construct stub.");
-#endif
-
-  // Now allocate the JSObject in new space.
-  // rbx: initial map
-  ASSERT(function->has_initial_map());
-  int instance_size = function->initial_map()->instance_size();
-#ifdef DEBUG
-  __ movzxbq(rcx, FieldOperand(rbx, Map::kInstanceSizeOffset));
-  __ shl(rcx, Immediate(kPointerSizeLog2));
-  __ cmpq(rcx, Immediate(instance_size));
-  __ Check(equal, "Instance size of initial map changed.");
-#endif
-  __ Allocate(instance_size, rdx, rcx, no_reg, &generic_stub_call,
-              NO_ALLOCATION_FLAGS);
-
-  // Allocated the JSObject, now initialize the fields and add the heap tag.
-  // rbx: initial map
-  // rdx: JSObject (untagged)
-  __ movq(Operand(rdx, JSObject::kMapOffset), rbx);
-  __ Move(rbx, factory()->empty_fixed_array());
-  __ movq(Operand(rdx, JSObject::kPropertiesOffset), rbx);
-  __ movq(Operand(rdx, JSObject::kElementsOffset), rbx);
-
-  // rax: argc
-  // rdx: JSObject (untagged)
-  // Load the address of the first in-object property into r9.
-  __ lea(r9, Operand(rdx, JSObject::kHeaderSize));
-  // Calculate the location of the first argument. The stack contains only the
-  // return address on top of the argc arguments.
-  __ lea(rcx, Operand(rsp, rax, times_pointer_size, 0));
-
-  // rax: argc
-  // rcx: first argument
-  // rdx: JSObject (untagged)
-  // r8: undefined
-  // r9: first in-object property of the JSObject
-  // Fill the initialized properties with a constant value or a passed argument
-  // depending on the this.x = ...; assignment in the function.
-  Handle<SharedFunctionInfo> shared(function->shared());
-  for (int i = 0; i < shared->this_property_assignments_count(); i++) {
-    if (shared->IsThisPropertyAssignmentArgument(i)) {
-      // Check if the argument assigned to the property is actually passed.
-      // If argument is not passed the property is set to undefined,
-      // otherwise find it on the stack.
-      int arg_number = shared->GetThisPropertyAssignmentArgument(i);
-      __ movq(rbx, r8);
-      __ cmpq(rax, Immediate(arg_number));
-      __ cmovq(above, rbx, Operand(rcx, arg_number * -kPointerSize));
-      // Store value in the property.
-      __ movq(Operand(r9, i * kPointerSize), rbx);
-    } else {
-      // Set the property to the constant value.
-      Handle<Object> constant(shared->GetThisPropertyAssignmentConstant(i),
-                              isolate());
-      __ Move(Operand(r9, i * kPointerSize), constant);
-    }
-  }
-
-  // Fill the unused in-object property fields with undefined.
-  for (int i = shared->this_property_assignments_count();
-       i < function->initial_map()->inobject_properties();
-       i++) {
-    __ movq(Operand(r9, i * kPointerSize), r8);
-  }
-
-  // rax: argc
-  // rdx: JSObject (untagged)
-  // Move argc to rbx and the JSObject to return to rax and tag it.
-  __ movq(rbx, rax);
-  __ movq(rax, rdx);
-  __ or_(rax, Immediate(kHeapObjectTag));
-
-  // rax: JSObject
-  // rbx: argc
-  // Remove caller arguments and receiver from the stack and return.
-  __ pop(rcx);
-  __ lea(rsp, Operand(rsp, rbx, times_pointer_size, 1 * kPointerSize));
-  __ push(rcx);
-  Counters* counters = isolate()->counters();
-  __ IncrementCounter(counters->constructed_objects(), 1);
-  __ IncrementCounter(counters->constructed_objects_stub(), 1);
-  __ ret(0);
-
-  // Jump to the generic stub in case the specialized code cannot handle the
-  // construction.
-  __ bind(&generic_stub_call);
-  Handle<Code> code = isolate()->builtins()->JSConstructStubGeneric();
-  __ Jump(code, RelocInfo::CODE_TARGET);
-
-  // Return the generated code.
-  return GetCode();
 }
 
 

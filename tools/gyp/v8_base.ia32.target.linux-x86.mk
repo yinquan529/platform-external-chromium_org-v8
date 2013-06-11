@@ -74,6 +74,7 @@ LOCAL_SRC_FILES := \
 	v8/src/heap-profiler.cc \
 	v8/src/heap-snapshot-generator.cc \
 	v8/src/heap.cc \
+	v8/src/hydrogen-environment-liveness.cc \
 	v8/src/hydrogen-instructions.cc \
 	v8/src/hydrogen.cc \
 	v8/src/hydrogen-gvn.cc \
@@ -128,6 +129,7 @@ LOCAL_SRC_FILES := \
 	v8/src/token.cc \
 	v8/src/transitions.cc \
 	v8/src/type-info.cc \
+	v8/src/types.cc \
 	v8/src/typing.cc \
 	v8/src/unicode.cc \
 	v8/src/utils.cc \
@@ -206,7 +208,6 @@ MY_DEFS := \
 	'-DNO_TCMALLOC' \
 	'-DDISABLE_NACL' \
 	'-DCHROMIUM_BUILD' \
-	'-DENABLE_DOUBLE_RESOURCE_LOAD_TIMING' \
 	'-DUSE_LIBJPEG_TURBO=1' \
 	'-DUSE_PROPRIETARY_CODECS' \
 	'-DENABLE_GPU=1' \

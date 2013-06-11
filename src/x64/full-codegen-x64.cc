@@ -652,9 +652,8 @@ void FullCodeGenerator::DoTest(Expression* condition,
                                Label* if_true,
                                Label* if_false,
                                Label* fall_through) {
-  ToBooleanStub stub(result_register());
-  __ push(result_register());
-  __ CallStub(&stub, condition->test_id());
+  Handle<Code> ic = ToBooleanStub::GetUninitialized(isolate());
+  CallIC(ic, RelocInfo::CODE_TARGET, condition->test_id());
   __ testq(result_register(), result_register());
   // The stub returns nonzero for true.
   Split(not_zero, if_true, if_false, fall_through);
@@ -1047,9 +1046,8 @@ void FullCodeGenerator::VisitForInStatement(ForInStatement* stmt) {
   ForIn loop_statement(this, stmt);
   increment_loop_depth();
 
-  // Get the object to enumerate over. Both SpiderMonkey and JSC
-  // ignore null and undefined in contrast to the specification; see
-  // ECMA-262 section 12.6.4.
+  // Get the object to enumerate over. If the object is null or undefined, skip
+  // over the loop.  See ECMA-262 version 5, section 12.6.4.
   VisitForAccumulatorValue(stmt->enumerable());
   __ CompareRoot(rax, Heap::kUndefinedValueRootIndex);
   __ j(equal, &exit);
@@ -1221,6 +1219,64 @@ void FullCodeGenerator::VisitForInStatement(ForInStatement* stmt) {
   // Exit and decrement the loop depth.
   PrepareForBailoutForId(stmt->ExitId(), NO_REGISTERS);
   __ bind(&exit);
+  decrement_loop_depth();
+}
+
+
+void FullCodeGenerator::VisitForOfStatement(ForOfStatement* stmt) {
+  Comment cmnt(masm_, "[ ForOfStatement");
+  SetStatementPosition(stmt);
+
+  Iteration loop_statement(this, stmt);
+  increment_loop_depth();
+
+  // var iterator = iterable[@@iterator]()
+  VisitForAccumulatorValue(stmt->assign_iterator());
+
+  // As with for-in, skip the loop if the iterator is null or undefined.
+  __ CompareRoot(rax, Heap::kUndefinedValueRootIndex);
+  __ j(equal, loop_statement.break_label());
+  __ CompareRoot(rax, Heap::kNullValueRootIndex);
+  __ j(equal, loop_statement.break_label());
+
+  // Convert the iterator to a JS object.
+  Label convert, done_convert;
+  __ JumpIfSmi(rax, &convert);
+  __ CmpObjectType(rax, FIRST_SPEC_OBJECT_TYPE, rcx);
+  __ j(above_equal, &done_convert);
+  __ bind(&convert);
+  __ push(rax);
+  __ InvokeBuiltin(Builtins::TO_OBJECT, CALL_FUNCTION);
+  __ bind(&done_convert);
+
+  // Loop entry.
+  __ bind(loop_statement.continue_label());
+
+  // result = iterator.next()
+  VisitForEffect(stmt->next_result());
+
+  // if (result.done) break;
+  Label result_not_done;
+  VisitForControl(stmt->result_done(),
+                  loop_statement.break_label(),
+                  &result_not_done,
+                  &result_not_done);
+  __ bind(&result_not_done);
+
+  // each = result.value
+  VisitForEffect(stmt->assign_each());
+
+  // Generate code for the body of the loop.
+  Visit(stmt->body());
+
+  // Check stack before looping.
+  PrepareForBailoutForId(stmt->BackEdgeId(), NO_REGISTERS);
+  EmitBackEdgeBookkeeping(stmt, loop_statement.continue_label());
+  __ jmp(loop_statement.continue_label());
+
+  // Exit and decrement the loop depth.
+  PrepareForBailoutForId(stmt->ExitId(), NO_REGISTERS);
+  __ bind(loop_statement.break_label());
   decrement_loop_depth();
 }
 
@@ -1956,10 +2012,10 @@ void FullCodeGenerator::VisitYield(Yield* expr) {
       // [sp + 1 * kPointerSize] iter
       // [sp + 0 * kPointerSize] g
 
-      Label l_catch, l_try, l_resume, l_send, l_call, l_loop;
+      Label l_catch, l_try, l_resume, l_next, l_call, l_loop;
       // Initial send value is undefined.
       __ LoadRoot(rax, Heap::kUndefinedValueRootIndex);
-      __ jmp(&l_send);
+      __ jmp(&l_next);
 
       // catch (e) { receiver = iter; f = iter.throw; arg = e; goto l_call; }
       __ bind(&l_catch);
@@ -1989,15 +2045,15 @@ void FullCodeGenerator::VisitYield(Yield* expr) {
       __ bind(&l_resume);                                // received in rax
       __ PopTryHandler();
 
-      // receiver = iter; f = iter.send; arg = received;
-      __ bind(&l_send);
+      // receiver = iter; f = iter.next; arg = received;
+      __ bind(&l_next);
       __ movq(rcx, Operand(rsp, 1 * kPointerSize));      // iter
       __ push(rcx);                                      // iter
       __ push(rax);                                      // received
       __ movq(rax, rcx);                                 // iter
-      __ LoadRoot(rcx, Heap::ksend_stringRootIndex);     // "send"
-      Handle<Code> send_ic = isolate()->builtins()->LoadIC_Initialize();
-      CallIC(send_ic);                                   // iter.send in rax
+      __ LoadRoot(rcx, Heap::knext_stringRootIndex);     // "next"
+      Handle<Code> next_ic = isolate()->builtins()->LoadIC_Initialize();
+      CallIC(next_ic);                                   // iter.next in rax
 
       // result = f.call(receiver, arg);
       __ bind(&l_call);
@@ -2028,10 +2084,9 @@ void FullCodeGenerator::VisitYield(Yield* expr) {
       __ LoadRoot(rcx, Heap::kdone_stringRootIndex);     // "done"
       Handle<Code> done_ic = isolate()->builtins()->LoadIC_Initialize();
       CallIC(done_ic);                                   // result.done in rax
-      ToBooleanStub stub(rax);
-      __ push(rax);
-      __ CallStub(&stub);
-      __ testq(rax, rax);
+      Handle<Code> bool_ic = ToBooleanStub::GetUninitialized(isolate());
+      CallIC(bool_ic);
+      __ testq(result_register(), result_register());
       __ j(zero, &l_try);
 
       // result.value
@@ -2100,7 +2155,7 @@ void FullCodeGenerator::EmitGeneratorResume(Expression *generator,
 
   // If we are sending a value and there is no operand stack, we can jump back
   // in directly.
-  if (resume_mode == JSGeneratorObject::SEND) {
+  if (resume_mode == JSGeneratorObject::NEXT) {
     Label slow_resume;
     __ cmpq(rdx, Immediate(0));
     __ j(not_zero, &slow_resume);
@@ -2936,7 +2991,7 @@ void FullCodeGenerator::EmitIsStringWrapperSafeForDefaultValueOf(
   __ jmp(&entry);
   __ bind(&loop);
   __ movq(rdx, FieldOperand(rbx, 0));
-  __ Cmp(rdx, FACTORY->value_of_string());
+  __ Cmp(rdx, isolate()->factory()->value_of_string());
   __ j(equal, if_false);
   __ addq(rbx, Immediate(DescriptorArray::kDescriptorSize * kPointerSize));
   __ bind(&entry);

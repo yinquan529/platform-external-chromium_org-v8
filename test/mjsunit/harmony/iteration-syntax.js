@@ -25,16 +25,41 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef V8_BUILTINS_DECLS_H_
-#define V8_BUILTINS_DECLS_H_
+// Flags: --harmony-iteration --harmony-scoping
 
-#include "arguments.h"
+// Test for-of syntax.
 
-namespace v8 {
-namespace internal {
+"use strict";
 
-DECLARE_RUNTIME_FUNCTION(MaybeObject*, ArrayConstructor_StubFailure);
+function f() { for (x of y) { } }
+function f() { for (var x of y) { } }
+function f() { for (let x of y) { } }
 
-} }  // namespace v8::internal
+assertThrows("function f() { for (x of) { } }", SyntaxError);
+assertThrows("function f() { for (x of y z) { } }", SyntaxError);
+assertThrows("function f() { for (x of y;) { } }", SyntaxError);
 
-#endif  // V8_BUILTINS_DECLS_H_
+assertThrows("function f() { for (var x of) { } }", SyntaxError);
+assertThrows("function f() { for (var x of y z) { } }", SyntaxError);
+assertThrows("function f() { for (var x of y;) { } }", SyntaxError);
+
+assertThrows("function f() { for (let x of) { } }", SyntaxError);
+assertThrows("function f() { for (let x of y z) { } }", SyntaxError);
+assertThrows("function f() { for (let x of y;) { } }", SyntaxError);
+
+assertThrows("function f() { for (of y) { } }", SyntaxError);
+assertThrows("function f() { for (of of) { } }", SyntaxError);
+assertThrows("function f() { for (var of y) { } }", SyntaxError);
+assertThrows("function f() { for (var of of) { } }", SyntaxError);
+assertThrows("function f() { for (let of y) { } }", SyntaxError);
+assertThrows("function f() { for (let of of) { } }", SyntaxError);
+
+// Alack, this appears to be valid.
+function f() { for (of of y) { } }
+function f() { for (let of of y) { } }
+function f() { for (var of of y) { } }
+
+// This too, of course.
+function f() { for (of in y) { } }
+function f() { for (var of in y) { } }
+function f() { for (let of in y) { } }

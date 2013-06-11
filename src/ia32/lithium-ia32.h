@@ -44,7 +44,6 @@ class LCodeGen;
   V(AccessArgumentsAt)                          \
   V(AddI)                                       \
   V(Allocate)                                   \
-  V(AllocateObject)                             \
   V(ApplyArguments)                             \
   V(ArgumentsElements)                          \
   V(ArgumentsLength)                            \
@@ -82,6 +81,7 @@ class LCodeGen;
   V(CmpConstantEqAndBranch)                     \
   V(ConstantD)                                  \
   V(ConstantI)                                  \
+  V(ConstantS)                                  \
   V(ConstantT)                                  \
   V(Context)                                    \
   V(DebugBreak)                                 \
@@ -1149,6 +1149,15 @@ class LConstantI: public LTemplateInstruction<1, 0, 0> {
   DECLARE_HYDROGEN_ACCESSOR(Constant)
 
   int32_t value() const { return hydrogen()->Integer32Value(); }
+};
+
+
+class LConstantS: public LTemplateInstruction<1, 0, 0> {
+ public:
+  DECLARE_CONCRETE_INSTRUCTION(ConstantS, "constant-s")
+  DECLARE_HYDROGEN_ACCESSOR(Constant)
+
+  Smi* value() const { return Smi::FromInt(hydrogen()->Integer32Value()); }
 };
 
 
@@ -2539,21 +2548,6 @@ class LCheckNonSmi: public LTemplateInstruction<0, 1, 0> {
   LOperand* value() { return inputs_[0]; }
 
   DECLARE_CONCRETE_INSTRUCTION(CheckNonSmi, "check-non-smi")
-};
-
-
-class LAllocateObject: public LTemplateInstruction<1, 1, 1> {
- public:
-  LAllocateObject(LOperand* context, LOperand* temp) {
-    inputs_[0] = context;
-    temps_[0] = temp;
-  }
-
-  LOperand* context() { return inputs_[0]; }
-  LOperand* temp() { return temps_[0]; }
-
-  DECLARE_CONCRETE_INSTRUCTION(AllocateObject, "allocate-object")
-  DECLARE_HYDROGEN_ACCESSOR(AllocateObject)
 };
 
 

@@ -2074,22 +2074,16 @@ void MarkCompactCollector::MarkImplicitRefGroups() {
 // marking stack have been marked, or are overflowed in the heap.
 void MarkCompactCollector::EmptyMarkingDeque() {
   while (!marking_deque_.IsEmpty()) {
-    while (!marking_deque_.IsEmpty()) {
-      HeapObject* object = marking_deque_.Pop();
-      ASSERT(object->IsHeapObject());
-      ASSERT(heap()->Contains(object));
-      ASSERT(Marking::IsBlack(Marking::MarkBitFrom(object)));
+    HeapObject* object = marking_deque_.Pop();
+    ASSERT(object->IsHeapObject());
+    ASSERT(heap()->Contains(object));
+    ASSERT(Marking::IsBlack(Marking::MarkBitFrom(object)));
 
-      Map* map = object->map();
-      MarkBit map_mark = Marking::MarkBitFrom(map);
-      MarkObject(map, map_mark);
+    Map* map = object->map();
+    MarkBit map_mark = Marking::MarkBitFrom(map);
+    MarkObject(map, map_mark);
 
-      MarkCompactMarkingVisitor::IterateBody(map, object);
-    }
-
-    // Process encountered weak maps, mark objects only reachable by those
-    // weak maps and repeat until fix-point is reached.
-    ProcessWeakMaps();
+    MarkCompactMarkingVisitor::IterateBody(map, object);
   }
 }
 
@@ -2154,13 +2148,16 @@ void MarkCompactCollector::ProcessMarkingDeque() {
 }
 
 
-void MarkCompactCollector::ProcessExternalMarking(RootMarkingVisitor* visitor) {
+// Mark all objects reachable (transitively) from objects on the marking
+// stack including references only considered in the atomic marking pause.
+void MarkCompactCollector::ProcessEphemeralMarking(ObjectVisitor* visitor) {
   bool work_to_do = true;
   ASSERT(marking_deque_.IsEmpty());
   while (work_to_do) {
     isolate()->global_handles()->IterateObjectGroups(
         visitor, &IsUnmarkedHeapObjectWithHeap);
     MarkImplicitRefGroups();
+    ProcessWeakMaps();
     work_to_do = !marking_deque_.IsEmpty();
     ProcessMarkingDeque();
   }
@@ -2237,12 +2234,12 @@ void MarkCompactCollector::MarkLiveObjects() {
 
   // The objects reachable from the roots are marked, yet unreachable
   // objects are unmarked.  Mark objects reachable due to host
-  // application specific logic.
-  ProcessExternalMarking(&root_visitor);
+  // application specific logic or through Harmony weak maps.
+  ProcessEphemeralMarking(&root_visitor);
 
-  // The objects reachable from the roots or object groups are marked,
-  // yet unreachable objects are unmarked.  Mark objects reachable
-  // only from weak global handles.
+  // The objects reachable from the roots, weak maps or object groups
+  // are marked, yet unreachable objects are unmarked.  Mark objects
+  // reachable only from weak global handles.
   //
   // First we identify nonlive weak handles and mark them as pending
   // destruction.
@@ -2255,9 +2252,9 @@ void MarkCompactCollector::MarkLiveObjects() {
     EmptyMarkingDeque();
   }
 
-  // Repeat host application specific marking to mark unmarked objects
-  // reachable from the weak roots.
-  ProcessExternalMarking(&root_visitor);
+  // Repeat host application specific and Harmony weak maps marking to
+  // mark unmarked objects reachable from the weak roots.
+  ProcessEphemeralMarking(&root_visitor);
 
   AfterMarking();
 }
@@ -2478,24 +2475,25 @@ void MarkCompactCollector::ClearNonLiveMapTransitions(Map* map,
 
 
 void MarkCompactCollector::ClearAndDeoptimizeDependentCode(Map* map) {
-  AssertNoAllocation no_allocation_scope;
+  DisallowHeapAllocation no_allocation;
   DependentCode* entries = map->dependent_code();
   DependentCode::GroupStartIndexes starts(entries);
   int number_of_entries = starts.number_of_entries();
   if (number_of_entries == 0) return;
   for (int i = 0; i < number_of_entries; i++) {
+    if (!entries->is_code_at(i)) continue;
     Code* code = entries->code_at(i);
     if (IsMarked(code) && !code->marked_for_deoptimization()) {
       code->set_marked_for_deoptimization(true);
     }
-    entries->clear_code_at(i);
+    entries->clear_at(i);
   }
   map->set_dependent_code(DependentCode::cast(heap()->empty_fixed_array()));
 }
 
 
 void MarkCompactCollector::ClearNonLiveDependentCode(Map* map) {
-  AssertNoAllocation no_allocation_scope;
+  DisallowHeapAllocation no_allocation;
   DependentCode* entries = map->dependent_code();
   DependentCode::GroupStartIndexes starts(entries);
   int number_of_entries = starts.number_of_entries();
@@ -2505,14 +2503,15 @@ void MarkCompactCollector::ClearNonLiveDependentCode(Map* map) {
   for (int g = 0; g < DependentCode::kGroupCount; g++) {
     int group_number_of_entries = 0;
     for (int i = starts.at(g); i < starts.at(g + 1); i++) {
+      if (!entries->is_code_at(i)) continue;
       Code* code = entries->code_at(i);
       if (IsMarked(code) && !code->marked_for_deoptimization()) {
         if (new_number_of_entries + group_number_of_entries != i) {
-          entries->set_code_at(new_number_of_entries +
-                               group_number_of_entries, code);
+          entries->set_object_at(
+              new_number_of_entries + group_number_of_entries, code);
         }
-        Object** slot = entries->code_slot_at(new_number_of_entries +
-                                              group_number_of_entries);
+        Object** slot = entries->slot_at(new_number_of_entries +
+                                         group_number_of_entries);
         RecordSlot(slot, slot, code);
         group_number_of_entries++;
       }
@@ -2523,12 +2522,13 @@ void MarkCompactCollector::ClearNonLiveDependentCode(Map* map) {
     new_number_of_entries += group_number_of_entries;
   }
   for (int i = new_number_of_entries; i < number_of_entries; i++) {
-    entries->clear_code_at(i);
+    entries->clear_at(i);
   }
 }
 
 
 void MarkCompactCollector::ProcessWeakMaps() {
+  GCTracer::Scope gc_scope(tracer_, GCTracer::Scope::MC_WEAKMAP_PROCESS);
   Object* weak_map_obj = encountered_weak_maps();
   while (weak_map_obj != Smi::FromInt(0)) {
     ASSERT(MarkCompactCollector::IsMarked(HeapObject::cast(weak_map_obj)));
@@ -2554,6 +2554,7 @@ void MarkCompactCollector::ProcessWeakMaps() {
 
 
 void MarkCompactCollector::ClearWeakMaps() {
+  GCTracer::Scope gc_scope(tracer_, GCTracer::Scope::MC_WEAKMAP_CLEAR);
   Object* weak_map_obj = encountered_weak_maps();
   while (weak_map_obj != Smi::FromInt(0)) {
     ASSERT(MarkCompactCollector::IsMarked(HeapObject::cast(weak_map_obj)));

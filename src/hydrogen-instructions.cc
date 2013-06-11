@@ -124,20 +124,9 @@ void HValue::UpdateRepresentation(Representation new_rep,
                                   const char* reason) {
   Representation r = representation();
   if (new_rep.is_more_general_than(r)) {
-    // When an HConstant is marked "not convertible to integer", then
-    // never try to represent it as an integer.
-    if (new_rep.IsInteger32() && !IsConvertibleToInteger()) {
-      new_rep = Representation::Tagged();
-      if (FLAG_trace_representation) {
-        PrintF("Changing #%d %s representation %s -> %s because it's NCTI"
-               " (%s want i)\n",
-               id(), Mnemonic(), r.Mnemonic(), new_rep.Mnemonic(), reason);
-      }
-    } else {
-      if (FLAG_trace_representation) {
-        PrintF("Changing #%d %s representation %s -> %s based on %s\n",
-               id(), Mnemonic(), r.Mnemonic(), new_rep.Mnemonic(), reason);
-      }
+    if (FLAG_trace_representation) {
+      PrintF("Changing #%d %s representation %s -> %s based on %s\n",
+             id(), Mnemonic(), r.Mnemonic(), new_rep.Mnemonic(), reason);
     }
     ChangeRepresentation(new_rep);
     AddDependantsToWorklist(h_infer);
@@ -989,6 +978,11 @@ void HDummyUse::PrintDataTo(StringStream* stream) {
 }
 
 
+void HEnvironmentMarker::PrintDataTo(StringStream* stream) {
+  stream->Add("%s var[%d]", kind() == BIND ? "bind" : "lookup", index());
+}
+
+
 void HUnaryCall::PrintDataTo(StringStream* stream) {
   value()->PrintNameTo(stream);
   stream->Add(" ");
@@ -1064,6 +1058,7 @@ void HBoundsCheck::ApplyIndexChange() {
         block()->graph()->GetInvalidContext(), current_index, add_offset);
     add->InsertBefore(this);
     add->AssumeRepresentation(index()->representation());
+    add->ClearFlag(kCanOverflow);
     current_index = add;
   }
 
@@ -1142,17 +1137,16 @@ void HBoundsCheck::PrintDataTo(StringStream* stream) {
 void HBoundsCheck::InferRepresentation(HInferRepresentation* h_infer) {
   ASSERT(CheckFlag(kFlexibleRepresentation));
   Representation r;
-  HValue* actual_length = length()->ActualValue();
   HValue* actual_index = index()->ActualValue();
-  if (key_mode_ == DONT_ALLOW_SMI_KEY ||
-      !actual_length->representation().IsSmiOrTagged()) {
+  HValue* actual_length = length()->ActualValue();
+  Representation index_rep = actual_index->representation();
+  if (!actual_length->representation().IsSmiOrTagged()) {
     r = Representation::Integer32();
-  } else if (actual_index->representation().IsSmiOrTagged() ||
-             (actual_index->IsConstant() &&
-              HConstant::cast(actual_index)->HasSmiValue())) {
-    // If the index is smi, or a constant that holds a Smi, allow the length to
-    // be smi, since it is usually already smi from loading it out of the length
-    // field of a JSArray. This allows for direct comparison without untagging.
+  } else if ((index_rep.IsTagged() && actual_index->type().IsSmi()) ||
+      index_rep.IsSmi()) {
+    // If the index is smi, allow the length to be smi, since it is usually
+    // already smi from loading it out of the length field of a JSArray.  This
+    // allows for direct comparison without untagging.
     r = Representation::Smi();
   } else {
     r = Representation::Integer32();
@@ -1312,6 +1306,30 @@ const char* HUnaryMathOperation::OpName() const {
       UNREACHABLE();
       return NULL;
   }
+}
+
+
+Range* HUnaryMathOperation::InferRange(Zone* zone) {
+  Representation r = representation();
+  if (r.IsSmiOrInteger32() && value()->HasRange()) {
+    if (op() == kMathAbs) {
+      int upper = value()->range()->upper();
+      int lower = value()->range()->lower();
+      bool spans_zero = value()->range()->CanBeZero();
+      // Math.abs(kMinInt) overflows its representation, on which the
+      // instruction deopts. Hence clamp it to kMaxInt.
+      int abs_upper = upper == kMinInt ? kMaxInt : abs(upper);
+      int abs_lower = lower == kMinInt ? kMaxInt : abs(lower);
+      Range* result =
+          new(zone) Range(spans_zero ? 0 : Min(abs_lower, abs_upper),
+                          Max(abs_lower, abs_upper));
+      // In case of Smi representation, clamp Math.abs(Smi::kMinValue) to
+      // Smi::kMaxValue.
+      if (r.IsSmi()) result->ClampToSmi();
+      return result;
+    }
+  }
+  return HValue::InferRange(zone);
 }
 
 
@@ -1486,7 +1504,7 @@ void HChange::PrintDataTo(StringStream* stream) {
 
   if (CanTruncateToInt32()) stream->Add(" truncating-int32");
   if (CheckFlag(kBailoutOnMinusZero)) stream->Add(" -0?");
-  if (CheckFlag(kDeoptimizeOnUndefined)) stream->Add(" deopt-on-undefined");
+  if (CheckFlag(kAllowUndefinedAsNaN)) stream->Add(" allow-undefined-as-nan");
 }
 
 
@@ -1812,8 +1830,18 @@ Range* HMod::InferRange(Zone* zone) {
   if (representation().IsInteger32()) {
     Range* a = left()->range();
     Range* b = right()->range();
-    Range* result = new(zone) Range();
-    if (a->CanBeMinusZero() || a->CanBeNegative()) {
+
+    // The magnitude of the modulus is bounded by the right operand. Note that
+    // apart for the cases involving kMinInt, the calculation below is the same
+    // as Max(Abs(b->lower()), Abs(b->upper())) - 1.
+    int32_t positive_bound = -(Min(NegAbs(b->lower()), NegAbs(b->upper())) + 1);
+
+    // The result of the modulo operation has the sign of its left operand.
+    bool left_can_be_negative = a->CanBeMinusZero() || a->CanBeNegative();
+    Range* result = new(zone) Range(left_can_be_negative ? -positive_bound : 0,
+                                    a->CanBePositive() ? positive_bound : 0);
+
+    if (left_can_be_negative) {
       result->set_can_be_minus_zero(true);
     }
 
@@ -1917,7 +1945,6 @@ void HPhi::PrintTo(StringStream* stream) {
               int32_non_phi_uses() + int32_indirect_uses(),
               double_non_phi_uses() + double_indirect_uses(),
               tagged_non_phi_uses() + tagged_indirect_uses());
-  if (!IsConvertibleToInteger()) stream->Add("_ncti");
   PrintRangeTo(stream);
   PrintTypeTo(stream);
   stream->Add("]");
@@ -2061,6 +2088,13 @@ void HDeoptimize::PrintDataTo(StringStream* stream) {
     stream->Add(" ");
     OperandAt(i)->PrintNameTo(stream);
   }
+}
+
+
+void HEnterInlined::RegisterReturnTarget(HBasicBlock* return_target,
+                                         Zone* zone) {
+  ASSERT(return_target->IsInlineReturnTarget());
+  return_targets_.Add(return_target, zone);
 }
 
 
@@ -2313,7 +2347,37 @@ void HMathMinMax::InferRepresentation(HInferRepresentation* h_infer) {
 
 
 Range* HBitwise::InferRange(Zone* zone) {
-  if (op() == Token::BIT_XOR) return HValue::InferRange(zone);
+  if (op() == Token::BIT_XOR) {
+    if (left()->HasRange() && right()->HasRange()) {
+      // The maximum value has the high bit, and all bits below, set:
+      // (1 << high) - 1.
+      // If the range can be negative, the minimum int is a negative number with
+      // the high bit, and all bits below, unset:
+      // -(1 << high).
+      // If it cannot be negative, conservatively choose 0 as minimum int.
+      int64_t left_upper = left()->range()->upper();
+      int64_t left_lower = left()->range()->lower();
+      int64_t right_upper = right()->range()->upper();
+      int64_t right_lower = right()->range()->lower();
+
+      if (left_upper < 0) left_upper = ~left_upper;
+      if (left_lower < 0) left_lower = ~left_lower;
+      if (right_upper < 0) right_upper = ~right_upper;
+      if (right_lower < 0) right_lower = ~right_lower;
+
+      int high = MostSignificantBit(
+          static_cast<uint32_t>(
+              left_upper | left_lower | right_upper | right_lower));
+
+      int64_t limit = 1;
+      limit <<= high;
+      int32_t min = (left()->range()->CanBeNegative() ||
+                     right()->range()->CanBeNegative())
+                    ? static_cast<int32_t>(-limit) : 0;
+      return new(zone) Range(min, static_cast<int32_t>(limit - 1));
+    }
+    return HValue::InferRange(zone);
+  }
   const int32_t kDefaultMask = static_cast<int32_t>(0xffffffff);
   int32_t left_mask = (left()->range() != NULL)
       ? left()->range()->Mask()
@@ -2459,8 +2523,10 @@ void HCompareIDAndBranch::InferRepresentation(HInferRepresentation* h_infer) {
   Representation observed_left = observed_input_representation(0);
   Representation observed_right = observed_input_representation(1);
 
-  Representation rep = Representation::Smi();
-  if (observed_left.IsInteger32() && observed_right.IsInteger32()) {
+  Representation rep = Representation::None();
+  rep = rep.generalize(observed_left);
+  rep = rep.generalize(observed_right);
+  if (rep.IsNone() || rep.IsSmiOrInteger32()) {
     if (!left_rep.IsTagged()) rep = rep.generalize(left_rep);
     if (!right_rep.IsTagged()) rep = rep.generalize(right_rep);
   } else {
@@ -2481,8 +2547,8 @@ void HCompareIDAndBranch::InferRepresentation(HInferRepresentation* h_infer) {
     // (false). Therefore, any comparisons other than ordered relational
     // comparisons must cause a deopt when one of their arguments is undefined.
     // See also v8:1434
-    if (!Token::IsOrderedRelationalCompareOp(token_)) {
-      SetFlag(kDeoptimizeOnUndefined);
+    if (Token::IsOrderedRelationalCompareOp(token_)) {
+      SetFlag(kAllowUndefinedAsNaN);
     }
   }
   ChangeRepresentation(rep);
@@ -2745,7 +2811,7 @@ bool HLoadKeyed::AllUsesCanTreatHoleAsNaN() const {
 
   for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
     HValue* use = it.value();
-    if (use->CheckFlag(HValue::kDeoptimizeOnUndefined)) {
+    if (!use->CheckFlag(HValue::kAllowUndefinedAsNaN)) {
       return false;
     }
   }
@@ -3027,13 +3093,18 @@ HType HUnaryMathOperation::CalculateInferredType() {
 }
 
 
-HType HStringCharFromCode::CalculateInferredType() {
-  return HType::String();
+Representation HUnaryMathOperation::RepresentationFromInputs() {
+  Representation rep = representation();
+  // If any of the actual input representation is more general than what we
+  // have so far but not Tagged, use that representation instead.
+  Representation input_rep = value()->representation();
+  if (!input_rep.IsTagged()) rep = rep.generalize(input_rep);
+  return rep;
 }
 
 
-HType HAllocateObject::CalculateInferredType() {
-  return HType::JSObject();
+HType HStringCharFromCode::CalculateInferredType() {
+  return HType::String();
 }
 
 
@@ -3217,7 +3288,8 @@ HInstruction* HStringAdd::New(
     HConstant* c_right = HConstant::cast(right);
     HConstant* c_left = HConstant::cast(left);
     if (c_left->HasStringValue() && c_right->HasStringValue()) {
-      return new(zone) HConstant(FACTORY->NewConsString(c_left->StringValue(),
+      Factory* factory = Isolate::Current()->factory();
+      return new(zone) HConstant(factory->NewConsString(c_left->StringValue(),
                                                         c_right->StringValue()),
                                  Representation::Tagged());
     }
@@ -3250,7 +3322,7 @@ HInstruction* HStringLength::New(Zone* zone, HValue* string) {
   if (FLAG_fold_constants && string->IsConstant()) {
     HConstant* c_string = HConstant::cast(string);
     if (c_string->HasStringValue()) {
-      return H_CONSTANT_INT32(c_string->StringValue()->length());
+      return new(zone) HConstant(c_string->StringValue()->length());
     }
   }
   return new(zone) HStringLength(string);
@@ -3372,8 +3444,12 @@ HInstruction* HMathMinMax::New(
 }
 
 
-HInstruction* HMod::New(
-    Zone* zone, HValue* context, HValue* left, HValue* right) {
+HInstruction* HMod::New(Zone* zone,
+                        HValue* context,
+                        HValue* left,
+                        HValue* right,
+                        bool has_fixed_right_arg,
+                        int fixed_right_arg_value) {
   if (FLAG_fold_constants && left->IsConstant() && right->IsConstant()) {
     HConstant* c_left = HConstant::cast(left);
     HConstant* c_right = HConstant::cast(right);
@@ -3392,7 +3468,11 @@ HInstruction* HMod::New(
       }
     }
   }
-  return new(zone) HMod(context, left, right);
+  return new(zone) HMod(context,
+                        left,
+                        right,
+                        has_fixed_right_arg,
+                        fixed_right_arg_value);
 }
 
 
@@ -3556,48 +3636,11 @@ void HPhi::InferRepresentation(HInferRepresentation* h_infer) {
 
 
 Representation HPhi::RepresentationFromInputs() {
-  bool double_occurred = false;
-  bool int32_occurred = false;
-  bool smi_occurred = false;
+  Representation r = Representation::None();
   for (int i = 0; i < OperandCount(); ++i) {
-    HValue* value = OperandAt(i);
-    if (value->IsUnknownOSRValue()) {
-      HPhi* hint_value = HUnknownOSRValue::cast(value)->incoming_value();
-      if (hint_value != NULL) {
-        Representation hint = hint_value->representation();
-        if (hint.IsTagged()) return hint;
-        if (hint.IsDouble()) double_occurred = true;
-        if (hint.IsInteger32()) int32_occurred = true;
-        if (hint.IsSmi()) smi_occurred = true;
-      }
-      continue;
-    }
-    if (value->representation().IsDouble()) double_occurred = true;
-    if (value->representation().IsInteger32()) int32_occurred = true;
-    if (value->representation().IsSmi()) smi_occurred = true;
-    if (value->representation().IsTagged()) {
-      if (value->IsConstant()) {
-        HConstant* constant = HConstant::cast(value);
-        if (constant->IsConvertibleToInteger()) {
-          int32_occurred = true;
-        } else if (constant->HasNumberValue()) {
-          double_occurred = true;
-        } else {
-          return Representation::Tagged();
-        }
-      } else {
-        if (value->IsPhi() && !IsConvertibleToInteger()) {
-          return Representation::Tagged();
-        }
-      }
-    }
+    r = r.generalize(OperandAt(i)->KnownOptimalRepresentation());
   }
-
-  if (double_occurred) return Representation::Double();
-  if (int32_occurred) return Representation::Integer32();
-  if (smi_occurred) return Representation::Smi();
-
-  return Representation::None();
+  return r;
 }
 
 
@@ -3740,7 +3783,6 @@ void HObjectAccess::SetGVNFlags(HValue *instr, bool is_store) {
     // track dominating allocations in order to eliminate write barriers
     instr->SetGVNFlag(kDependsOnNewSpacePromotion);
     instr->SetFlag(HValue::kTrackSideEffectDominators);
-    instr->SetFlag(HValue::kDeoptimizeOnUndefined);
   } else {
     // try to GVN loads, but don't hoist above map changes
     instr->SetFlag(HValue::kUseGVN);

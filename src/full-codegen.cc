@@ -163,6 +163,12 @@ void BreakableStatementChecker::VisitForInStatement(ForInStatement* stmt) {
 }
 
 
+void BreakableStatementChecker::VisitForOfStatement(ForOfStatement* stmt) {
+  // For-of is breakable because of the next() call.
+  is_breakable_ = true;
+}
+
+
 void BreakableStatementChecker::VisitTryCatchStatement(
     TryCatchStatement* stmt) {
   // Mark try catch as breakable to avoid adding a break slot in front of it.
@@ -920,10 +926,10 @@ void FullCodeGenerator::EmitInlineRuntimeCall(CallRuntime* expr) {
 }
 
 
-void FullCodeGenerator::EmitGeneratorSend(CallRuntime* expr) {
+void FullCodeGenerator::EmitGeneratorNext(CallRuntime* expr) {
   ZoneList<Expression*>* args = expr->arguments();
   ASSERT(args->length() == 2);
-  EmitGeneratorResume(args->at(0), args->at(1), JSGeneratorObject::SEND);
+  EmitGeneratorResume(args->at(0), args->at(1), JSGeneratorObject::NEXT);
 }
 
 

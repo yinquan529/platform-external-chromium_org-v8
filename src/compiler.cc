@@ -106,6 +106,9 @@ void CompilationInfo::Initialize(Isolate* isolate, Mode mode, Zone* zone) {
   opt_count_ = shared_info().is_null() ? 0 : shared_info()->opt_count();
   no_frame_ranges_ = isolate->cpu_profiler()->is_profiling()
                    ? new List<OffsetRange>(2) : NULL;
+  for (int i = 0; i < DependentCode::kGroupCount; i++) {
+    dependent_maps_[i] = NULL;
+  }
   if (mode == STUB) {
     mode_ = STUB;
     return;
@@ -125,6 +128,41 @@ void CompilationInfo::Initialize(Isolate* isolate, Mode mode, Zone* zone) {
 CompilationInfo::~CompilationInfo() {
   delete deferred_handles_;
   delete no_frame_ranges_;
+#ifdef DEBUG
+  // Check that no dependent maps have been added or added dependent maps have
+  // been rolled back or committed.
+  for (int i = 0; i < DependentCode::kGroupCount; i++) {
+    ASSERT_EQ(NULL, dependent_maps_[i]);
+  }
+#endif  // DEBUG
+}
+
+
+void CompilationInfo::CommitDependentMaps(Handle<Code> code) {
+  for (int i = 0; i < DependentCode::kGroupCount; i++) {
+    ZoneList<Handle<Map> >* group_maps = dependent_maps_[i];
+    if (group_maps == NULL) continue;
+    ASSERT(!object_wrapper_.is_null());
+    for (int j = 0; j < group_maps->length(); j++) {
+      group_maps->at(j)->dependent_code()->UpdateToFinishedCode(
+          static_cast<DependentCode::DependencyGroup>(i), this, *code);
+    }
+    dependent_maps_[i] = NULL;  // Zone-allocated, no need to delete.
+  }
+}
+
+
+void CompilationInfo::RollbackDependentMaps() {
+  // Unregister from all dependent maps if not yet committed.
+  for (int i = 0; i < DependentCode::kGroupCount; i++) {
+    ZoneList<Handle<Map> >* group_maps = dependent_maps_[i];
+    if (group_maps == NULL) continue;
+    for (int j = 0; j < group_maps->length(); j++) {
+      group_maps->at(j)->dependent_code()->RemoveCompilationInfo(
+          static_cast<DependentCode::DependencyGroup>(i), this);
+    }
+    dependent_maps_[i] = NULL;  // Zone-allocated, no need to delete.
+  }
 }
 
 
@@ -393,9 +431,9 @@ OptimizingCompiler::Status OptimizingCompiler::CreateGraph() {
 }
 
 OptimizingCompiler::Status OptimizingCompiler::OptimizeGraph() {
-  AssertNoAllocation no_gc;
-  NoHandleAllocation no_handles(isolate());
-  HandleDereferenceGuard no_deref(isolate(), HandleDereferenceGuard::DISALLOW);
+  DisallowHeapAllocation no_allocation;
+  DisallowHandleAllocation no_handles;
+  DisallowHandleDereference no_deref;
 
   ASSERT(last_status() == SUCCEEDED);
   Timer t(this, &time_taken_to_optimize_);
@@ -424,8 +462,7 @@ OptimizingCompiler::Status OptimizingCompiler::GenerateAndInstallCode() {
     // graph creation.  To make sure that we don't encounter inconsistencies
     // between graph creation and code generation, we disallow accessing
     // objects through deferred handles during the latter, with exceptions.
-    HandleDereferenceGuard no_deref_deferred(
-        isolate(), HandleDereferenceGuard::DISALLOW_DEFERRED);
+    DisallowDeferredHandleDereference no_deferred_handle_deref;
     Handle<Code> optimized_code = chunk_->Codegen();
     if (optimized_code.is_null()) {
       info()->set_bailout_reason("code generation failed");
@@ -650,7 +687,7 @@ Handle<SharedFunctionInfo> Compiler::Compile(Handle<String> source,
     // in that case too.
 
     // Create a script object describing the script to be compiled.
-    Handle<Script> script = FACTORY->NewScript(source);
+    Handle<Script> script = isolate->factory()->NewScript(source);
     if (natives == NATIVES_CODE) {
       script->set_type(Smi::FromInt(Script::TYPE_NATIVE));
     }
@@ -771,13 +808,6 @@ static bool InstallFullCode(CompilationInfo* info) {
   FunctionLiteral* lit = info->function();
   int expected = lit->expected_property_count();
   SetExpectedNofPropertiesFromEstimate(shared, expected);
-
-  // Set the optimization hints after performing lazy compilation, as
-  // these are not set when the function is set up as a lazily
-  // compiled function.
-  shared->SetThisPropertyAssignmentsInfo(
-      lit->has_only_simple_this_property_assignments(),
-      *lit->this_property_assignments());
 
   // Check the function has compiled code.
   ASSERT(shared->is_compiled());
@@ -958,9 +988,6 @@ void Compiler::RecompileParallel(Handle<JSFunction> closure) {
         if (status == OptimizingCompiler::SUCCEEDED) {
           info.Detach();
           shared->code()->set_profiler_ticks(0);
-          // Do a scavenge to put off the next scavenge as far as possible.
-          // This may ease the issue that GVN blocks the next scavenge.
-          isolate->heap()->CollectGarbage(NEW_SPACE, "parallel recompile");
           isolate->optimizing_compiler_thread()->QueueForOptimization(compiler);
         } else if (status == OptimizingCompiler::BAILED_OUT) {
           isolate->clear_pending_exception();
@@ -993,7 +1020,7 @@ void Compiler::InstallOptimizedCode(OptimizingCompiler* optimizing_compiler) {
   // The function may have already been optimized by OSR.  Simply continue.
   // Except when OSR already disabled optimization for some reason.
   if (info->shared_info()->optimization_disabled()) {
-    info->SetCode(Handle<Code>(info->shared_info()->code()));
+    info->AbortOptimization();
     InstallFullCode(*info);
     if (FLAG_trace_parallel_recompilation) {
       PrintF("  ** aborting optimization for ");
@@ -1011,9 +1038,11 @@ void Compiler::InstallOptimizedCode(OptimizingCompiler* optimizing_compiler) {
   // If crankshaft succeeded, install the optimized code else install
   // the unoptimized code.
   OptimizingCompiler::Status status = optimizing_compiler->last_status();
-  if (status != OptimizingCompiler::SUCCEEDED) {
-    optimizing_compiler->info()->set_bailout_reason(
-        "failed/bailed out last time");
+  if (info->HasAbortedDueToDependentMap()) {
+    info->set_bailout_reason("bailed out due to dependent map");
+    status = optimizing_compiler->AbortOptimization();
+  } else if (status != OptimizingCompiler::SUCCEEDED) {
+    info->set_bailout_reason("failed/bailed out last time");
     status = optimizing_compiler->AbortOptimization();
   } else {
     status = optimizing_compiler->GenerateAndInstallCode();
@@ -1055,6 +1084,7 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
   info.SetLanguageMode(literal->scope()->language_mode());
 
   Isolate* isolate = info.isolate();
+  Factory* factory = isolate->factory();
   LiveEditFunctionTracker live_edit_tracker(isolate, literal);
   // Determine if the function can be lazily compiled. This is necessary to
   // allow some of our builtin JS files to be lazily compiled. These
@@ -1084,7 +1114,7 @@ Handle<SharedFunctionInfo> Compiler::BuildFunctionInfo(FunctionLiteral* literal,
 
   // Create a shared function info object.
   Handle<SharedFunctionInfo> result =
-      FACTORY->NewSharedFunctionInfo(literal->name(),
+      factory->NewSharedFunctionInfo(literal->name(),
                                      literal->materialized_literal_count(),
                                      literal->is_generator(),
                                      info.code(),
@@ -1121,9 +1151,6 @@ void Compiler::SetFunctionInfo(Handle<SharedFunctionInfo> function_info,
   function_info->set_is_anonymous(lit->is_anonymous());
   function_info->set_is_toplevel(is_toplevel);
   function_info->set_inferred_name(*lit->inferred_name());
-  function_info->SetThisPropertyAssignmentsInfo(
-      lit->has_only_simple_this_property_assignments(),
-      *lit->this_property_assignments());
   function_info->set_allows_lazy_compilation(lit->AllowsLazyCompilation());
   function_info->set_allows_lazy_compilation_without_context(
       lit->AllowsLazyCompilationWithoutContext());

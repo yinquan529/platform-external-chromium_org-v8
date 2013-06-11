@@ -677,8 +677,9 @@ void FullCodeGenerator::DoTest(Expression* condition,
                                Label* if_true,
                                Label* if_false,
                                Label* fall_through) {
-  ToBooleanStub stub(result_register());
-  __ CallStub(&stub, condition->test_id());
+  __ mov(a0, result_register());
+  Handle<Code> ic = ToBooleanStub::GetUninitialized(isolate());
+  CallIC(ic, RelocInfo::CODE_TARGET, condition->test_id());
   __ mov(at, zero_reg);
   Split(ne, v0, Operand(at), if_true, if_false, fall_through);
 }
@@ -1083,9 +1084,8 @@ void FullCodeGenerator::VisitForInStatement(ForInStatement* stmt) {
   ForIn loop_statement(this, stmt);
   increment_loop_depth();
 
-  // Get the object to enumerate over. Both SpiderMonkey and JSC
-  // ignore null and undefined in contrast to the specification; see
-  // ECMA-262 section 12.6.4.
+  // Get the object to enumerate over. If the object is null or undefined, skip
+  // over the loop.  See ECMA-262 version 5, section 12.6.4.
   VisitForAccumulatorValue(stmt->enumerable());
   __ mov(a0, result_register());  // Result as param to InvokeBuiltin below.
   __ LoadRoot(at, Heap::kUndefinedValueRootIndex);
@@ -1255,6 +1255,67 @@ void FullCodeGenerator::VisitForInStatement(ForInStatement* stmt) {
   // Exit and decrement the loop depth.
   PrepareForBailoutForId(stmt->ExitId(), NO_REGISTERS);
   __ bind(&exit);
+  decrement_loop_depth();
+}
+
+
+void FullCodeGenerator::VisitForOfStatement(ForOfStatement* stmt) {
+  Comment cmnt(masm_, "[ ForOfStatement");
+  SetStatementPosition(stmt);
+
+  Iteration loop_statement(this, stmt);
+  increment_loop_depth();
+
+  // var iterator = iterable[@@iterator]()
+  VisitForAccumulatorValue(stmt->assign_iterator());
+  __ mov(a0, v0);
+
+  // As with for-in, skip the loop if the iterator is null or undefined.
+  __ LoadRoot(at, Heap::kUndefinedValueRootIndex);
+  __ Branch(loop_statement.break_label(), eq, a0, Operand(at));
+  __ LoadRoot(at, Heap::kNullValueRootIndex);
+  __ Branch(loop_statement.break_label(), eq, a0, Operand(at));
+
+  // Convert the iterator to a JS object.
+  Label convert, done_convert;
+  __ JumpIfSmi(a0, &convert);
+  __ GetObjectType(a0, a1, a1);
+  __ Branch(&done_convert, ge, a1, Operand(FIRST_SPEC_OBJECT_TYPE));
+  __ bind(&convert);
+  __ push(a0);
+  __ InvokeBuiltin(Builtins::TO_OBJECT, CALL_FUNCTION);
+  __ mov(a0, v0);
+  __ bind(&done_convert);
+  __ push(a0);
+
+  // Loop entry.
+  __ bind(loop_statement.continue_label());
+
+  // result = iterator.next()
+  VisitForEffect(stmt->next_result());
+
+  // if (result.done) break;
+  Label result_not_done;
+  VisitForControl(stmt->result_done(),
+                  loop_statement.break_label(),
+                  &result_not_done,
+                  &result_not_done);
+  __ bind(&result_not_done);
+
+  // each = result.value
+  VisitForEffect(stmt->assign_each());
+
+  // Generate code for the body of the loop.
+  Visit(stmt->body());
+
+  // Check stack before looping.
+  PrepareForBailoutForId(stmt->BackEdgeId(), NO_REGISTERS);
+  EmitBackEdgeBookkeeping(stmt, loop_statement.continue_label());
+  __ jmp(loop_statement.continue_label());
+
+  // Exit and decrement the loop depth.
+  PrepareForBailoutForId(stmt->ExitId(), NO_REGISTERS);
+  __ bind(loop_statement.break_label());
   decrement_loop_depth();
 }
 
@@ -2061,8 +2122,9 @@ void FullCodeGenerator::VisitYield(Yield* expr) {
       Handle<Code> done_ic = isolate()->builtins()->LoadIC_Initialize();
       CallIC(done_ic);                                   // result.done in v0
       __ Addu(sp, sp, Operand(kPointerSize));            // drop LoadIC state
-      ToBooleanStub stub(v0);
-      __ CallStub(&stub);
+      __ mov(a0, v0);
+      Handle<Code> bool_ic = ToBooleanStub::GetUninitialized(isolate());
+      CallIC(bool_ic);
       __ Branch(&l_try, eq, v0, Operand(zero_reg));
 
       // result.value
@@ -3037,7 +3099,7 @@ void FullCodeGenerator::EmitIsStringWrapperSafeForDefaultValueOf(
   // string "valueOf" the result is false.
   // The use of t2 to store the valueOf string assumes that it is not otherwise
   // used in the loop below.
-  __ li(t2, Operand(FACTORY->value_of_string()));
+  __ li(t2, Operand(isolate()->factory()->value_of_string()));
   __ jmp(&entry);
   __ bind(&loop);
   __ lw(a3, MemOperand(t0, 0));

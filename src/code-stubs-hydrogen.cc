@@ -36,10 +36,9 @@ namespace internal {
 
 
 static LChunk* OptimizeGraph(HGraph* graph) {
-  Isolate* isolate =  graph->isolate();
-  AssertNoAllocation no_gc;
-  NoHandleAllocation no_handles(isolate);
-  HandleDereferenceGuard no_deref(isolate, HandleDereferenceGuard::DISALLOW);
+  DisallowHeapAllocation no_allocation;
+  DisallowHandleAllocation no_handles;
+  DisallowHandleDereference no_deref;
 
   ASSERT(graph != NULL);
   SmartArrayPointer<char> bailout_reason;
@@ -100,7 +99,23 @@ class CodeStubGraphBuilderBase : public HGraphBuilder {
     IfBuilder checker_;
   };
 
+  enum ArgumentClass {
+    NONE,
+    SINGLE,
+    MULTIPLE
+  };
+
+  HValue* BuildArrayConstructor(ElementsKind kind,
+                                bool disable_allocation_sites,
+                                ArgumentClass argument_class);
+  HValue* BuildInternalArrayConstructor(ElementsKind kind,
+                                        ArgumentClass argument_class);
+
  private:
+  HValue* BuildArraySingleArgumentConstructor(JSArrayBuilder* builder);
+  HValue* BuildArrayNArgumentsConstructor(JSArrayBuilder* builder,
+                                          ElementsKind kind);
+
   SmartArrayPointer<HParameter*> parameters_;
   HValue* arguments_length_;
   CompilationInfoWithZone info_;
@@ -186,11 +201,12 @@ bool CodeStubGraphBuilderBase::BuildGraph() {
     }
   }
 
-  if (!current_block()->IsFinished()) {
+  if (current_block() != NULL) {
     HReturn* hreturn_instruction = new(zone) HReturn(return_value,
                                                      context_,
                                                      stack_pop_count);
     current_block()->Finish(hreturn_instruction);
+    set_current_block(NULL);
   }
   return true;
 }
@@ -520,40 +536,56 @@ Handle<Code> TransitionElementsKindStub::GenerateCode() {
   return DoGenerateCode(this);
 }
 
-
-template <>
-HValue* CodeStubGraphBuilder<ArrayNoArgumentConstructorStub>::BuildCodeStub() {
-  // ----------- S t a t e -------------
-  //  -- Parameter 1 : type info cell
-  //  -- Parameter 0 : constructor
-  // -----------------------------------
+HValue* CodeStubGraphBuilderBase::BuildArrayConstructor(
+    ElementsKind kind, bool disable_allocation_sites,
+    ArgumentClass argument_class) {
+  HValue* constructor = GetParameter(ArrayConstructorStubBase::kConstructor);
+  HValue* property_cell = GetParameter(ArrayConstructorStubBase::kPropertyCell);
   HInstruction* array_function = BuildGetArrayFunction(context());
-  ArrayContextChecker(this,
-                      GetParameter(ArrayConstructorStubBase::kConstructor),
-                      array_function);
-  // Get the right map
-  // Should be a constant
-  JSArrayBuilder array_builder(
-      this,
-      casted_stub()->elements_kind(),
-      GetParameter(ArrayConstructorStubBase::kPropertyCell),
-      casted_stub()->mode());
-  return array_builder.AllocateEmptyArray();
+
+  ArrayContextChecker(this, constructor, array_function);
+  JSArrayBuilder array_builder(this, kind, property_cell,
+                               disable_allocation_sites);
+  HValue* result = NULL;
+  switch (argument_class) {
+    case NONE:
+      result = array_builder.AllocateEmptyArray();
+      break;
+    case SINGLE:
+      result = BuildArraySingleArgumentConstructor(&array_builder);
+      break;
+    case MULTIPLE:
+      result = BuildArrayNArgumentsConstructor(&array_builder, kind);
+      break;
+  }
+  return result;
 }
 
 
-Handle<Code> ArrayNoArgumentConstructorStub::GenerateCode() {
-  return DoGenerateCode(this);
+HValue* CodeStubGraphBuilderBase::BuildInternalArrayConstructor(
+    ElementsKind kind, ArgumentClass argument_class) {
+  HValue* constructor = GetParameter(
+      InternalArrayConstructorStubBase::kConstructor);
+  JSArrayBuilder array_builder(this, kind, constructor);
+
+  HValue* result = NULL;
+  switch (argument_class) {
+    case NONE:
+      result = array_builder.AllocateEmptyArray();
+      break;
+    case SINGLE:
+      result = BuildArraySingleArgumentConstructor(&array_builder);
+      break;
+    case MULTIPLE:
+      result = BuildArrayNArgumentsConstructor(&array_builder, kind);
+      break;
+  }
+  return result;
 }
 
 
-template <>
-HValue* CodeStubGraphBuilder<ArraySingleArgumentConstructorStub>::
-    BuildCodeStub() {
-  HInstruction* array_function = BuildGetArrayFunction(context());
-  ArrayContextChecker(this,
-                      GetParameter(ArrayConstructorStubBase::kConstructor),
-                      array_function);
+HValue* CodeStubGraphBuilderBase::BuildArraySingleArgumentConstructor(
+    JSArrayBuilder* array_builder) {
   // Smi check and range check on the input arg.
   HValue* constant_one = graph()->GetConstant1();
   HValue* constant_zero = graph()->GetConstant0();
@@ -564,16 +596,13 @@ HValue* CodeStubGraphBuilder<ArraySingleArgumentConstructorStub>::
       new(zone()) HAccessArgumentsAt(elements, constant_one, constant_zero));
 
   HConstant* max_alloc_length =
-      new(zone()) HConstant(JSObject::kInitialMaxFastElementArray,
-                            Representation::Tagged());
+      new(zone()) HConstant(JSObject::kInitialMaxFastElementArray);
   AddInstruction(max_alloc_length);
   const int initial_capacity = JSArray::kPreallocatedArrayElements;
-  HConstant* initial_capacity_node =
-      new(zone()) HConstant(initial_capacity, Representation::Tagged());
+  HConstant* initial_capacity_node = new(zone()) HConstant(initial_capacity);
   AddInstruction(initial_capacity_node);
 
-  HBoundsCheck* checked_arg = AddBoundsCheck(
-      argument, max_alloc_length, ALLOW_SMI_KEY);
+  HBoundsCheck* checked_arg = AddBoundsCheck(argument, max_alloc_length);
   IfBuilder if_builder(this);
   if_builder.IfCompare(checked_arg, constant_zero, Token::EQ);
   if_builder.Then();
@@ -587,46 +616,23 @@ HValue* CodeStubGraphBuilder<ArraySingleArgumentConstructorStub>::
   // Figure out total size
   HValue* length = Pop();
   HValue* capacity = Pop();
-
-  JSArrayBuilder array_builder(
-      this,
-      casted_stub()->elements_kind(),
-      GetParameter(ArrayConstructorStubBase::kPropertyCell),
-      casted_stub()->mode());
-  return array_builder.AllocateArray(capacity, length, true);
+  return array_builder->AllocateArray(capacity, length, true);
 }
 
 
-Handle<Code> ArraySingleArgumentConstructorStub::GenerateCode() {
-  return DoGenerateCode(this);
-}
-
-
-template <>
-HValue* CodeStubGraphBuilder<ArrayNArgumentsConstructorStub>::BuildCodeStub() {
-  HInstruction* array_function = BuildGetArrayFunction(context());
-  ArrayContextChecker(this,
-                      GetParameter(ArrayConstructorStubBase::kConstructor),
-                      array_function);
-  ElementsKind kind = casted_stub()->elements_kind();
-  HValue* length = GetArgumentsLength();
-
-  JSArrayBuilder array_builder(
-      this,
-      kind,
-      GetParameter(ArrayConstructorStubBase::kPropertyCell),
-      casted_stub()->mode());
-
+HValue* CodeStubGraphBuilderBase::BuildArrayNArgumentsConstructor(
+    JSArrayBuilder* array_builder, ElementsKind kind) {
   // We need to fill with the hole if it's a smi array in the multi-argument
   // case because we might have to bail out while copying arguments into
   // the array because they aren't compatible with a smi array.
   // If it's a double array, no problem, and if it's fast then no
   // problem either because doubles are boxed.
+  HValue* length = GetArgumentsLength();
   bool fill_with_hole = IsFastSmiElementsKind(kind);
-  HValue* new_object = array_builder.AllocateArray(length,
-                                                   length,
-                                                   fill_with_hole);
-  HValue* elements = array_builder.GetElementsLocation();
+  HValue* new_object = array_builder->AllocateArray(length,
+                                                    length,
+                                                    fill_with_hole);
+  HValue* elements = array_builder->GetElementsLocation();
   ASSERT(elements != NULL);
 
   // Now populate the elements correctly.
@@ -646,7 +652,81 @@ HValue* CodeStubGraphBuilder<ArrayNArgumentsConstructorStub>::BuildCodeStub() {
 }
 
 
+template <>
+HValue* CodeStubGraphBuilder<ArrayNoArgumentConstructorStub>::BuildCodeStub() {
+  ElementsKind kind = casted_stub()->elements_kind();
+  bool disable_allocation_sites = casted_stub()->disable_allocation_sites();
+  return BuildArrayConstructor(kind, disable_allocation_sites, NONE);
+}
+
+
+Handle<Code> ArrayNoArgumentConstructorStub::GenerateCode() {
+  return DoGenerateCode(this);
+}
+
+
+template <>
+HValue* CodeStubGraphBuilder<ArraySingleArgumentConstructorStub>::
+    BuildCodeStub() {
+  ElementsKind kind = casted_stub()->elements_kind();
+  bool disable_allocation_sites = casted_stub()->disable_allocation_sites();
+  return BuildArrayConstructor(kind, disable_allocation_sites, SINGLE);
+}
+
+
+Handle<Code> ArraySingleArgumentConstructorStub::GenerateCode() {
+  return DoGenerateCode(this);
+}
+
+
+template <>
+HValue* CodeStubGraphBuilder<ArrayNArgumentsConstructorStub>::BuildCodeStub() {
+  ElementsKind kind = casted_stub()->elements_kind();
+  bool disable_allocation_sites = casted_stub()->disable_allocation_sites();
+  return BuildArrayConstructor(kind, disable_allocation_sites, MULTIPLE);
+}
+
+
 Handle<Code> ArrayNArgumentsConstructorStub::GenerateCode() {
+  return DoGenerateCode(this);
+}
+
+
+template <>
+HValue* CodeStubGraphBuilder<InternalArrayNoArgumentConstructorStub>::
+    BuildCodeStub() {
+  ElementsKind kind = casted_stub()->elements_kind();
+  return BuildInternalArrayConstructor(kind, NONE);
+}
+
+
+Handle<Code> InternalArrayNoArgumentConstructorStub::GenerateCode() {
+  return DoGenerateCode(this);
+}
+
+
+template <>
+HValue* CodeStubGraphBuilder<InternalArraySingleArgumentConstructorStub>::
+    BuildCodeStub() {
+  ElementsKind kind = casted_stub()->elements_kind();
+  return BuildInternalArrayConstructor(kind, SINGLE);
+}
+
+
+Handle<Code> InternalArraySingleArgumentConstructorStub::GenerateCode() {
+  return DoGenerateCode(this);
+}
+
+
+template <>
+HValue* CodeStubGraphBuilder<InternalArrayNArgumentsConstructorStub>::
+    BuildCodeStub() {
+  ElementsKind kind = casted_stub()->elements_kind();
+  return BuildInternalArrayConstructor(kind, MULTIPLE);
+}
+
+
+Handle<Code> InternalArrayNArgumentsConstructorStub::GenerateCode() {
   return DoGenerateCode(this);
 }
 
@@ -675,5 +755,25 @@ HValue* CodeStubGraphBuilder<CompareNilICStub>::BuildCodeInitializedStub() {
 Handle<Code> CompareNilICStub::GenerateCode() {
   return DoGenerateCode(this);
 }
+
+
+template <>
+HValue* CodeStubGraphBuilder<ToBooleanStub>::BuildCodeInitializedStub() {
+  ToBooleanStub* stub = casted_stub();
+
+  IfBuilder if_true(this);
+  if_true.If<HBranch>(GetParameter(0), stub->GetTypes());
+  if_true.Then();
+    if_true.Return(graph()->GetConstant1());
+  if_true.Else();
+  if_true.End();
+  return graph()->GetConstant0();
+}
+
+
+Handle<Code> ToBooleanStub::GenerateCode() {
+  return DoGenerateCode(this);
+}
+
 
 } }  // namespace v8::internal
