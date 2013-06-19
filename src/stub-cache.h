@@ -140,7 +140,7 @@ class StubCache {
   Handle<Code> ComputeLoadGlobal(Handle<Name> name,
                                  Handle<JSObject> object,
                                  Handle<GlobalObject> holder,
-                                 Handle<JSGlobalPropertyCell> cell,
+                                 Handle<PropertyCell> cell,
                                  bool is_dont_delete);
 
   // ---
@@ -183,7 +183,7 @@ class StubCache {
 
   Handle<Code> ComputeStoreGlobal(Handle<Name> name,
                                   Handle<GlobalObject> object,
-                                  Handle<JSGlobalPropertyCell> cell,
+                                  Handle<PropertyCell> cell,
                                   StrictModeFlag strict_mode);
 
   Handle<Code> ComputeStoreCallback(Handle<Name> name,
@@ -251,7 +251,7 @@ class StubCache {
                                  Handle<Name> name,
                                  Handle<JSObject> object,
                                  Handle<GlobalObject> holder,
-                                 Handle<JSGlobalPropertyCell> cell,
+                                 Handle<PropertyCell> cell,
                                  Handle<JSFunction> function);
 
   // ---
@@ -765,7 +765,7 @@ class LoadStubCompiler: public BaseLoadStubCompiler {
 
   Handle<Code> CompileLoadGlobal(Handle<JSObject> object,
                                  Handle<GlobalObject> holder,
-                                 Handle<JSGlobalPropertyCell> cell,
+                                 Handle<PropertyCell> cell,
                                  Handle<Name> name,
                                  bool is_dont_delete);
 
@@ -890,7 +890,7 @@ class StoreStubCompiler: public BaseStoreStubCompiler {
                                        Handle<Name> name);
 
   Handle<Code> CompileStoreGlobal(Handle<GlobalObject> object,
-                                  Handle<JSGlobalPropertyCell> holder,
+                                  Handle<PropertyCell> holder,
                                   Handle<Name> name);
 
  private:
@@ -1007,7 +1007,7 @@ class CallStubCompiler: public StubCompiler {
 
   Handle<Code> CompileCallGlobal(Handle<JSObject> object,
                                  Handle<GlobalObject> holder,
-                                 Handle<JSGlobalPropertyCell> cell,
+                                 Handle<PropertyCell> cell,
                                  Handle<JSFunction> function,
                                  Handle<Name> name);
 
@@ -1019,14 +1019,14 @@ class CallStubCompiler: public StubCompiler {
   // given function.
   Handle<Code> CompileCustomCall(Handle<Object> object,
                                  Handle<JSObject> holder,
-                                 Handle<JSGlobalPropertyCell> cell,
+                                 Handle<Cell> cell,
                                  Handle<JSFunction> function,
                                  Handle<String> name);
 
 #define DECLARE_CALL_GENERATOR(name)                                    \
   Handle<Code> Compile##name##Call(Handle<Object> object,               \
                                    Handle<JSObject> holder,             \
-                                   Handle<JSGlobalPropertyCell> cell,   \
+                                   Handle<Cell> cell,                   \
                                    Handle<JSFunction> function,         \
                                    Handle<String> fname);
   CUSTOM_CALL_IC_GENERATORS(DECLARE_CALL_GENERATOR)
@@ -1035,7 +1035,7 @@ class CallStubCompiler: public StubCompiler {
   Handle<Code> CompileFastApiCall(const CallOptimization& optimization,
                                   Handle<Object> object,
                                   Handle<JSObject> holder,
-                                  Handle<JSGlobalPropertyCell> cell,
+                                  Handle<Cell> cell,
                                   Handle<JSFunction> function,
                                   Handle<String> name);
 
@@ -1053,7 +1053,7 @@ class CallStubCompiler: public StubCompiler {
 
   // Generates code to load the function from the cell checking that
   // it still contains the same function.
-  void GenerateLoadFunctionFromCell(Handle<JSGlobalPropertyCell> cell,
+  void GenerateLoadFunctionFromCell(Handle<Cell> cell,
                                     Handle<JSFunction> function,
                                     Label* miss);
 

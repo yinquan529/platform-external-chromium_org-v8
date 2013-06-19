@@ -597,15 +597,17 @@ class LModI: public LTemplateInstruction<1, 2, 2> {
 };
 
 
-class LDivI: public LTemplateInstruction<1, 2, 0> {
+class LDivI: public LTemplateInstruction<1, 2, 1> {
  public:
-  LDivI(LOperand* left, LOperand* right) {
+  LDivI(LOperand* left, LOperand* right, LOperand* temp) {
     inputs_[0] = left;
     inputs_[1] = right;
+    temps_[0] = temp;
   }
 
   LOperand* left() { return inputs_[0]; }
   LOperand* right() { return inputs_[1]; }
+  LOperand* temp() { return temps_[0]; }
 
   DECLARE_CONCRETE_INSTRUCTION(DivI, "div-i")
   DECLARE_HYDROGEN_ACCESSOR(Div)
@@ -2690,7 +2692,6 @@ class LChunkBuilder BASE_EMBEDDED {
   LInstruction* DoRSub(HSub* instr);
 
   static bool HasMagicNumberForDivisor(int32_t divisor);
-  static HValue* SimplifiedDividendForMathFloorOfDiv(HValue* val);
   static HValue* SimplifiedDivisorForMathFloorOfDiv(HValue* val);
 
   LInstruction* DoMathFloor(HUnaryMathOperation* instr);

@@ -321,7 +321,7 @@ Handle<Code> StubCache::ComputeLoadNormal(Handle<Name> name,
 Handle<Code> StubCache::ComputeLoadGlobal(Handle<Name> name,
                                           Handle<JSObject> receiver,
                                           Handle<GlobalObject> holder,
-                                          Handle<JSGlobalPropertyCell> cell,
+                                          Handle<PropertyCell> cell,
                                           bool is_dont_delete) {
   Handle<JSObject> stub_holder = StubHolder(receiver, holder);
   Handle<Code> stub = FindIC(name, stub_holder, Code::LOAD_IC, Code::NORMAL);
@@ -497,7 +497,7 @@ Handle<Code> StubCache::ComputeStoreNormal(StrictModeFlag strict_mode) {
 
 Handle<Code> StubCache::ComputeStoreGlobal(Handle<Name> name,
                                            Handle<GlobalObject> receiver,
-                                           Handle<JSGlobalPropertyCell> cell,
+                                           Handle<PropertyCell> cell,
                                            StrictModeFlag strict_mode) {
   Handle<Code> stub = FindIC(
       name, Handle<JSObject>::cast(receiver),
@@ -734,7 +734,7 @@ Handle<Code> StubCache::ComputeCallGlobal(int argc,
                                           Handle<Name> name,
                                           Handle<JSObject> receiver,
                                           Handle<GlobalObject> holder,
-                                          Handle<JSGlobalPropertyCell> cell,
+                                          Handle<PropertyCell> cell,
                                           Handle<JSFunction> function) {
   InlineCacheHolderFlag cache_holder =
       IC::GetCodeCacheForObject(*receiver, *holder);
@@ -909,8 +909,6 @@ Handle<Code> StubCache::ComputeCallMiss(int argc,
 
 Handle<Code> StubCache::ComputeCompareNil(Handle<Map> receiver_map,
                                           CompareNilICStub& stub) {
-  stub.SetKind(kNonStrictEquality);
-
   Handle<String> name(isolate_->heap()->empty_string());
   if (!receiver_map->is_shared()) {
     Handle<Code> cached_ic = FindIC(name, receiver_map, Code::COMPARE_NIL_IC,
@@ -1979,7 +1977,7 @@ bool CallStubCompiler::HasCustomCallGenerator(Handle<JSFunction> function) {
 Handle<Code> CallStubCompiler::CompileCustomCall(
     Handle<Object> object,
     Handle<JSObject> holder,
-    Handle<JSGlobalPropertyCell> cell,
+    Handle<Cell> cell,
     Handle<JSFunction> function,
     Handle<String> fname) {
   ASSERT(HasCustomCallGenerator(function));
