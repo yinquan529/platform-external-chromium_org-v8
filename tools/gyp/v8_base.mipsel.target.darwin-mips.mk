@@ -179,7 +179,6 @@ MY_CFLAGS_Debug := \
 	-Wno-format \
 	-EL \
 	-mhard-float \
-	--sysroot=/automerger/android-src/external/chromium_org/mipsel-sysroot/sysroot \
 	-ffunction-sections \
 	-funwind-tables \
 	-g \
@@ -270,7 +269,6 @@ MY_CFLAGS_Release := \
 	-Wno-format \
 	-EL \
 	-mhard-float \
-	--sysroot=/automerger/android-src/external/chromium_org/mipsel-sysroot/sysroot \
 	-ffunction-sections \
 	-funwind-tables \
 	-g \
@@ -355,8 +353,6 @@ LOCAL_LDFLAGS_Debug := \
 	-fPIC \
 	-EL \
 	-Wl,--no-keep-memory \
-	--sysroot=/automerger/android-src/external/chromium_org/mipsel-sysroot/sysroot \
-	 \
 	-nostdlib \
 	-Wl,--no-undefined \
 	-Wl,--exclude-libs=ALL \
@@ -372,8 +368,6 @@ LOCAL_LDFLAGS_Release := \
 	-fPIC \
 	-EL \
 	-Wl,--no-keep-memory \
-	--sysroot=/automerger/android-src/external/chromium_org/mipsel-sysroot/sysroot \
-	 \
 	-nostdlib \
 	-Wl,--no-undefined \
 	-Wl,--exclude-libs=ALL \
