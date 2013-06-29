@@ -79,6 +79,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-instructions.cc \
 	v8/src/hydrogen.cc \
 	v8/src/hydrogen-gvn.cc \
+	v8/src/hydrogen-infer-representation.cc \
 	v8/src/ic.cc \
 	v8/src/incremental-marking.cc \
 	v8/src/interface.cc \
