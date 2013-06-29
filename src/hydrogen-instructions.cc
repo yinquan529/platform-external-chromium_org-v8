@@ -29,7 +29,7 @@
 
 #include "double.h"
 #include "factory.h"
-#include "hydrogen.h"
+#include "hydrogen-infer-representation.h"
 
 #if V8_TARGET_ARCH_IA32
 #include "ia32/lithium-ia32.h"
@@ -78,7 +78,7 @@ void HValue::AssumeRepresentation(Representation r) {
 }
 
 
-void HValue::InferRepresentation(HInferRepresentation* h_infer) {
+void HValue::InferRepresentation(HInferRepresentationPhase* h_infer) {
   ASSERT(CheckFlag(kFlexibleRepresentation));
   Representation new_rep = RepresentationFromInputs();
   UpdateRepresentation(new_rep, h_infer, "inputs");
@@ -124,10 +124,11 @@ Representation HValue::RepresentationFromUses() {
 
 
 void HValue::UpdateRepresentation(Representation new_rep,
-                                  HInferRepresentation* h_infer,
+                                  HInferRepresentationPhase* h_infer,
                                   const char* reason) {
   Representation r = representation();
   if (new_rep.is_more_general_than(r)) {
+    if (CheckFlag(kCannotBeTagged) && new_rep.IsTagged()) return;
     if (FLAG_trace_representation) {
       PrintF("Changing #%d %s representation %s -> %s based on %s\n",
              id(), Mnemonic(), r.Mnemonic(), new_rep.Mnemonic(), reason);
@@ -138,7 +139,7 @@ void HValue::UpdateRepresentation(Representation new_rep,
 }
 
 
-void HValue::AddDependantsToWorklist(HInferRepresentation* h_infer) {
+void HValue::AddDependantsToWorklist(HInferRepresentationPhase* h_infer) {
   for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
     h_infer->AddToWorklist(it.value());
   }
@@ -1149,7 +1150,7 @@ void HBoundsCheck::PrintDataTo(StringStream* stream) {
 }
 
 
-void HBoundsCheck::InferRepresentation(HInferRepresentation* h_infer) {
+void HBoundsCheck::InferRepresentation(HInferRepresentationPhase* h_infer) {
   ASSERT(CheckFlag(kFlexibleRepresentation));
   HValue* actual_index = index()->ActualValue();
   HValue* actual_length = length()->ActualValue();
@@ -1224,6 +1225,13 @@ void HCallKnownGlobal::PrintDataTo(StringStream* stream) {
 }
 
 
+void HCallNewArray::PrintDataTo(StringStream* stream) {
+  stream->Add(ElementsKindToString(elements_kind()));
+  stream->Add(" ");
+  HBinaryCall::PrintDataTo(stream);
+}
+
+
 void HCallRuntime::PrintDataTo(StringStream* stream) {
   stream->Add("%o ", *name());
   stream->Add("#%d", argument_count());
@@ -1280,20 +1288,26 @@ void HReturn::PrintDataTo(StringStream* stream) {
 
 Representation HBranch::observed_input_representation(int index) {
   static const ToBooleanStub::Types tagged_types(
-      ToBooleanStub::UNDEFINED |
       ToBooleanStub::NULL_TYPE |
       ToBooleanStub::SPEC_OBJECT |
       ToBooleanStub::STRING |
       ToBooleanStub::SYMBOL);
   if (expected_input_types_.ContainsAnyOf(tagged_types)) {
     return Representation::Tagged();
-  } else if (expected_input_types_.Contains(ToBooleanStub::HEAP_NUMBER)) {
-    return Representation::Double();
-  } else if (expected_input_types_.Contains(ToBooleanStub::SMI)) {
-    return Representation::Smi();
-  } else {
-    return Representation::None();
   }
+  if (expected_input_types_.Contains(ToBooleanStub::UNDEFINED)) {
+    if (expected_input_types_.Contains(ToBooleanStub::HEAP_NUMBER)) {
+      return Representation::Double();
+    }
+    return Representation::Tagged();
+  }
+  if (expected_input_types_.Contains(ToBooleanStub::HEAP_NUMBER)) {
+    return Representation::Double();
+  }
+  if (expected_input_types_.Contains(ToBooleanStub::SMI)) {
+    return Representation::Smi();
+  }
+  return Representation::None();
 }
 
 
@@ -1758,9 +1772,12 @@ Range* HConstant::InferRange(Zone* zone) {
 
 
 Range* HPhi::InferRange(Zone* zone) {
-  if (representation().IsInteger32()) {
+  Representation r = representation();
+  if (r.IsSmiOrInteger32()) {
     if (block()->IsLoopHeader()) {
-      Range* range = new(zone) Range(kMinInt, kMaxInt);
+      Range* range = r.IsSmi()
+          ? new(zone) Range(Smi::kMinValue, Smi::kMaxValue)
+          : new(zone) Range(kMinInt, kMaxInt);
       return range;
     } else {
       Range* range = OperandAt(0)->range()->Copy(zone);
@@ -2314,7 +2331,7 @@ void HBinaryOperation::PrintDataTo(StringStream* stream) {
 }
 
 
-void HBinaryOperation::InferRepresentation(HInferRepresentation* h_infer) {
+void HBinaryOperation::InferRepresentation(HInferRepresentationPhase* h_infer) {
   ASSERT(CheckFlag(kFlexibleRepresentation));
   Representation new_rep = RepresentationFromInputs();
   UpdateRepresentation(new_rep, h_infer, "inputs");
@@ -2377,7 +2394,7 @@ void HBinaryOperation::AssumeRepresentation(Representation r) {
 }
 
 
-void HMathMinMax::InferRepresentation(HInferRepresentation* h_infer) {
+void HMathMinMax::InferRepresentation(HInferRepresentationPhase* h_infer) {
   ASSERT(CheckFlag(kFlexibleRepresentation));
   Representation new_rep = RepresentationFromInputs();
   UpdateRepresentation(new_rep, h_infer, "inputs");
@@ -2556,7 +2573,8 @@ void HGoto::PrintDataTo(StringStream* stream) {
 }
 
 
-void HCompareIDAndBranch::InferRepresentation(HInferRepresentation* h_infer) {
+void HCompareIDAndBranch::InferRepresentation(
+    HInferRepresentationPhase* h_infer) {
   Representation left_rep = left()->representation();
   Representation right_rep = right()->representation();
   Representation observed_left = observed_input_representation(0);
@@ -3055,9 +3073,8 @@ HType HCheckFunction::CalculateInferredType() {
 }
 
 
-HType HCheckNonSmi::CalculateInferredType() {
-  // TODO(kasperl): Is there any way to signal that this isn't a smi?
-  return HType::Tagged();
+HType HCheckHeapObject::CalculateInferredType() {
+  return HType::NonPrimitive();
 }
 
 
@@ -3144,6 +3161,11 @@ Representation HUnaryMathOperation::RepresentationFromInputs() {
 
 HType HStringCharFromCode::CalculateInferredType() {
   return HType::String();
+}
+
+
+HType HAllocateObject::CalculateInferredType() {
+  return HType::JSObject();
 }
 
 
@@ -3486,8 +3508,7 @@ HInstruction* HMod::New(Zone* zone,
                         HValue* context,
                         HValue* left,
                         HValue* right,
-                        bool has_fixed_right_arg,
-                        int fixed_right_arg_value) {
+                        Maybe<int> fixed_right_arg) {
   if (FLAG_fold_constants && left->IsConstant() && right->IsConstant()) {
     HConstant* c_left = HConstant::cast(left);
     HConstant* c_right = HConstant::cast(right);
@@ -3506,11 +3527,7 @@ HInstruction* HMod::New(Zone* zone,
       }
     }
   }
-  return new(zone) HMod(context,
-                        left,
-                        right,
-                        has_fixed_right_arg,
-                        fixed_right_arg_value);
+  return new(zone) HMod(context, left, right, fixed_right_arg);
 }
 
 
@@ -3662,7 +3679,7 @@ void HPhi::SimplifyConstantInputs() {
 }
 
 
-void HPhi::InferRepresentation(HInferRepresentation* h_infer) {
+void HPhi::InferRepresentation(HInferRepresentationPhase* h_infer) {
   ASSERT(CheckFlag(kFlexibleRepresentation));
   Representation new_rep = RepresentationFromInputs();
   UpdateRepresentation(new_rep, h_infer, "inputs");
@@ -3726,7 +3743,7 @@ void HSimulate::Verify() {
 }
 
 
-void HCheckNonSmi::Verify() {
+void HCheckHeapObject::Verify() {
   HInstruction::Verify();
   ASSERT(HasNoUses());
 }
