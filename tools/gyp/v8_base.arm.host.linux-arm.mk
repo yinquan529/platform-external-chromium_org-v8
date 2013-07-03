@@ -299,8 +299,7 @@ LOCAL_LDFLAGS_Debug := \
 	-Wl,-z,relro \
 	-pthread \
 	-fPIC \
-	-m32 \
-	-Wl,--warn-shared-textrel
+	-m32
 
 
 LOCAL_LDFLAGS_Release := \
@@ -308,8 +307,7 @@ LOCAL_LDFLAGS_Release := \
 	-Wl,-z,relro \
 	-pthread \
 	-fPIC \
-	-m32 \
-	-Wl,--warn-shared-textrel
+	-m32
 
 
 LOCAL_LDFLAGS := $(LOCAL_LDFLAGS_$(GYP_CONFIGURATION))
