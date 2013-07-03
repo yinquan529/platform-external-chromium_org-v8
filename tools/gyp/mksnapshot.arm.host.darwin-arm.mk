@@ -158,13 +158,15 @@ LOCAL_CPPFLAGS := $(LOCAL_CPPFLAGS_$(GYP_CONFIGURATION))
 LOCAL_LDFLAGS_Debug := \
 	-pthread \
 	-fPIC \
-	-m32
+	-m32 \
+	-Wl,--warn-shared-textrel
 
 
 LOCAL_LDFLAGS_Release := \
 	-pthread \
 	-fPIC \
-	-m32
+	-m32 \
+	-Wl,--warn-shared-textrel
 
 
 LOCAL_LDFLAGS := $(LOCAL_LDFLAGS_$(GYP_CONFIGURATION))
