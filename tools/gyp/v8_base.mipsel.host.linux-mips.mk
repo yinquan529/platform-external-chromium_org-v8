@@ -75,13 +75,17 @@ LOCAL_SRC_FILES := \
 	v8/src/heap-profiler.cc \
 	v8/src/heap-snapshot-generator.cc \
 	v8/src/heap.cc \
+	v8/src/hydrogen-dce.cc \
 	v8/src/hydrogen-environment-liveness.cc \
 	v8/src/hydrogen-escape-analysis.cc \
 	v8/src/hydrogen-instructions.cc \
 	v8/src/hydrogen.cc \
 	v8/src/hydrogen-gvn.cc \
 	v8/src/hydrogen-infer-representation.cc \
+	v8/src/hydrogen-infer-types.cc \
 	v8/src/hydrogen-range-analysis.cc \
+	v8/src/hydrogen-redundant-phi.cc \
+	v8/src/hydrogen-sce.cc \
 	v8/src/hydrogen-uint32-analysis.cc \
 	v8/src/hydrogen-osr.cc \
 	v8/src/ic.cc \
