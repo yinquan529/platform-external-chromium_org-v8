@@ -27,7 +27,7 @@
 
 #include "v8.h"
 
-#if defined(V8_TARGET_ARCH_IA32)
+#if V8_TARGET_ARCH_IA32
 
 #include "bootstrapper.h"
 #include "codegen.h"
@@ -2804,6 +2804,17 @@ void MacroAssembler::JumpIfNotBothSequentialAsciiStrings(Register object1,
   lea(scratch1, Operand(scratch1, scratch2, times_8, 0));
   cmp(scratch1, kFlatAsciiStringTag | (kFlatAsciiStringTag << 3));
   j(not_equal, failure);
+}
+
+
+void MacroAssembler::JumpIfNotUniqueName(Operand operand,
+                                         Label* not_unique_name,
+                                         Label::Distance distance) {
+  STATIC_ASSERT(((SYMBOL_TYPE - 1) & kIsInternalizedMask) == kInternalizedTag);
+  cmp(operand, Immediate(kInternalizedTag));
+  j(less, not_unique_name, distance);
+  cmp(operand, Immediate(SYMBOL_TYPE));
+  j(greater, not_unique_name, distance);
 }
 
 

@@ -76,9 +76,12 @@ LOCAL_SRC_FILES := \
 	v8/src/heap-snapshot-generator.cc \
 	v8/src/heap.cc \
 	v8/src/hydrogen-environment-liveness.cc \
+	v8/src/hydrogen-escape-analysis.cc \
 	v8/src/hydrogen-instructions.cc \
 	v8/src/hydrogen.cc \
 	v8/src/hydrogen-gvn.cc \
+	v8/src/hydrogen-infer-representation.cc \
+	v8/src/hydrogen-uint32-analysis.cc \
 	v8/src/ic.cc \
 	v8/src/incremental-marking.cc \
 	v8/src/interface.cc \
@@ -164,7 +167,7 @@ LOCAL_SRC_FILES := \
 
 
 # Flags passed to both C and C++ files.
-MY_CFLAGS := \
+MY_CFLAGS_Debug := \
 	-fstack-protector \
 	--param=ssp-buffer-size=4 \
 	-pthread \
@@ -183,9 +186,7 @@ MY_CFLAGS := \
 	-fdata-sections \
 	-ffunction-sections
 
-MY_CFLAGS_C :=
-
-MY_DEFS := \
+MY_DEFS_Debug := \
 	'-DANGLE_DX11' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DUSE_LINUX_BREAKPAD' \
@@ -210,32 +211,102 @@ MY_DEFS := \
 	'-DVERIFY_HEAP' \
 	'-DENABLE_EXTRA_CHECKS'
 
-LOCAL_CFLAGS := $(MY_CFLAGS_C) $(MY_CFLAGS) $(MY_DEFS)
-# Undefine ANDROID for host modules
-LOCAL_CFLAGS += -UANDROID
 
 # Include paths placed before CFLAGS/CPPFLAGS
-LOCAL_C_INCLUDES := \
+LOCAL_C_INCLUDES_Debug := \
 	$(LOCAL_PATH)/v8/src
 
-LOCAL_C_INCLUDES := $(GYP_COPIED_SOURCE_ORIGIN_DIRS) $(LOCAL_C_INCLUDES)
 
 # Flags passed to only C++ (and not C) files.
-LOCAL_CPPFLAGS := \
+LOCAL_CPPFLAGS_Debug := \
 	-fno-rtti \
 	-fno-threadsafe-statics \
 	-fvisibility-inlines-hidden \
 	-Wno-deprecated
 
+
+# Flags passed to both C and C++ files.
+MY_CFLAGS_Release := \
+	-fstack-protector \
+	--param=ssp-buffer-size=4 \
+	-pthread \
+	-fno-exceptions \
+	-fno-strict-aliasing \
+	-Wno-unused-parameter \
+	-Wno-missing-field-initializers \
+	-fvisibility=hidden \
+	-pipe \
+	-fPIC \
+	-Wno-format \
+	-m32 \
+	-fno-ident \
+	-fdata-sections \
+	-ffunction-sections \
+	-fomit-frame-pointer \
+	-fno-unwind-tables \
+	-fno-asynchronous-unwind-tables \
+	-fdata-sections \
+	-ffunction-sections \
+	-O2
+
+MY_DEFS_Release := \
+	'-DANGLE_DX11' \
+	'-D_FILE_OFFSET_BITS=64' \
+	'-DUSE_LINUX_BREAKPAD' \
+	'-DNO_TCMALLOC' \
+	'-DDISABLE_NACL' \
+	'-DCHROMIUM_BUILD' \
+	'-DUSE_LIBJPEG_TURBO=1' \
+	'-DUSE_PROPRIETARY_CODECS' \
+	'-DENABLE_GPU=1' \
+	'-DUSE_OPENSSL=1' \
+	'-DENABLE_EGLIMAGE=1' \
+	'-DENABLE_LANGUAGE_DETECTION=1' \
+	'-DENABLE_DEBUGGER_SUPPORT' \
+	'-DV8_TARGET_ARCH_IA32' \
+	'-DCAN_USE_VFP_INSTRUCTIONS' \
+	'-DNDEBUG' \
+	'-DNVALGRIND' \
+	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'
+
+
+# Include paths placed before CFLAGS/CPPFLAGS
+LOCAL_C_INCLUDES_Release := \
+	$(LOCAL_PATH)/v8/src
+
+
+# Flags passed to only C++ (and not C) files.
+LOCAL_CPPFLAGS_Release := \
+	-fno-rtti \
+	-fno-threadsafe-statics \
+	-fvisibility-inlines-hidden \
+	-Wno-deprecated
+
+
+LOCAL_CFLAGS := $(MY_CFLAGS_$(GYP_CONFIGURATION)) $(MY_DEFS_$(GYP_CONFIGURATION))
+# Undefine ANDROID for host modules
+LOCAL_CFLAGS += -UANDROID
+LOCAL_C_INCLUDES := $(GYP_COPIED_SOURCE_ORIGIN_DIRS) $(LOCAL_C_INCLUDES_$(GYP_CONFIGURATION))
+LOCAL_CPPFLAGS := $(LOCAL_CPPFLAGS_$(GYP_CONFIGURATION))
 ### Rules for final target.
 
-LOCAL_LDFLAGS := \
+LOCAL_LDFLAGS_Debug := \
 	-Wl,-z,now \
 	-Wl,-z,relro \
 	-pthread \
 	-fPIC \
 	-m32
 
+
+LOCAL_LDFLAGS_Release := \
+	-Wl,-z,now \
+	-Wl,-z,relro \
+	-pthread \
+	-fPIC \
+	-m32
+
+
+LOCAL_LDFLAGS := $(LOCAL_LDFLAGS_$(GYP_CONFIGURATION))
 
 LOCAL_STATIC_LIBRARIES :=
 

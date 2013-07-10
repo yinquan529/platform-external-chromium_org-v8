@@ -27,7 +27,7 @@
 
 #include "v8.h"
 
-#if defined(V8_TARGET_ARCH_X64)
+#if V8_TARGET_ARCH_X64
 
 #include "bootstrapper.h"
 #include "codegen.h"
@@ -2308,6 +2308,32 @@ void MacroAssembler::JumpIfBothInstanceTypesAreNotSequentialAscii(
 }
 
 
+template<class T>
+static void JumpIfNotUniqueNameHelper(MacroAssembler* masm,
+                                      T operand_or_register,
+                                      Label* not_unique_name,
+                                      Label::Distance distance) {
+  STATIC_ASSERT(((SYMBOL_TYPE - 1) & kIsInternalizedMask) == kInternalizedTag);
+  masm->cmpb(operand_or_register, Immediate(kInternalizedTag));
+  masm->j(less, not_unique_name, distance);
+  masm->cmpb(operand_or_register, Immediate(SYMBOL_TYPE));
+  masm->j(greater, not_unique_name, distance);
+}
+
+
+void MacroAssembler::JumpIfNotUniqueName(Operand operand,
+                                         Label* not_unique_name,
+                                         Label::Distance distance) {
+  JumpIfNotUniqueNameHelper<Operand>(this, operand, not_unique_name, distance);
+}
+
+
+void MacroAssembler::JumpIfNotUniqueName(Register reg,
+                                         Label* not_unique_name,
+                                         Label::Distance distance) {
+  JumpIfNotUniqueNameHelper<Register>(this, reg, not_unique_name, distance);
+}
+
 
 void MacroAssembler::Move(Register dst, Register src) {
   if (!dst.is(src)) {
@@ -2661,7 +2687,8 @@ void MacroAssembler::JumpToHandlerEntry() {
   // rax = exception, rdi = code object, rdx = state.
   movq(rbx, FieldOperand(rdi, Code::kHandlerTableOffset));
   shr(rdx, Immediate(StackHandler::kKindWidth));
-  movq(rdx, FieldOperand(rbx, rdx, times_8, FixedArray::kHeaderSize));
+  movq(rdx,
+       FieldOperand(rbx, rdx, times_pointer_size, FixedArray::kHeaderSize));
   SmiToInteger64(rdx, rdx);
   lea(rdi, FieldOperand(rdi, rdx, times_1, Code::kHeaderSize));
   jmp(rdi);
@@ -4189,12 +4216,12 @@ void MacroAssembler::CopyBytes(Register destination,
   // we keep source aligned for the rep movs operation by copying the odd bytes
   // at the end of the ranges.
   movq(scratch, length);
-  shrl(length, Immediate(3));
+  shrl(length, Immediate(kPointerSizeLog2));
   repmovsq();
   // Move remaining bytes of length.
-  andl(scratch, Immediate(0x7));
-  movq(length, Operand(source, scratch, times_1, -8));
-  movq(Operand(destination, scratch, times_1, -8), length);
+  andl(scratch, Immediate(kPointerSize - 1));
+  movq(length, Operand(source, scratch, times_1, -kPointerSize));
+  movq(Operand(destination, scratch, times_1, -kPointerSize), length);
   addq(destination, scratch);
 
   if (min_length <= kLongStringLimit) {

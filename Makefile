@@ -35,7 +35,7 @@ GYPFLAGS ?=
 TESTFLAGS ?=
 ANDROID_NDK_ROOT ?=
 ANDROID_TOOLCHAIN ?=
-ANDROID_V8 ?= /data/local/v8
+ANDROID_V8 ?= /data/local/tmp/v8
 NACL_SDK_ROOT ?=
 
 # Special build flags. Use them like this: "make library=shared"
@@ -391,4 +391,7 @@ $(ENVFILE).new:
 # Remember to keep these in sync with the DEPS file.
 dependencies:
 	svn checkout --force http://gyp.googlecode.com/svn/trunk build/gyp \
-	    --revision 1501
+	    --revision 1656
+	svn checkout --force \
+	    https://src.chromium.org/chrome/trunk/deps/third_party/icu46 \
+	    third_party/icu --revision 205936

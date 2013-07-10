@@ -29,7 +29,7 @@
 
 #include "v8.h"
 
-#if defined(V8_TARGET_ARCH_MIPS)
+#if V8_TARGET_ARCH_MIPS
 
 #include "bootstrapper.h"
 #include "codegen.h"
@@ -3202,6 +3202,14 @@ void MacroAssembler::AllocateAsciiSlicedString(Register result,
 }
 
 
+void MacroAssembler::JumpIfNotUniqueName(Register reg,
+                                         Label* not_unique_name) {
+  STATIC_ASSERT(((SYMBOL_TYPE - 1) & kIsInternalizedMask) == kInternalizedTag);
+  Branch(not_unique_name, lt, reg, Operand(kIsInternalizedMask));
+  Branch(not_unique_name, gt, reg, Operand(SYMBOL_TYPE));
+}
+
+
 // Allocates a heap number or jumps to the label if the young space is full and
 // a scavenge is needed.
 void MacroAssembler::AllocateHeapNumber(Register result,
@@ -4715,19 +4723,19 @@ void MacroAssembler::InitializeNewString(Register string,
 
 
 int MacroAssembler::ActivationFrameAlignment() {
-#if defined(V8_HOST_ARCH_MIPS)
+#if V8_HOST_ARCH_MIPS
   // Running on the real platform. Use the alignment as mandated by the local
   // environment.
   // Note: This will break if we ever start generating snapshots on one Mips
   // platform for another Mips platform with a different alignment.
   return OS::ActivationFrameAlignment();
-#else  // defined(V8_HOST_ARCH_MIPS)
+#else  // V8_HOST_ARCH_MIPS
   // If we are using the simulator then we should always align to the expected
   // alignment. As the simulator is used to generate snapshots we do not know
   // if the target platform will need alignment, so this is controlled from a
   // flag.
   return FLAG_sim_stack_alignment;
-#endif  // defined(V8_HOST_ARCH_MIPS)
+#endif  // V8_HOST_ARCH_MIPS
 }
 
 
@@ -5058,7 +5066,7 @@ void MacroAssembler::CallCFunctionHelper(Register function,
   // The argument stots are presumed to have been set up by
   // PrepareCallCFunction. The C function must be called via t9, for mips ABI.
 
-#if defined(V8_HOST_ARCH_MIPS)
+#if V8_HOST_ARCH_MIPS
   if (emit_debug_code()) {
     int frame_alignment = OS::ActivationFrameAlignment();
     int frame_alignment_mask = frame_alignment - 1;
