@@ -75,6 +75,7 @@ LOCAL_SRC_FILES := \
 	v8/src/heap-profiler.cc \
 	v8/src/heap-snapshot-generator.cc \
 	v8/src/heap.cc \
+	v8/src/hydrogen-bce.cc \
 	v8/src/hydrogen-dce.cc \
 	v8/src/hydrogen-environment-liveness.cc \
 	v8/src/hydrogen-escape-analysis.cc \
@@ -83,8 +84,10 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-gvn.cc \
 	v8/src/hydrogen-infer-representation.cc \
 	v8/src/hydrogen-infer-types.cc \
+	v8/src/hydrogen-minus-zero.cc \
 	v8/src/hydrogen-range-analysis.cc \
 	v8/src/hydrogen-redundant-phi.cc \
+	v8/src/hydrogen-representation-changes.cc \
 	v8/src/hydrogen-sce.cc \
 	v8/src/hydrogen-uint32-analysis.cc \
 	v8/src/hydrogen-osr.cc \
@@ -207,11 +210,11 @@ MY_DEFS_Debug := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
-	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
 	'-D_MIPS_ARCH_MIPS32R2' \
+	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
@@ -271,11 +274,11 @@ MY_DEFS_Release := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
-	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
 	'-D_MIPS_ARCH_MIPS32R2' \
+	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
