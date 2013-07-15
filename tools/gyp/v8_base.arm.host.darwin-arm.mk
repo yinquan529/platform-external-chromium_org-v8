@@ -76,7 +76,9 @@ LOCAL_SRC_FILES := \
 	v8/src/heap-snapshot-generator.cc \
 	v8/src/heap.cc \
 	v8/src/hydrogen-bce.cc \
+	v8/src/hydrogen-canonicalize.cc \
 	v8/src/hydrogen-dce.cc \
+	v8/src/hydrogen-dehoist.cc \
 	v8/src/hydrogen-environment-liveness.cc \
 	v8/src/hydrogen-escape-analysis.cc \
 	v8/src/hydrogen-instructions.cc \
@@ -87,10 +89,12 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-minus-zero.cc \
 	v8/src/hydrogen-range-analysis.cc \
 	v8/src/hydrogen-redundant-phi.cc \
+	v8/src/hydrogen-removable-simulates.cc \
 	v8/src/hydrogen-representation-changes.cc \
 	v8/src/hydrogen-sce.cc \
 	v8/src/hydrogen-uint32-analysis.cc \
 	v8/src/hydrogen-osr.cc \
+	v8/src/icu_util.cc \
 	v8/src/ic.cc \
 	v8/src/incremental-marking.cc \
 	v8/src/interface.cc \
