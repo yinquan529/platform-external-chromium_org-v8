@@ -29,7 +29,7 @@
   'variables': {
     'v8_code': 1,
   },
-  'includes': ['../../build/common.gypi'],
+  'includes': ['../../build/toolchain.gypi', '../../build/features.gypi'],
   'targets': [
     {
       'target_name': 'v8',
@@ -129,6 +129,11 @@
             ],
           },
         }],
+        ['v8_enable_i18n_support==1', {
+          'sources': [
+            '<(SHARED_INTERMEDIATE_DIR)/i18n-libraries.cc',
+          ],
+        }],
       ],
       'dependencies': [
         'v8_base.<(v8_target_arch)',
@@ -190,6 +195,11 @@
           'defines': [
             'BUILDING_V8_SHARED',
             'V8_SHARED',
+          ],
+        }],
+        ['v8_enable_i18n_support==1', {
+          'sources': [
+            '<(SHARED_INTERMEDIATE_DIR)/i18n-libraries.cc',
           ],
         }],
       ]
@@ -325,6 +335,14 @@
         '../../src/heap-snapshot-generator.h',
         '../../src/heap.cc',
         '../../src/heap.h',
+        '../../src/hydrogen-bce.cc',
+        '../../src/hydrogen-bce.h',
+        '../../src/hydrogen-canonicalize.cc',
+        '../../src/hydrogen-canonicalize.h',
+        '../../src/hydrogen-dce.cc',
+        '../../src/hydrogen-dce.h',
+        '../../src/hydrogen-dehoist.cc',
+        '../../src/hydrogen-dehoist.h',
         '../../src/hydrogen-environment-liveness.cc',
         '../../src/hydrogen-environment-liveness.h',
         '../../src/hydrogen-escape-analysis.cc',
@@ -337,8 +355,26 @@
         '../../src/hydrogen-gvn.h',
         '../../src/hydrogen-infer-representation.cc',
         '../../src/hydrogen-infer-representation.h',
+        '../../src/hydrogen-infer-types.cc',
+        '../../src/hydrogen-infer-types.h',
+        '../../src/hydrogen-minus-zero.cc',
+        '../../src/hydrogen-minus-zero.h',
+        '../../src/hydrogen-range-analysis.cc',
+        '../../src/hydrogen-range-analysis.h',
+        '../../src/hydrogen-redundant-phi.cc',
+        '../../src/hydrogen-redundant-phi.h',
+        '../../src/hydrogen-removable-simulates.cc',
+        '../../src/hydrogen-removable-simulates.h',
+        '../../src/hydrogen-representation-changes.cc',
+        '../../src/hydrogen-representation-changes.h',
+        '../../src/hydrogen-sce.cc',
+        '../../src/hydrogen-sce.h',
         '../../src/hydrogen-uint32-analysis.cc',
         '../../src/hydrogen-uint32-analysis.h',
+        '../../src/hydrogen-osr.cc',
+        '../../src/hydrogen-osr.h',
+        '../../src/icu_util.cc',
+        '../../src/icu_util.h',
         '../../src/ic-inl.h',
         '../../src/ic.cc',
         '../../src/ic.h',
@@ -781,6 +817,33 @@
             '<(SHARED_INTERMEDIATE_DIR)/debug-support.cc',
           ]
         }],
+        ['v8_enable_i18n_support==1', {
+          'sources': [
+            '../../src/extensions/i18n/break-iterator.cc',
+            '../../src/extensions/i18n/break-iterator.h',
+            '../../src/extensions/i18n/collator.cc',
+            '../../src/extensions/i18n/collator.h',
+            '../../src/extensions/i18n/date-format.cc',
+            '../../src/extensions/i18n/date-format.h',
+            '../../src/extensions/i18n/i18n-extension.cc',
+            '../../src/extensions/i18n/i18n-extension.h',
+            '../../src/extensions/i18n/i18n-utils.cc',
+            '../../src/extensions/i18n/i18n-utils.h',
+            '../../src/extensions/i18n/locale.cc',
+            '../../src/extensions/i18n/locale.h',
+            '../../src/extensions/i18n/number-format.cc',
+            '../../src/extensions/i18n/number-format.h',
+          ],
+          'dependencies': [
+            '<(DEPTH)/third_party/icu/icu.gyp:icui18n',
+            '<(DEPTH)/third_party/icu/icu.gyp:icuuc',
+          ]
+        }],
+        ['OS=="win" and v8_enable_i18n_support==1', {
+          'dependencies': [
+            '<(DEPTH)/third_party/icu/icu.gyp:icudata',
+          ],
+        }],
       ],
     },
     {
@@ -791,6 +854,26 @@
           'toolsets': ['host'],
         }, {
           'toolsets': ['target'],
+        }],
+        ['v8_enable_i18n_support==1', {
+          'actions': [{
+            'action_name': 'js2c_i18n',
+            'inputs': [
+              '../../tools/js2c.py',
+              '<@(i18n_library_files)',
+            ],
+            'outputs': [
+              '<(SHARED_INTERMEDIATE_DIR)/i18n-libraries.cc',
+            ],
+            'action': [
+              'python',
+              '../../tools/js2c.py',
+              '<@(_outputs)',
+              'I18N',
+              '<(v8_compress_startup_data)',
+              '<@(i18n_library_files)'
+            ],
+          }],
         }],
       ],
       'variables': {
@@ -819,7 +902,20 @@
           '../../src/object-observe.js',
           '../../src/arraybuffer.js',
           '../../src/typedarray.js',
-          '../../src/generator.js'
+          '../../src/generator.js',
+          '../../src/array-iterator.js'
+        ],
+        'i18n_library_files': [
+          '../../src/extensions/i18n/header.js',
+          '../../src/extensions/i18n/globals.js',
+          '../../src/extensions/i18n/locale.js',
+          '../../src/extensions/i18n/collator.js',
+          '../../src/extensions/i18n/number-format.js',
+          '../../src/extensions/i18n/date-format.js',
+          '../../src/extensions/i18n/break-iterator.js',
+          '../../src/extensions/i18n/i18n-utils.js',
+          '../../src/extensions/i18n/overrides.js',
+          '../../src/extensions/i18n/footer.js',
         ],
       },
       'actions': [

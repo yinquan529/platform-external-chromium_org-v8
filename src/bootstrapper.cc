@@ -45,6 +45,10 @@
 #include "extensions/statistics-extension.h"
 #include "code-stubs.h"
 
+#if defined(V8_I18N_SUPPORT)
+#include "extensions/i18n/i18n-extension.h"
+#endif
+
 namespace v8 {
 namespace internal {
 
@@ -102,6 +106,9 @@ void Bootstrapper::InitializeOncePerProcess() {
   GCExtension::Register();
   ExternalizeStringExtension::Register();
   StatisticsExtension::Register();
+#if defined(V8_I18N_SUPPORT)
+  v8_i18n::Extension::Register();
+#endif
 }
 
 
@@ -1282,7 +1289,7 @@ Handle<JSFunction> Genesis::InstallTypedArray(
       Builtins::kIllegal, false, true);
 
   Handle<Map> initial_map = isolate()->factory()->NewMap(
-      JS_TYPED_ARRAY_TYPE, JSTypedArray::kSize, elementsKind);
+      JS_TYPED_ARRAY_TYPE, JSTypedArray::kSizeWithInternalFields, elementsKind);
   result->set_initial_map(*initial_map);
   initial_map->set_constructor(*result);
   return result;
@@ -1366,7 +1373,7 @@ void Genesis::InitializeExperimentalGlobal() {
     Handle<JSFunction> data_view_fun =
         InstallFunction(
             global, "DataView", JS_DATA_VIEW_TYPE,
-            JSDataView::kSize,
+            JSDataView::kSizeWithInternalFields,
             isolate()->initial_object_prototype(),
             Builtins::kIllegal, true, true);
     native_context()->set_data_view_fun(*data_view_fun);
@@ -1578,6 +1585,7 @@ void Genesis::InstallNativeFunctions() {
   INSTALL_NATIVE(JSFunction, "ToCompletePropertyDescriptor",
                  to_complete_property_descriptor);
 }
+
 
 void Genesis::InstallExperimentalNativeFunctions() {
   if (FLAG_harmony_proxies) {
@@ -2064,6 +2072,11 @@ bool Genesis::InstallExperimentalNatives() {
                "native generator.js") == 0) {
       if (!CompileExperimentalBuiltin(isolate(), i)) return false;
     }
+    if (FLAG_harmony_iteration &&
+        strcmp(ExperimentalNatives::GetScriptName(i).start(),
+               "native array-iterator.js") == 0) {
+      if (!CompileExperimentalBuiltin(isolate(), i)) return false;
+    }
   }
 
   InstallExperimentalNativeFunctions();
@@ -2232,9 +2245,11 @@ void Genesis::InstallSpecialObjects(Handle<Context> native_context) {
 #endif
 }
 
+
 static uint32_t Hash(RegisteredExtension* extension) {
   return v8::internal::ComputePointerHash(extension);
 }
+
 
 static bool MatchRegisteredExtensions(void* key1, void* key2) {
   return key1 == key2;
@@ -2278,6 +2293,12 @@ bool Genesis::InstallExtensions(Handle<Context> native_context,
   if (FLAG_track_gc_object_stats) {
     InstallExtension(isolate, "v8/statistics", &extension_states);
   }
+
+#if defined(V8_I18N_SUPPORT)
+  if (FLAG_enable_i18n) {
+    InstallExtension(isolate, "v8/i18n", &extension_states);
+  }
+#endif
 
   if (extensions == NULL) return true;
   // Install required extensions

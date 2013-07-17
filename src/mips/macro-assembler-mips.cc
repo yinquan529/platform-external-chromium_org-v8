@@ -33,6 +33,7 @@
 
 #include "bootstrapper.h"
 #include "codegen.h"
+#include "cpu-profiler.h"
 #include "debug.h"
 #include "runtime.h"
 
@@ -767,6 +768,7 @@ void MacroAssembler::Ror(Register rd, Register rs, const Operand& rt) {
   }
 }
 
+
 //------------Pseudo-instructions-------------
 
 void MacroAssembler::li(Register rd, Operand j, LiFlags mode) {
@@ -1020,6 +1022,7 @@ void MacroAssembler::Trunc_uw_d(FPURegister fd,
   mtc1(t8, fd);
 }
 
+
 void MacroAssembler::Trunc_w_d(FPURegister fd, FPURegister fs) {
   if (kArchVariant == kLoongson && fd.is(fs)) {
     mfc1(t8, FPURegister::from_code(fs.code() + 1));
@@ -1029,6 +1032,7 @@ void MacroAssembler::Trunc_w_d(FPURegister fd, FPURegister fs) {
     trunc_w_d(fd, fs);
   }
 }
+
 
 void MacroAssembler::Round_w_d(FPURegister fd, FPURegister fs) {
   if (kArchVariant == kLoongson && fd.is(fs)) {
@@ -2637,6 +2641,7 @@ void MacroAssembler::Jalr(Label* L, BranchDelaySlot bdslot) {
   if (bdslot == PROTECT)
     nop();
 }
+
 
 void MacroAssembler::DropAndRet(int drop) {
   Ret(USE_DELAY_SLOT);

@@ -81,7 +81,7 @@ class LCodeGen;
   V(ClampTToUint8)                              \
   V(ClassOfTestAndBranch)                       \
   V(CmpConstantEqAndBranch)                     \
-  V(CmpIDAndBranch)                             \
+  V(CompareNumericAndBranch)                    \
   V(CmpObjectEqAndBranch)                       \
   V(CmpMapAndBranch)                            \
   V(CmpT)                                       \
@@ -92,14 +92,12 @@ class LCodeGen;
   V(Context)                                    \
   V(DebugBreak)                                 \
   V(DeclareGlobals)                             \
-  V(DeleteProperty)                             \
   V(Deoptimize)                                 \
   V(DivI)                                       \
   V(DoubleToI)                                  \
   V(DoubleToSmi)                                \
   V(DummyUse)                                   \
   V(ElementsKind)                               \
-  V(FixedArrayBaseLength)                       \
   V(FunctionLiteral)                            \
   V(GetCachedArrayIndex)                        \
   V(GlobalObject)                               \
@@ -107,7 +105,6 @@ class LCodeGen;
   V(Goto)                                       \
   V(HasCachedArrayIndexAndBranch)               \
   V(HasInstanceTypeAndBranch)                   \
-  V(In)                                         \
   V(InstanceOf)                                 \
   V(InstanceOfKnownGlobal)                      \
   V(InstanceSize)                               \
@@ -119,6 +116,7 @@ class LCodeGen;
   V(IsConstructCallAndBranch)                   \
   V(IsObjectAndBranch)                          \
   V(IsStringAndBranch)                          \
+  V(IsNumberAndBranch)                          \
   V(IsSmiAndBranch)                             \
   V(IsUndetectableAndBranch)                    \
   V(Label)                                      \
@@ -712,9 +710,9 @@ class LDebugBreak: public LTemplateInstruction<0, 0, 0> {
 };
 
 
-class LCmpIDAndBranch: public LControlInstruction<2, 0> {
+class LCompareNumericAndBranch: public LControlInstruction<2, 0> {
  public:
-  LCmpIDAndBranch(LOperand* left, LOperand* right) {
+  LCompareNumericAndBranch(LOperand* left, LOperand* right) {
     inputs_[0] = left;
     inputs_[1] = right;
   }
@@ -722,8 +720,9 @@ class LCmpIDAndBranch: public LControlInstruction<2, 0> {
   LOperand* left() { return inputs_[0]; }
   LOperand* right() { return inputs_[1]; }
 
-  DECLARE_CONCRETE_INSTRUCTION(CmpIDAndBranch, "cmp-id-and-branch")
-  DECLARE_HYDROGEN_ACCESSOR(CompareIDAndBranch)
+  DECLARE_CONCRETE_INSTRUCTION(CompareNumericAndBranch,
+                               "compare-numeric-and-branch")
+  DECLARE_HYDROGEN_ACCESSOR(CompareNumericAndBranch)
 
   Token::Value op() const { return hydrogen()->token(); }
   bool is_double() const {
@@ -917,6 +916,19 @@ class LIsObjectAndBranch: public LControlInstruction<1, 1> {
   DECLARE_HYDROGEN_ACCESSOR(IsObjectAndBranch)
 
   virtual void PrintDataTo(StringStream* stream);
+};
+
+
+class LIsNumberAndBranch: public LControlInstruction<1, 0> {
+ public:
+  explicit LIsNumberAndBranch(LOperand* value) {
+    inputs_[0] = value;
+  }
+
+  LOperand* value() { return inputs_[0]; }
+
+  DECLARE_CONCRETE_INSTRUCTION(IsNumberAndBranch, "is-number-and-branch")
+  DECLARE_HYDROGEN_ACCESSOR(IsNumberAndBranch)
 };
 
 
@@ -1257,20 +1269,6 @@ class LCmpMapAndBranch: public LControlInstruction<1, 1> {
   DECLARE_HYDROGEN_ACCESSOR(CompareMap)
 
   Handle<Map> map() const { return hydrogen()->map(); }
-};
-
-
-class LFixedArrayBaseLength: public LTemplateInstruction<1, 1, 0> {
- public:
-  explicit LFixedArrayBaseLength(LOperand* value) {
-    inputs_[0] = value;
-  }
-
-  LOperand* value() { return inputs_[0]; }
-
-  DECLARE_CONCRETE_INSTRUCTION(FixedArrayBaseLength,
-                               "fixed-array-base-length")
-  DECLARE_HYDROGEN_ACCESSOR(FixedArrayBaseLength)
 };
 
 
@@ -2539,20 +2537,6 @@ class LIsConstructCallAndBranch: public LControlInstruction<0, 1> {
 };
 
 
-class LDeleteProperty: public LTemplateInstruction<1, 2, 0> {
- public:
-  LDeleteProperty(LOperand* object, LOperand* key) {
-    inputs_[0] = object;
-    inputs_[1] = key;
-  }
-
-  LOperand* object() { return inputs_[0]; }
-  LOperand* key() { return inputs_[1]; }
-
-  DECLARE_CONCRETE_INSTRUCTION(DeleteProperty, "delete-property")
-};
-
-
 class LOsrEntry: public LTemplateInstruction<0, 0, 0> {
  public:
   LOsrEntry() {}
@@ -2571,20 +2555,6 @@ class LStackCheck: public LTemplateInstruction<0, 0, 0> {
 
  private:
   Label done_label_;
-};
-
-
-class LIn: public LTemplateInstruction<1, 2, 0> {
- public:
-  LIn(LOperand* key, LOperand* object) {
-    inputs_[0] = key;
-    inputs_[1] = object;
-  }
-
-  LOperand* key() { return inputs_[0]; }
-  LOperand* object() { return inputs_[1]; }
-
-  DECLARE_CONCRETE_INSTRUCTION(In, "in")
 };
 
 

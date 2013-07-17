@@ -33,6 +33,7 @@
 
 #include "bootstrapper.h"
 #include "codegen.h"
+#include "cpu-profiler.h"
 #include "debug.h"
 #include "runtime.h"
 
@@ -1031,6 +1032,7 @@ void MacroAssembler::LeaveExitFrame(bool save_doubles,
     add(sp, sp, Operand(argument_count, LSL, kPointerSizeLog2));
   }
 }
+
 
 void MacroAssembler::GetCFunctionDoubleResult(const DwVfpRegister dst) {
   if (use_eabi_hardfloat()) {

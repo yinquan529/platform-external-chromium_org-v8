@@ -75,13 +75,26 @@ LOCAL_SRC_FILES := \
 	v8/src/heap-profiler.cc \
 	v8/src/heap-snapshot-generator.cc \
 	v8/src/heap.cc \
+	v8/src/hydrogen-bce.cc \
+	v8/src/hydrogen-canonicalize.cc \
+	v8/src/hydrogen-dce.cc \
+	v8/src/hydrogen-dehoist.cc \
 	v8/src/hydrogen-environment-liveness.cc \
 	v8/src/hydrogen-escape-analysis.cc \
 	v8/src/hydrogen-instructions.cc \
 	v8/src/hydrogen.cc \
 	v8/src/hydrogen-gvn.cc \
 	v8/src/hydrogen-infer-representation.cc \
+	v8/src/hydrogen-infer-types.cc \
+	v8/src/hydrogen-minus-zero.cc \
+	v8/src/hydrogen-range-analysis.cc \
+	v8/src/hydrogen-redundant-phi.cc \
+	v8/src/hydrogen-removable-simulates.cc \
+	v8/src/hydrogen-representation-changes.cc \
+	v8/src/hydrogen-sce.cc \
 	v8/src/hydrogen-uint32-analysis.cc \
+	v8/src/hydrogen-osr.cc \
+	v8/src/icu_util.cc \
 	v8/src/ic.cc \
 	v8/src/incremental-marking.cc \
 	v8/src/interface.cc \
@@ -189,8 +202,9 @@ MY_CFLAGS_Debug := \
 MY_DEFS_Debug := \
 	'-DANGLE_DX11' \
 	'-D_FILE_OFFSET_BITS=64' \
-	'-DUSE_LINUX_BREAKPAD' \
 	'-DNO_TCMALLOC' \
+	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \
+	'-DSYSTEM_NATIVELY_SIGNALS_MEMORY_PRESSURE' \
 	'-DDISABLE_NACL' \
 	'-DCHROMIUM_BUILD' \
 	'-DUSE_LIBJPEG_TURBO=1' \
@@ -199,8 +213,8 @@ MY_DEFS_Debug := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
-	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_TARGET_ARCH_IA32' \
+	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
@@ -252,8 +266,9 @@ MY_CFLAGS_Release := \
 MY_DEFS_Release := \
 	'-DANGLE_DX11' \
 	'-D_FILE_OFFSET_BITS=64' \
-	'-DUSE_LINUX_BREAKPAD' \
 	'-DNO_TCMALLOC' \
+	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \
+	'-DSYSTEM_NATIVELY_SIGNALS_MEMORY_PRESSURE' \
 	'-DDISABLE_NACL' \
 	'-DCHROMIUM_BUILD' \
 	'-DUSE_LIBJPEG_TURBO=1' \
@@ -262,8 +277,8 @@ MY_DEFS_Release := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DENABLE_LANGUAGE_DETECTION=1' \
-	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_TARGET_ARCH_IA32' \
+	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \

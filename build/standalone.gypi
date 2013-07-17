@@ -28,11 +28,15 @@
 # Definitions to be used when building stand-alone V8 binaries.
 
 {
+  # We need to include toolchain.gypi here for third-party sources that don't
+  # directly include it themselves.
+  'includes': ['toolchain.gypi'],
   'variables': {
     'component%': 'static_library',
     'clang%': 0,
     'visibility%': 'hidden',
     'v8_enable_backtrace%': 0,
+    'v8_enable_i18n_support%': 0,
     'msvs_multi_core_compile%': '1',
     'mac_deployment_target%': '10.5',
     'variables': {
@@ -87,6 +91,12 @@
       }, {
         'os_posix%': 1,
       }],
+      ['(v8_target_arch=="ia32" or v8_target_arch=="x64") and \
+        (OS=="linux" or OS=="mac")', {
+        'v8_enable_gdbjit%': 1,
+      }, {
+        'v8_enable_gdbjit%': 0,
+      }],
     ],
     # Default ARM variable settings.
     'armv7%': 'default',
@@ -122,6 +132,9 @@
             },
           }],
           ['OS == "win"', {
+            'defines!': [
+              'DEBUG',
+            ],
             'msvs_settings': {
               'VCCLCompilerTool': {
                 'WarnAsError': 'false',
@@ -212,6 +225,14 @@
             #   1 == /SUBSYSTEM:CONSOLE
             #   2 == /SUBSYSTEM:WINDOWS
             'SubSystem': '1',
+
+            'conditions': [
+              ['v8_enable_i18n_support==1', {
+                'AdditionalDependencies': [
+                  'advapi32.lib',
+                ],
+              }],
+            ],
           },
         },
       },

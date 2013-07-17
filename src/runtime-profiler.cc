@@ -227,6 +227,8 @@ void RuntimeProfiler::AddSample(JSFunction* function, int weight) {
 void RuntimeProfiler::OptimizeNow() {
   HandleScope scope(isolate_);
 
+  if (isolate_->DebuggerHasBreakPoints()) return;
+
   if (FLAG_parallel_recompilation) {
     // Take this as opportunity to process the optimizing compiler thread's
     // output queue so that it does not unnecessarily keep objects alive.
@@ -245,7 +247,7 @@ void RuntimeProfiler::OptimizeNow() {
        frame_count++ < frame_count_limit && !it.done();
        it.Advance()) {
     JavaScriptFrame* frame = it.frame();
-    JSFunction* function = JSFunction::cast(frame->function());
+    JSFunction* function = frame->function();
 
     if (!FLAG_watch_ic_patching) {
       // Adjust threshold each time we have processed

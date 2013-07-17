@@ -80,9 +80,12 @@ endif
 ifeq ($(extrachecks), off)
   GYPFLAGS += -Dv8_enable_extra_checks=0
 endif
-# gdbjit=on
+# gdbjit=on/off
 ifeq ($(gdbjit), on)
   GYPFLAGS += -Dv8_enable_gdbjit=1
+endif
+ifeq ($(gdbjit), off)
+  GYPFLAGS += -Dv8_enable_gdbjit=0
 endif
 # vtunejit=on
 ifeq ($(vtunejit), on)
@@ -115,6 +118,10 @@ endif
 # regexp=interpreted
 ifeq ($(regexp), interpreted)
   GYPFLAGS += -Dv8_interpreted_regexp=1
+endif
+# i18nsupport=on
+ifeq ($(i18nsupport), on)
+  GYPFLAGS += -Dv8_enable_i18n_support=1
 endif
 # arm specific flags.
 # armv7=false/true
@@ -203,9 +210,9 @@ ANDROID_ARCHES = android_ia32 android_arm android_mipsel
 NACL_ARCHES = nacl_ia32 nacl_x64
 
 # List of files that trigger Makefile regeneration:
-GYPFILES = build/all.gyp build/common.gypi build/standalone.gypi \
-           preparser/preparser.gyp samples/samples.gyp src/d8.gyp \
-           test/cctest/cctest.gyp tools/gyp/v8.gyp
+GYPFILES = build/all.gyp build/features.gypi build/standalone.gypi \
+	   build/toolchain.gypi preparser/preparser.gyp samples/samples.gyp \
+	   src/d8.gyp test/cctest/cctest.gyp tools/gyp/v8.gyp
 
 # If vtunejit=on, the v8vtune.gyp will be appended.
 ifeq ($(vtunejit), on)
@@ -394,4 +401,4 @@ dependencies:
 	    --revision 1656
 	svn checkout --force \
 	    https://src.chromium.org/chrome/trunk/deps/third_party/icu46 \
-	    third_party/icu --revision 205936
+	    third_party/icu --revision 210659

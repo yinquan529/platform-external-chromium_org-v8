@@ -34,6 +34,7 @@
 #include "bootstrapper.h"
 #include "codegen.h"
 #include "compilation-cache.h"
+#include "cpu-profiler.h"
 #include "debug.h"
 #include "deoptimizer.h"
 #include "heap-profiler.h"
@@ -46,6 +47,7 @@
 #include "platform.h"
 #include "regexp-stack.h"
 #include "runtime-profiler.h"
+#include "sampler.h"
 #include "scopeinfo.h"
 #include "serialize.h"
 #include "simulator.h"
@@ -507,6 +509,7 @@ void Isolate::Iterate(ObjectVisitor* v) {
   Iterate(v, current_t);
 }
 
+
 void Isolate::IterateDeferredHandles(ObjectVisitor* visitor) {
   for (DeferredHandles* deferred = deferred_handles_head_;
        deferred != NULL;
@@ -619,10 +622,8 @@ static bool IsVisibleInStackTrace(StackFrame* raw_frame,
   // Only display JS frames.
   if (!raw_frame->is_java_script()) return false;
   JavaScriptFrame* frame = JavaScriptFrame::cast(raw_frame);
-  Object* raw_fun = frame->function();
-  // Not sure when this can happen but skip it just in case.
-  if (!raw_fun->IsJSFunction()) return false;
-  if ((raw_fun == caller) && !(*seen_caller)) {
+  JSFunction* fun = frame->function();
+  if ((fun == caller) && !(*seen_caller)) {
     *seen_caller = true;
     return false;
   }
@@ -634,7 +635,6 @@ static bool IsVisibleInStackTrace(StackFrame* raw_frame,
   // The --builtins-in-stack-traces command line flag allows including
   // internal call sites in the stack trace for debugging purposes.
   if (!FLAG_builtins_in_stack_traces) {
-    JSFunction* fun = JSFunction::cast(raw_fun);
     if (frame->receiver()->IsJSBuiltinsObject() ||
         (fun->IsBuiltin() && !fun->shared()->native())) {
       return false;
@@ -1198,7 +1198,7 @@ void Isolate::PrintCurrentStackTrace(FILE* out) {
     int pos = frame->LookupCode()->SourcePosition(frame->pc());
     Handle<Object> pos_obj(Smi::FromInt(pos), this);
     // Fetch function and receiver.
-    Handle<JSFunction> fun(JSFunction::cast(frame->function()));
+    Handle<JSFunction> fun(frame->function());
     Handle<Object> recv(frame->receiver(), this);
     // Advance to the next JavaScript frame and determine if the
     // current frame is the top-level frame.
@@ -1222,7 +1222,7 @@ void Isolate::ComputeLocation(MessageLocation* target) {
   StackTraceFrameIterator it(this);
   if (!it.done()) {
     JavaScriptFrame* frame = it.frame();
-    JSFunction* fun = JSFunction::cast(frame->function());
+    JSFunction* fun = frame->function();
     Object* script = fun->shared()->script();
     if (script->IsScript() &&
         !(Script::cast(script)->source()->IsUndefined())) {
@@ -1762,6 +1762,7 @@ Isolate::Isolate()
       descriptor_lookup_cache_(NULL),
       handle_scope_implementer_(NULL),
       unicode_cache_(NULL),
+      runtime_zone_(this),
       in_use_list_(0),
       free_list_(0),
       preallocated_storage_preallocated_(false),
@@ -1873,6 +1874,10 @@ void Isolate::Deinit() {
   if (state_ == INITIALIZED) {
     TRACE_ISOLATE(deinit);
 
+#ifdef ENABLE_DEBUGGER_SUPPORT
+    debugger()->UnloadDebugger();
+#endif
+
     if (FLAG_parallel_recompilation) optimizing_compiler_thread_.Stop();
 
     if (FLAG_sweeper_threads > 0) {
@@ -1959,6 +1964,9 @@ void Isolate::SetIsolateThreadLocals(Isolate* isolate,
 
 Isolate::~Isolate() {
   TRACE_ISOLATE(destructor);
+
+  // Has to be called while counters_ are still alive
+  runtime_zone_.DeleteKeptSegment();
 
   // The entry stack must be empty when we get here,
   // except for the default isolate, where it can

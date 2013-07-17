@@ -29,6 +29,7 @@
 
 #if V8_TARGET_ARCH_IA32
 
+#include "cpu-profiler.h"
 #include "unicode.h"
 #include "log.h"
 #include "regexp-stack.h"
@@ -1028,6 +1029,7 @@ void RegExpMacroAssemblerIA32::SetCurrentPositionFromEnd(int by)  {
   LoadCurrentCharacterUnchecked(-1, 1);
   __ bind(&after_position);
 }
+
 
 void RegExpMacroAssemblerIA32::SetRegister(int register_index, int to) {
   ASSERT(register_index >= num_saved_registers_);  // Reserved for positions!
