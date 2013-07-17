@@ -79,6 +79,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-canonicalize.cc \
 	v8/src/hydrogen-dce.cc \
 	v8/src/hydrogen-dehoist.cc \
+	v8/src/hydrogen-deoptimizing-mark.cc \
 	v8/src/hydrogen-environment-liveness.cc \
 	v8/src/hydrogen-escape-analysis.cc \
 	v8/src/hydrogen-instructions.cc \
