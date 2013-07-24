@@ -24,12 +24,9 @@ $(gyp_intermediate_dir)/libraries.cc: $(gyp_shared_intermediate_dir)/libraries.c
 	mkdir -p $(@D); cp $< $@
 $(gyp_intermediate_dir)/experimental-libraries.cc: $(gyp_shared_intermediate_dir)/experimental-libraries.cc
 	mkdir -p $(@D); cp $< $@
-$(gyp_intermediate_dir)/i18n-libraries.cc: $(gyp_shared_intermediate_dir)/i18n-libraries.cc
-	mkdir -p $(@D); cp $< $@
 LOCAL_GENERATED_SOURCES := \
 	$(gyp_intermediate_dir)/libraries.cc \
-	$(gyp_intermediate_dir)/experimental-libraries.cc \
-	$(gyp_intermediate_dir)/i18n-libraries.cc
+	$(gyp_intermediate_dir)/experimental-libraries.cc
 
 GYP_COPIED_SOURCE_ORIGIN_DIRS := \
 	$(gyp_shared_intermediate_dir)
@@ -74,7 +71,6 @@ MY_DEFS_Debug := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
-	'-DV8_I18N_SUPPORT' \
 	'-DARM_TEST' \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
@@ -138,7 +134,6 @@ MY_DEFS_Release := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
-	'-DV8_I18N_SUPPORT' \
 	'-DARM_TEST' \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
 	'-DNDEBUG' \
