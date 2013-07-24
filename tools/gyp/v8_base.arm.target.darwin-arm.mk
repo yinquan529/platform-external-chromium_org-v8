@@ -10,7 +10,9 @@ gyp_intermediate_dir := $(call local-intermediates-dir)
 gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 
 # Make sure our deps are built first.
-GYP_TARGET_DEPENDENCIES :=
+GYP_TARGET_DEPENDENCIES := \
+	$(call intermediates-dir-for,GYP,third_party_icu_icui18n_gyp)/icui18n.stamp \
+	$(call intermediates-dir-for,GYP,third_party_icu_icuuc_gyp)/icuuc.stamp
 
 GYP_GENERATED_OUTPUTS :=
 
@@ -178,6 +180,13 @@ LOCAL_SRC_FILES := \
 	v8/src/arm/simulator-arm.cc \
 	v8/src/arm/stub-cache-arm.cc \
 	v8/src/platform-posix.cc \
+	v8/src/extensions/i18n/break-iterator.cc \
+	v8/src/extensions/i18n/collator.cc \
+	v8/src/extensions/i18n/date-format.cc \
+	v8/src/extensions/i18n/i18n-extension.cc \
+	v8/src/extensions/i18n/i18n-utils.cc \
+	v8/src/extensions/i18n/locale.cc \
+	v8/src/extensions/i18n/number-format.cc \
 	v8/src/platform-linux.cc
 
 
@@ -233,7 +242,9 @@ MY_DEFS_Debug := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
+	'-DV8_I18N_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
+	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DANDROID' \
 	'-D__GNU_SOURCE=1' \
 	'-DUSE_STLPORT=1' \
@@ -253,7 +264,11 @@ MY_DEFS_Debug := \
 
 # Include paths placed before CFLAGS/CPPFLAGS
 LOCAL_C_INCLUDES_Debug := \
+	$(gyp_shared_intermediate_dir)/shim_headers/icuuc/target \
+	$(gyp_shared_intermediate_dir)/shim_headers/icui18n/target \
 	$(LOCAL_PATH)/v8/src \
+	$(PWD)/external/icu4c/common \
+	$(PWD)/external/icu4c/i18n \
 	$(PWD)/frameworks/wilhelm/include \
 	$(PWD)/bionic \
 	$(PWD)/external/stlport/stlport
@@ -326,7 +341,9 @@ MY_DEFS_Release := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
+	'-DV8_I18N_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
+	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DANDROID' \
 	'-D__GNU_SOURCE=1' \
 	'-DUSE_STLPORT=1' \
@@ -341,7 +358,11 @@ MY_DEFS_Release := \
 
 # Include paths placed before CFLAGS/CPPFLAGS
 LOCAL_C_INCLUDES_Release := \
+	$(gyp_shared_intermediate_dir)/shim_headers/icuuc/target \
+	$(gyp_shared_intermediate_dir)/shim_headers/icui18n/target \
 	$(LOCAL_PATH)/v8/src \
+	$(PWD)/external/icu4c/common \
+	$(PWD)/external/icu4c/i18n \
 	$(PWD)/frameworks/wilhelm/include \
 	$(PWD)/bionic \
 	$(PWD)/external/stlport/stlport
