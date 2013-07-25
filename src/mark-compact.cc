@@ -2396,7 +2396,6 @@ void MarkCompactCollector::AfterMarking() {
   string_table->ElementsRemoved(v.PointersRemoved());
   heap()->external_string_table_.Iterate(&v);
   heap()->external_string_table_.CleanUp();
-  heap()->error_object_list_.RemoveUnmarked(heap());
 
   // Process the weak references.
   MarkCompactWeakObjectRetainer mark_compact_object_retainer;
@@ -2723,7 +2722,13 @@ void MarkCompactCollector::MigrateObject(Address dst,
                                          int size,
                                          AllocationSpace dest) {
   HEAP_PROFILE(heap(), ObjectMoveEvent(src, dst));
-  if (dest == OLD_POINTER_SPACE || dest == LO_SPACE) {
+  // TODO(hpayer): Replace that check with an assert.
+  CHECK(dest != LO_SPACE && size <= Page::kMaxNonCodeHeapObjectSize);
+  if (dest == OLD_POINTER_SPACE) {
+    // TODO(hpayer): Replace this check with an assert.
+    HeapObject* heap_object = HeapObject::FromAddress(src);
+    CHECK(heap_object->IsExternalString() ||
+          heap_->TargetSpace(heap_object) == heap_->old_pointer_space());
     Address src_slot = src;
     Address dst_slot = dst;
     ASSERT(IsAligned(size, kPointerSize));
@@ -2769,6 +2774,13 @@ void MarkCompactCollector::MigrateObject(Address dst,
     Code::cast(HeapObject::FromAddress(dst))->Relocate(dst - src);
   } else {
     ASSERT(dest == OLD_DATA_SPACE || dest == NEW_SPACE);
+    // Objects in old data space can just be moved by compaction to a different
+    // page in old data space.
+    // TODO(hpayer): Replace the following check with an assert.
+    CHECK(!heap_->old_data_space()->Contains(src) ||
+          (heap_->old_data_space()->Contains(dst) &&
+          heap_->TargetSpace(HeapObject::FromAddress(src)) ==
+          heap_->old_data_space()));
     heap()->MoveBlock(dst, src, size);
   }
   Memory::Address_at(src) = dst;
@@ -2895,37 +2907,24 @@ static String* UpdateReferenceInExternalStringTableEntry(Heap* heap,
 
 bool MarkCompactCollector::TryPromoteObject(HeapObject* object,
                                             int object_size) {
+  // TODO(hpayer): Replace that check with an assert.
+  CHECK(object_size <= Page::kMaxNonCodeHeapObjectSize);
+
+  OldSpace* target_space = heap()->TargetSpace(object);
+
+  ASSERT(target_space == heap()->old_pointer_space() ||
+         target_space == heap()->old_data_space());
   Object* result;
-
-  if (object_size > Page::kMaxNonCodeHeapObjectSize) {
-    MaybeObject* maybe_result =
-        heap()->lo_space()->AllocateRaw(object_size, NOT_EXECUTABLE);
-    if (maybe_result->ToObject(&result)) {
-      HeapObject* target = HeapObject::cast(result);
-      MigrateObject(target->address(),
-                    object->address(),
-                    object_size,
-                    LO_SPACE);
-      heap()->mark_compact_collector()->tracer()->
-          increment_promoted_objects_size(object_size);
-      return true;
-    }
-  } else {
-    OldSpace* target_space = heap()->TargetSpace(object);
-
-    ASSERT(target_space == heap()->old_pointer_space() ||
-           target_space == heap()->old_data_space());
-    MaybeObject* maybe_result = target_space->AllocateRaw(object_size);
-    if (maybe_result->ToObject(&result)) {
-      HeapObject* target = HeapObject::cast(result);
-      MigrateObject(target->address(),
-                    object->address(),
-                    object_size,
-                    target_space->identity());
-      heap()->mark_compact_collector()->tracer()->
-          increment_promoted_objects_size(object_size);
-      return true;
-    }
+  MaybeObject* maybe_result = target_space->AllocateRaw(object_size);
+  if (maybe_result->ToObject(&result)) {
+    HeapObject* target = HeapObject::cast(result);
+    MigrateObject(target->address(),
+                  object->address(),
+                  object_size,
+                  target_space->identity());
+    heap()->mark_compact_collector()->tracer()->
+        increment_promoted_objects_size(object_size);
+    return true;
   }
 
   return false;
@@ -3462,9 +3461,6 @@ void MarkCompactCollector::EvacuateNewSpaceAndCandidates() {
   // Update pointers from external string table.
   heap_->UpdateReferencesInExternalStringTable(
       &UpdateReferenceInExternalStringTableEntry);
-
-  // Update pointers in the new error object list.
-  heap_->error_object_list()->UpdateReferences();
 
   if (!FLAG_watch_ic_patching) {
     // Update JSFunction pointers from the runtime profiler.
