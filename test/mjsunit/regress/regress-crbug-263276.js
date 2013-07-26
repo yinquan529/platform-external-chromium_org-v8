@@ -1,4 +1,4 @@
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2013 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,46 +25,22 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef V8_VM_STATE_H_
-#define V8_VM_STATE_H_
+// Flags: --allow-natives-syntax
 
-#include "allocation.h"
-#include "isolate.h"
+var array1 = [];
+array1.foo = true;
 
-namespace v8 {
-namespace internal {
+var array2 = [];
+array2.bar = true;
 
-template <StateTag Tag>
-class VMState BASE_EMBEDDED {
- public:
-  explicit inline VMState(Isolate* isolate);
-  inline ~VMState();
+function bad(array) {
+  array[array.length] = 1;
+}
 
- private:
-  Isolate* isolate_;
-  StateTag previous_tag_;
-};
-
-
-class ExternalCallbackScope BASE_EMBEDDED {
- public:
-  inline ExternalCallbackScope(Isolate* isolate, Address callback);
-  inline ~ExternalCallbackScope();
-  Address callback() { return callback_; }
-  Address* callback_address() { return &callback_; }
-  ExternalCallbackScope* previous() { return previous_scope_; }
-  inline Address scope_address();
-
- private:
-  Isolate* isolate_;
-  Address callback_;
-  ExternalCallbackScope* previous_scope_;
-#ifdef USE_SIMULATOR
-  Address scope_address_;
-#endif
-};
-
-} }  // namespace v8::internal
-
-
-#endif  // V8_VM_STATE_H_
+bad(array1);
+bad(array1);
+bad(array2);  // Length is now 1.
+bad(array2);  // Length is now 2.
+%OptimizeFunctionOnNextCall(bad);
+bad(array2);  // Length is now 3.
+assertEquals(3, array2.length);
