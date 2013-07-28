@@ -15,6 +15,9 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 GYP_TARGET_DEPENDENCIES := \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_base_ia32_host_gyp,true)/v8_tools_gyp_v8_base_ia32_host_gyp.a \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_nosnapshot_ia32_host_gyp,true)/v8_tools_gyp_v8_nosnapshot_ia32_host_gyp.a \
+	$(call intermediates-dir-for,STATIC_LIBRARIES,third_party_icu_icui18n_host_gyp,true)/third_party_icu_icui18n_host_gyp.a \
+	$(call intermediates-dir-for,STATIC_LIBRARIES,third_party_icu_icuuc_host_gyp,true)/third_party_icu_icuuc_host_gyp.a \
+	$(call intermediates-dir-for,STATIC_LIBRARIES,third_party_icu_icudata_host_gyp,true)/third_party_icu_icudata_host_gyp.a \
 	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
 
 GYP_GENERATED_OUTPUTS :=
@@ -67,6 +70,7 @@ MY_DEFS_Debug := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DV8_TARGET_ARCH_IA32' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
+	'-DV8_I18N_SUPPORT' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -130,6 +134,7 @@ MY_DEFS_Release := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DV8_TARGET_ARCH_IA32' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
+	'-DV8_I18N_SUPPORT' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'
@@ -175,7 +180,10 @@ LOCAL_LDFLAGS := $(LOCAL_LDFLAGS_$(GYP_CONFIGURATION))
 
 LOCAL_STATIC_LIBRARIES := \
 	v8_tools_gyp_v8_base_ia32_host_gyp \
-	v8_tools_gyp_v8_nosnapshot_ia32_host_gyp
+	v8_tools_gyp_v8_nosnapshot_ia32_host_gyp \
+	third_party_icu_icui18n_host_gyp \
+	third_party_icu_icuuc_host_gyp \
+	third_party_icu_icudata_host_gyp
 
 # Enable grouping to fix circular references
 LOCAL_GROUP_STATIC_LIBRARIES := true
