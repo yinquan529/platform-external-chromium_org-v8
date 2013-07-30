@@ -76,6 +76,7 @@ LOCAL_SRC_FILES := \
 	v8/src/heap-snapshot-generator.cc \
 	v8/src/heap.cc \
 	v8/src/hydrogen-bce.cc \
+	v8/src/hydrogen-bch.cc \
 	v8/src/hydrogen-canonicalize.cc \
 	v8/src/hydrogen-dce.cc \
 	v8/src/hydrogen-dehoist.cc \
@@ -177,6 +178,13 @@ LOCAL_SRC_FILES := \
 	v8/src/ia32/regexp-macro-assembler-ia32.cc \
 	v8/src/ia32/stub-cache-ia32.cc \
 	v8/src/platform-posix.cc \
+	v8/src/extensions/i18n/break-iterator.cc \
+	v8/src/extensions/i18n/collator.cc \
+	v8/src/extensions/i18n/date-format.cc \
+	v8/src/extensions/i18n/i18n-extension.cc \
+	v8/src/extensions/i18n/i18n-utils.cc \
+	v8/src/extensions/i18n/locale.cc \
+	v8/src/extensions/i18n/number-format.cc \
 	v8/src/platform-macos.cc
 
 
@@ -216,7 +224,10 @@ MY_DEFS_Debug := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DV8_TARGET_ARCH_IA32' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
+	'-DV8_I18N_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
+	'-DU_USING_ICU_NAMESPACE=0' \
+	'-DU_STATIC_IMPLEMENTATION' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -229,7 +240,9 @@ MY_DEFS_Debug := \
 
 # Include paths placed before CFLAGS/CPPFLAGS
 LOCAL_C_INCLUDES_Debug := \
-	$(LOCAL_PATH)/v8/src
+	$(LOCAL_PATH)/v8/src \
+	$(LOCAL_PATH)/third_party/icu/source/i18n \
+	$(LOCAL_PATH)/third_party/icu/source/common
 
 
 # Flags passed to only C++ (and not C) files.
@@ -280,7 +293,10 @@ MY_DEFS_Release := \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DV8_TARGET_ARCH_IA32' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
+	'-DV8_I18N_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
+	'-DU_USING_ICU_NAMESPACE=0' \
+	'-DU_STATIC_IMPLEMENTATION' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'
@@ -288,7 +304,9 @@ MY_DEFS_Release := \
 
 # Include paths placed before CFLAGS/CPPFLAGS
 LOCAL_C_INCLUDES_Release := \
-	$(LOCAL_PATH)/v8/src
+	$(LOCAL_PATH)/v8/src \
+	$(LOCAL_PATH)/third_party/icu/source/i18n \
+	$(LOCAL_PATH)/third_party/icu/source/common
 
 
 # Flags passed to only C++ (and not C) files.

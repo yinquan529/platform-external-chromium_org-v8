@@ -24,9 +24,12 @@ $(gyp_intermediate_dir)/libraries.cc: $(gyp_shared_intermediate_dir)/libraries.c
 	mkdir -p $(@D); cp $< $@
 $(gyp_intermediate_dir)/experimental-libraries.cc: $(gyp_shared_intermediate_dir)/experimental-libraries.cc
 	mkdir -p $(@D); cp $< $@
+$(gyp_intermediate_dir)/i18n-libraries.cc: $(gyp_shared_intermediate_dir)/i18n-libraries.cc
+	mkdir -p $(@D); cp $< $@
 LOCAL_GENERATED_SOURCES := \
 	$(gyp_intermediate_dir)/libraries.cc \
-	$(gyp_intermediate_dir)/experimental-libraries.cc
+	$(gyp_intermediate_dir)/experimental-libraries.cc \
+	$(gyp_intermediate_dir)/i18n-libraries.cc
 
 GYP_COPIED_SOURCE_ORIGIN_DIRS := \
 	$(gyp_shared_intermediate_dir)
@@ -75,6 +78,7 @@ MY_DEFS_Debug := \
 	'-D__mips_hard_float=1' \
 	'-D_MIPS_ARCH_MIPS32R2' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
+	'-DV8_I18N_SUPPORT' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -140,6 +144,7 @@ MY_DEFS_Release := \
 	'-D__mips_hard_float=1' \
 	'-D_MIPS_ARCH_MIPS32R2' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
+	'-DV8_I18N_SUPPORT' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'

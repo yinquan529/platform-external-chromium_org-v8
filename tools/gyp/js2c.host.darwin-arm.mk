@@ -34,10 +34,21 @@ $(gyp_shared_intermediate_dir)/experimental-libraries.cc: $(LOCAL_PATH)/v8/tools
 	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_shared_intermediate_dir); python ../../tools/js2c.py "$(gyp_shared_intermediate_dir)/experimental-libraries.cc" EXPERIMENTAL off ../../src/macros.py ../../src/symbol.js ../../src/proxy.js ../../src/collection.js ../../src/object-observe.js ../../src/arraybuffer.js ../../src/typedarray.js ../../src/generator.js ../../src/array-iterator.js
 
 
+### Rules for action "js2c_i18n":
+$(gyp_shared_intermediate_dir)/i18n-libraries.cc: gyp_local_path := $(LOCAL_PATH)
+$(gyp_shared_intermediate_dir)/i18n-libraries.cc: gyp_intermediate_dir := $(abspath $(gyp_intermediate_dir))
+$(gyp_shared_intermediate_dir)/i18n-libraries.cc: gyp_shared_intermediate_dir := $(abspath $(gyp_shared_intermediate_dir))
+$(gyp_shared_intermediate_dir)/i18n-libraries.cc: export PATH := $(subst $(ANDROID_BUILD_PATHS),,$(PATH))
+$(gyp_shared_intermediate_dir)/i18n-libraries.cc: $(LOCAL_PATH)/v8/tools/js2c.py $(LOCAL_PATH)/v8/src/extensions/i18n/header.js $(LOCAL_PATH)/v8/src/extensions/i18n/globals.js $(LOCAL_PATH)/v8/src/extensions/i18n/locale.js $(LOCAL_PATH)/v8/src/extensions/i18n/collator.js $(LOCAL_PATH)/v8/src/extensions/i18n/number-format.js $(LOCAL_PATH)/v8/src/extensions/i18n/date-format.js $(LOCAL_PATH)/v8/src/extensions/i18n/break-iterator.js $(LOCAL_PATH)/v8/src/extensions/i18n/i18n-utils.js $(LOCAL_PATH)/v8/src/extensions/i18n/overrides.js $(LOCAL_PATH)/v8/src/extensions/i18n/footer.js $(GYP_TARGET_DEPENDENCIES)
+	@echo "Gyp action: v8_tools_gyp_v8_gyp_js2c_host_js2c_i18n ($@)"
+	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_shared_intermediate_dir); python ../../tools/js2c.py "$(gyp_shared_intermediate_dir)/i18n-libraries.cc" I18N off ../../src/extensions/i18n/header.js ../../src/extensions/i18n/globals.js ../../src/extensions/i18n/locale.js ../../src/extensions/i18n/collator.js ../../src/extensions/i18n/number-format.js ../../src/extensions/i18n/date-format.js ../../src/extensions/i18n/break-iterator.js ../../src/extensions/i18n/i18n-utils.js ../../src/extensions/i18n/overrides.js ../../src/extensions/i18n/footer.js
+
+
 
 GYP_GENERATED_OUTPUTS := \
 	$(gyp_shared_intermediate_dir)/libraries.cc \
-	$(gyp_shared_intermediate_dir)/experimental-libraries.cc
+	$(gyp_shared_intermediate_dir)/experimental-libraries.cc \
+	$(gyp_shared_intermediate_dir)/i18n-libraries.cc
 
 # Make sure our deps and generated files are built first.
 LOCAL_ADDITIONAL_DEPENDENCIES := $(GYP_TARGET_DEPENDENCIES) $(GYP_GENERATED_OUTPUTS)
