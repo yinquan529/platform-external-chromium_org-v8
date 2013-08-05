@@ -942,17 +942,21 @@ class ScriptOrigin {
   V8_INLINE(ScriptOrigin(
       Handle<Value> resource_name,
       Handle<Integer> resource_line_offset = Handle<Integer>(),
-      Handle<Integer> resource_column_offset = Handle<Integer>()))
+      Handle<Integer> resource_column_offset = Handle<Integer>(),
+      Handle<Boolean> resource_is_shared_cross_origin = Handle<Boolean>()))
       : resource_name_(resource_name),
         resource_line_offset_(resource_line_offset),
-        resource_column_offset_(resource_column_offset) { }
+        resource_column_offset_(resource_column_offset),
+        resource_is_shared_cross_origin_(resource_is_shared_cross_origin) { }
   V8_INLINE(Handle<Value> ResourceName() const);
   V8_INLINE(Handle<Integer> ResourceLineOffset() const);
   V8_INLINE(Handle<Integer> ResourceColumnOffset() const);
+  V8_INLINE(Handle<Boolean> ResourceIsSharedCrossOrigin() const);
  private:
   Handle<Value> resource_name_;
   Handle<Integer> resource_line_offset_;
   Handle<Integer> resource_column_offset_;
+  Handle<Boolean> resource_is_shared_cross_origin_;
 };
 
 
@@ -1129,6 +1133,12 @@ class V8EXPORT Message {
    * the error occurred.
    */
   int GetEndColumn() const;
+
+  /**
+   * Passes on the value set by the embedder when it fed the script from which
+   * this Message was generated to V8.
+   */
+  bool IsSharedCrossOrigin() const;
 
   // TODO(1245381): Print to a string instead of on a FILE.
   static void PrintCurrentStackTrace(FILE* out);
@@ -2400,8 +2410,20 @@ class V8EXPORT ArrayBuffer : public Object {
 
     /**
      * Allocate |length| bytes. Return NULL if allocation is not successful.
+     * Memory should be initialized to zeroes.
      */
     virtual void* Allocate(size_t length) = 0;
+
+    /**
+     * Allocate |length| bytes. Return NULL if allocation is not successful.
+     * Memory does not have to be initialized.
+     */
+    virtual void* AllocateUninitialized(size_t length) {
+      // Override with call to |Allocate| for compatibility
+      // with legacy version.
+      return Allocate(length);
+    }
+
     /**
      * Free the memory pointed to |data|. That memory is guaranteed to be
      * previously allocated by |Allocate|.
@@ -5419,7 +5441,7 @@ class Internals {
   static const int kNullValueRootIndex = 7;
   static const int kTrueValueRootIndex = 8;
   static const int kFalseValueRootIndex = 9;
-  static const int kEmptyStringRootIndex = 134;
+  static const int kEmptyStringRootIndex = 135;
 
   static const int kNodeClassIdOffset = 1 * kApiPointerSize;
   static const int kNodeFlagsOffset = 1 * kApiPointerSize + 3;
@@ -5994,6 +6016,10 @@ Handle<Integer> ScriptOrigin::ResourceLineOffset() const {
 
 Handle<Integer> ScriptOrigin::ResourceColumnOffset() const {
   return resource_column_offset_;
+}
+
+Handle<Boolean> ScriptOrigin::ResourceIsSharedCrossOrigin() const {
+  return resource_is_shared_cross_origin_;
 }
 
 

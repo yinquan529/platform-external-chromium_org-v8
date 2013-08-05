@@ -120,6 +120,16 @@ void LCodeGen::Comment(const char* format, ...) {
 }
 
 
+#ifdef _MSC_VER
+void LCodeGen::MakeSureStackPagesMapped(int offset) {
+  const int kPageSize = 4 * KB;
+  for (offset -= kPageSize; offset > 0; offset -= kPageSize) {
+    __ movq(Operand(rsp, offset), rax);
+  }
+}
+#endif
+
+
 bool LCodeGen::GeneratePrologue() {
   ASSERT(is_generating());
 
@@ -169,6 +179,9 @@ bool LCodeGen::GeneratePrologue() {
   if (slots > 0) {
     if (FLAG_debug_code) {
       __ subq(rsp, Immediate(slots * kPointerSize));
+#ifdef _MSC_VER
+      MakeSureStackPagesMapped(slots * kPointerSize);
+#endif
       __ push(rax);
       __ Set(rax, slots);
       __ movq(kScratchRegister, kSlotsZapValue, RelocInfo::NONE64);
@@ -182,15 +195,7 @@ bool LCodeGen::GeneratePrologue() {
     } else {
       __ subq(rsp, Immediate(slots * kPointerSize));
 #ifdef _MSC_VER
-      // On windows, you may not access the stack more than one page below
-      // the most recently mapped page. To make the allocated area randomly
-      // accessible, we write to each page in turn (the value is irrelevant).
-      const int kPageSize = 4 * KB;
-      for (int offset = slots * kPointerSize - kPageSize;
-           offset > 0;
-           offset -= kPageSize) {
-        __ movq(Operand(rsp, offset), rax);
-      }
+      MakeSureStackPagesMapped(slots * kPointerSize);
 #endif
     }
 
@@ -2634,16 +2639,6 @@ void LCodeGen::DoStoreGlobalGeneric(LStoreGlobalGeneric* instr) {
 }
 
 
-void LCodeGen::DoLinkObjectInList(LLinkObjectInList* instr) {
-  Register object = ToRegister(instr->object());
-  ExternalReference sites_list_address = instr->GetReference(isolate());
-  __ Load(kScratchRegister, sites_list_address);
-  __ movq(FieldOperand(object, instr->hydrogen()->store_field().offset()),
-          kScratchRegister);
-  __ Store(sites_list_address, object);
-}
-
-
 void LCodeGen::DoLoadContextSlot(LLoadContextSlot* instr) {
   Register context = ToRegister(instr->context());
   Register result = ToRegister(instr->result());
@@ -2780,9 +2775,6 @@ static bool CompactEmit(SmallMapList* list,
                         int i,
                         Isolate* isolate) {
   Handle<Map> map = list->at(i);
-  // If the map has ElementsKind transitions, we will generate map checks
-  // for each kind in __ CompareMap(..., ALLOW_ELEMENTS_TRANSITION_MAPS).
-  if (map->HasElementsTransition()) return false;
   LookupResult lookup(isolate);
   map->LookupDescriptor(NULL, *name, &lookup);
   return lookup.IsField() || lookup.IsConstant();
@@ -3955,6 +3947,7 @@ void LCodeGen::DoStoreNamedField(LStoreNamedField* instr) {
   int offset = access.offset();
 
   if (access.IsExternalMemory()) {
+    ASSERT(!instr->hydrogen()->NeedsWriteBarrier());
     Register value = ToRegister(instr->value());
     if (instr->object()->IsConstantOperand()) {
       ASSERT(value.is(rax));
@@ -4454,13 +4447,6 @@ void LCodeGen::DoDeferredStringCharFromCode(LStringCharFromCode* instr) {
   __ push(char_code);
   CallRuntimeFromDeferred(Runtime::kCharFromCode, 1, instr);
   __ StoreToSafepointRegisterSlot(result, rax);
-}
-
-
-void LCodeGen::DoStringLength(LStringLength* instr) {
-  Register string = ToRegister(instr->string());
-  Register result = ToRegister(instr->result());
-  __ movq(result, FieldOperand(string, String::kLengthOffset));
 }
 
 
@@ -5091,10 +5077,12 @@ void LCodeGen::DoAllocate(LAllocate* instr) {
   if (instr->hydrogen()->MustAllocateDoubleAligned()) {
     flags = static_cast<AllocationFlags>(flags | DOUBLE_ALIGNMENT);
   }
-  if (instr->hydrogen()->CanAllocateInOldPointerSpace()) {
-    ASSERT(!instr->hydrogen()->CanAllocateInOldDataSpace());
+  if (instr->hydrogen()->IsOldPointerSpaceAllocation()) {
+    ASSERT(!instr->hydrogen()->IsOldDataSpaceAllocation());
+    ASSERT(!instr->hydrogen()->IsNewSpaceAllocation());
     flags = static_cast<AllocationFlags>(flags | PRETENURE_OLD_POINTER_SPACE);
-  } else if (instr->hydrogen()->CanAllocateInOldDataSpace()) {
+  } else if (instr->hydrogen()->IsOldDataSpaceAllocation()) {
+    ASSERT(!instr->hydrogen()->IsNewSpaceAllocation());
     flags = static_cast<AllocationFlags>(flags | PRETENURE_OLD_DATA_SPACE);
   }
 
@@ -5146,10 +5134,12 @@ void LCodeGen::DoDeferredAllocate(LAllocate* instr) {
     __ Push(Smi::FromInt(size));
   }
 
-  if (instr->hydrogen()->CanAllocateInOldPointerSpace()) {
-    ASSERT(!instr->hydrogen()->CanAllocateInOldDataSpace());
+  if (instr->hydrogen()->IsOldPointerSpaceAllocation()) {
+    ASSERT(!instr->hydrogen()->IsOldDataSpaceAllocation());
+    ASSERT(!instr->hydrogen()->IsNewSpaceAllocation());
     CallRuntimeFromDeferred(Runtime::kAllocateInOldPointerSpace, 1, instr);
-  } else if (instr->hydrogen()->CanAllocateInOldDataSpace()) {
+  } else if (instr->hydrogen()->IsOldDataSpaceAllocation()) {
+    ASSERT(!instr->hydrogen()->IsNewSpaceAllocation());
     CallRuntimeFromDeferred(Runtime::kAllocateInOldDataSpace, 1, instr);
   } else {
     CallRuntimeFromDeferred(Runtime::kAllocateInNewSpace, 1, instr);

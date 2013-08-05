@@ -120,7 +120,6 @@ class LCodeGen;
   V(IsUndetectableAndBranch)                    \
   V(Label)                                      \
   V(LazyBailout)                                \
-  V(LinkObjectInList)                           \
   V(LoadContextSlot)                            \
   V(LoadExternalArrayPointer)                   \
   V(LoadFieldByIndex)                           \
@@ -175,7 +174,6 @@ class LCodeGen;
   V(StringCharCodeAt)                           \
   V(StringCharFromCode)                         \
   V(StringCompareAndBranch)                     \
-  V(StringLength)                               \
   V(SubI)                                       \
   V(TaggedToI)                                  \
   V(TaggedToINoSSE2)                            \
@@ -1705,25 +1703,6 @@ class LStoreGlobalGeneric: public LTemplateInstruction<0, 3, 0> {
 };
 
 
-class LLinkObjectInList: public LTemplateInstruction<0, 1, 1> {
- public:
-  explicit LLinkObjectInList(LOperand* object, LOperand* temp) {
-    inputs_[0] = object;
-    temps_[0] = temp;
-  }
-
-  LOperand* object() { return inputs_[0]; }
-  LOperand* temp() { return temps_[0]; }
-
-  ExternalReference GetReference(Isolate* isolate);
-
-  DECLARE_CONCRETE_INSTRUCTION(LinkObjectInList, "link-object-in-list")
-  DECLARE_HYDROGEN_ACCESSOR(LinkObjectInList)
-
-  virtual void PrintDataTo(StringStream* stream);
-};
-
-
 class LLoadContextSlot: public LTemplateInstruction<1, 1, 0> {
  public:
   explicit LLoadContextSlot(LOperand* context) {
@@ -2428,19 +2407,6 @@ class LStringCharFromCode: public LTemplateInstruction<1, 2, 0> {
 
   DECLARE_CONCRETE_INSTRUCTION(StringCharFromCode, "string-char-from-code")
   DECLARE_HYDROGEN_ACCESSOR(StringCharFromCode)
-};
-
-
-class LStringLength: public LTemplateInstruction<1, 1, 0> {
- public:
-  explicit LStringLength(LOperand* string) {
-    inputs_[0] = string;
-  }
-
-  LOperand* string() { return inputs_[0]; }
-
-  DECLARE_CONCRETE_INSTRUCTION(StringLength, "string-length")
-  DECLARE_HYDROGEN_ACCESSOR(StringLength)
 };
 
 

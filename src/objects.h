@@ -5188,6 +5188,7 @@ class Map: public HeapObject {
   class IsObserved:                 public BitField<bool, 26,  1> {};
   class Deprecated:                 public BitField<bool, 27,  1> {};
   class IsFrozen:                   public BitField<bool, 28,  1> {};
+  class IsUnstable:                 public BitField<bool, 29,  1> {};
 
   // Tells whether the object in the prototype property will be used
   // for instances created from this function.  If the prototype
@@ -5492,6 +5493,8 @@ class Map: public HeapObject {
   inline void set_is_observed(bool is_observed);
   inline void freeze();
   inline bool is_frozen();
+  inline void mark_unstable();
+  inline bool is_stable();
   inline void deprecate();
   inline bool is_deprecated();
   inline bool CanBeDeprecated();
@@ -5873,6 +5876,12 @@ class Script: public Struct {
   inline CompilationState compilation_state();
   inline void set_compilation_state(CompilationState state);
 
+  // [is_shared_cross_origin]: An opaque boolean set by the embedder via
+  // ScriptOrigin, and used by the embedder to make decisions about the
+  // script's level of privilege. V8 just passes this through. Encoded in
+  // the 'flags' field.
+  DECL_BOOLEAN_ACCESSORS(is_shared_cross_origin)
+
   static inline Script* cast(Object* obj);
 
   // If script source is an external string, check that the underlying
@@ -5904,6 +5913,7 @@ class Script: public Struct {
   // Bit positions in the flags field.
   static const int kCompilationTypeBit = 0;
   static const int kCompilationStateBit = 1;
+  static const int kIsSharedCrossOriginBit = 2;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(Script);
 };

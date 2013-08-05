@@ -272,24 +272,6 @@ void LCallConstantFunction::PrintDataTo(StringStream* stream) {
 }
 
 
-ExternalReference LLinkObjectInList::GetReference(Isolate* isolate) {
-  switch (hydrogen()->known_list()) {
-    case HLinkObjectInList::ALLOCATION_SITE_LIST:
-      return ExternalReference::allocation_sites_list_address(isolate);
-  }
-
-  UNREACHABLE();
-  // Return a dummy value
-  return ExternalReference::isolate_address(isolate);
-}
-
-
-void LLinkObjectInList::PrintDataTo(StringStream* stream) {
-  object()->PrintTo(stream);
-  stream->Add(" offset %d", hydrogen()->store_field().offset());
-}
-
-
 void LLoadContextSlot::PrintDataTo(StringStream* stream) {
   context()->PrintTo(stream);
   stream->Add("[%d]", slot_index());
@@ -2140,13 +2122,6 @@ LInstruction* LChunkBuilder::DoStoreGlobalGeneric(HStoreGlobalGeneric* instr) {
 }
 
 
-LInstruction* LChunkBuilder::DoLinkObjectInList(HLinkObjectInList* instr) {
-  LOperand* object = UseRegister(instr->value());
-  LLinkObjectInList* result = new(zone()) LLinkObjectInList(object);
-  return result;
-}
-
-
 LInstruction* LChunkBuilder::DoLoadContextSlot(HLoadContextSlot* instr) {
   LOperand* context = UseRegisterAtStart(instr->value());
   LInstruction* result =
@@ -2415,12 +2390,6 @@ LInstruction* LChunkBuilder::DoStringCharFromCode(HStringCharFromCode* instr) {
   LOperand* char_code = UseRegister(instr->value());
   LStringCharFromCode* result = new(zone()) LStringCharFromCode(char_code);
   return AssignPointerMap(DefineAsRegister(result));
-}
-
-
-LInstruction* LChunkBuilder::DoStringLength(HStringLength* instr) {
-  LOperand* string = UseRegisterAtStart(instr->value());
-  return DefineAsRegister(new(zone()) LStringLength(string));
 }
 
 
