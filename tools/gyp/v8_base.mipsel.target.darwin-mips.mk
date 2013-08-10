@@ -182,11 +182,12 @@ LOCAL_SRC_FILES := \
 	v8/src/mips/simulator-mips.cc \
 	v8/src/mips/stub-cache-mips.cc \
 	v8/src/platform-posix.cc \
-	v8/src/i18n.cc \
 	v8/src/extensions/i18n/break-iterator.cc \
 	v8/src/extensions/i18n/collator.cc \
+	v8/src/extensions/i18n/date-format.cc \
 	v8/src/extensions/i18n/i18n-extension.cc \
 	v8/src/extensions/i18n/i18n-utils.cc \
+	v8/src/extensions/i18n/locale.cc \
 	v8/src/extensions/i18n/number-format.cc \
 	v8/src/platform-linux.cc
 
