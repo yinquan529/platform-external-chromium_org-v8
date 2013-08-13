@@ -25,38 +25,42 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "icu_util.h"
+// Flags: --allow-natives-syntax
 
-#if defined(_WIN32) && defined(V8_I18N_SUPPORT)
-#include <windows.h>
-
-#include "unicode/putil.h"
-#include "unicode/udata.h"
-
-#define ICU_UTIL_DATA_SYMBOL "icudt" U_ICU_VERSION_SHORT "_dat"
-#define ICU_UTIL_DATA_SHARED_MODULE_NAME "icudt.dll"
-#endif
-
-namespace v8 {
-
-namespace internal {
-
-bool InitializeICU() {
-#if defined(_WIN32) && defined(V8_I18N_SUPPORT)
-  // We expect to find the ICU data module alongside the current module.
-  HMODULE module = LoadLibraryA(ICU_UTIL_DATA_SHARED_MODULE_NAME);
-  if (!module) return false;
-
-  FARPROC addr = GetProcAddress(module, ICU_UTIL_DATA_SYMBOL);
-  if (!addr) return false;
-
-  UErrorCode err = U_ZERO_ERROR;
-  udata_setCommonData(reinterpret_cast<void*>(addr), &err);
-  return err == U_ZERO_ERROR;
-#else
-  // Mac/Linux bundle the ICU data in.
-  return true;
-#endif
+// Load fields should not be hoisted beyond their check maps when the check maps
+// cannot be hoisted due to changes in elements kinds.
+function f(o, a) {
+  var v;
+  var i = 1;
+  while (i < 2) {
+    v = o.y;
+    a[0] = 1.5;
+    i++;
+  }
+  return v;
 }
 
-} }  // namespace v8::internal
+f({y:1.4}, [1]);
+f({y:1.6}, [1]);
+%OptimizeFunctionOnNextCall(f);
+f({x:1}, [1]);
+
+// Polymorphic loads should not be hoisted beyond their compare maps.
+function f2(o) {
+  var i = 0;
+  var v;
+  while (i < 1) {
+    v = o.x;
+    i++;
+  }
+  return v;
+}
+
+var o1 = { x: 1.5 };
+var o2 = { y: 1, x: 1 };
+
+f2(o1);
+f2(o1);
+f2(o2);
+%OptimizeFunctionOnNextCall(f2);
+f2(o2);

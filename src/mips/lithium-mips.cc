@@ -818,7 +818,7 @@ void LChunkBuilder::DoBasicBlock(HBasicBlock* block, HBasicBlock* next_block) {
     HEnvironment* last_environment = pred->last_environment();
     for (int i = 0; i < block->phis()->length(); ++i) {
       HPhi* phi = block->phis()->at(i);
-      if (phi->merged_index() < last_environment->length()) {
+      if (phi->HasMergedIndex()) {
         last_environment->SetValueAt(phi->merged_index(), phi);
       }
     }
@@ -1398,8 +1398,6 @@ LInstruction* LChunkBuilder::DoMathFloorOfDiv(HMathFloorOfDiv* instr) {
     LOperand* dividend = UseRegister(instr->left());
     LOperand* divisor = UseRegisterOrConstant(right);
     LOperand* remainder = TempRegister();
-    ASSERT(right->IsConstant() &&
-           HConstant::cast(right)->HasInteger32Value());
     return AssignEnvironment(DefineAsRegister(
           new(zone()) LMathFloorOfDiv(dividend, divisor, remainder)));
 }
