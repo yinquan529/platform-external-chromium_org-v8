@@ -1568,13 +1568,38 @@ static HValue* SimplifiedDividendForMathFloorOfDiv(HValue* dividend) {
 
 
 HValue* HUnaryMathOperation::Canonicalize() {
+  if (op() == kMathRound) {
+    HValue* val = value();
+    if (val->IsChange()) val = HChange::cast(val)->value();
+
+    // If the input is integer32 then we replace the round instruction
+    // with its input.
+    if (val->representation().IsSmiOrInteger32()) {
+      if (!val->representation().Equals(representation())) {
+        HChange* result = new(block()->zone()) HChange(
+            val, representation(), false, false, false);
+        result->InsertBefore(this);
+        return result;
+      }
+      return val;
+    }
+  }
+
   if (op() == kMathFloor) {
     HValue* val = value();
     if (val->IsChange()) val = HChange::cast(val)->value();
 
     // If the input is integer32 then we replace the floor instruction
     // with its input.
-    if (val->representation().IsSmiOrInteger32()) return val;
+    if (val->representation().IsSmiOrInteger32()) {
+      if (!val->representation().Equals(representation())) {
+        HChange* result = new(block()->zone()) HChange(
+            val, representation(), false, false, false);
+        result->InsertBefore(this);
+        return result;
+      }
+      return val;
+    }
 
     if (val->IsDiv() && (val->UseCount() == 1)) {
       HDiv* hdiv = HDiv::cast(val);
@@ -3657,7 +3682,11 @@ Representation HUnaryMathOperation::RepresentationFromInputs() {
   // If any of the actual input representation is more general than what we
   // have so far but not Tagged, use that representation instead.
   Representation input_rep = value()->representation();
-  if (!input_rep.IsTagged()) rep = rep.generalize(input_rep);
+  if (!input_rep.IsTagged()) {
+    rep = rep.generalize(input_rep);
+  } else if (flexible_int()) {
+    rep = Representation::Integer32();
+  }
   return rep;
 }
 
