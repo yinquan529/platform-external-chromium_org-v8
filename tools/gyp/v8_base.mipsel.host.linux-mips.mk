@@ -97,6 +97,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-sce.cc \
 	v8/src/hydrogen-uint32-analysis.cc \
 	v8/src/hydrogen-osr.cc \
+	v8/src/i18n.cc \
 	v8/src/icu_util.cc \
 	v8/src/ic.cc \
 	v8/src/incremental-marking.cc \
@@ -182,10 +183,7 @@ LOCAL_SRC_FILES := \
 	v8/src/mips/stub-cache-mips.cc \
 	v8/src/platform-posix.cc \
 	v8/src/platform-linux.cc \
-	v8/src/i18n.cc \
-	v8/src/extensions/i18n/break-iterator.cc \
-	v8/src/extensions/i18n/i18n-extension.cc \
-	v8/src/extensions/i18n/i18n-utils.cc
+	v8/src/extensions/i18n/i18n-extension.cc
 
 
 # Flags passed to both C and C++ files.
@@ -230,6 +228,8 @@ MY_DEFS_Debug := \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
+	'-DV8_OS_LINUX=1' \
+	'-DV8_OS_POSIX=1' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
@@ -301,6 +301,8 @@ MY_DEFS_Release := \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
+	'-DV8_OS_LINUX=1' \
+	'-DV8_OS_POSIX=1' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \
 	'-DNDEBUG' \

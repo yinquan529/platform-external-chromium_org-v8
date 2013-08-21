@@ -97,6 +97,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-sce.cc \
 	v8/src/hydrogen-uint32-analysis.cc \
 	v8/src/hydrogen-osr.cc \
+	v8/src/i18n.cc \
 	v8/src/icu_util.cc \
 	v8/src/ic.cc \
 	v8/src/incremental-marking.cc \
@@ -179,10 +180,7 @@ LOCAL_SRC_FILES := \
 	v8/src/ia32/regexp-macro-assembler-ia32.cc \
 	v8/src/ia32/stub-cache-ia32.cc \
 	v8/src/platform-posix.cc \
-	v8/src/i18n.cc \
-	v8/src/extensions/i18n/break-iterator.cc \
 	v8/src/extensions/i18n/i18n-extension.cc \
-	v8/src/extensions/i18n/i18n-utils.cc \
 	v8/src/platform-macos.cc
 
 
@@ -226,6 +224,9 @@ MY_DEFS_Debug := \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \
+	'-DV8_OS_BSD=1' \
+	'-DV8_OS_MACOSX=1' \
+	'-DV8_OS_POSIX=1' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -295,6 +296,9 @@ MY_DEFS_Release := \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \
+	'-DV8_OS_BSD=1' \
+	'-DV8_OS_MACOSX=1' \
+	'-DV8_OS_POSIX=1' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'
