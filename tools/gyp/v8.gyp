@@ -290,6 +290,7 @@
         '../../src/double.h',
         '../../src/dtoa.cc',
         '../../src/dtoa.h',
+        '../../src/effects.h',
         '../../src/elements-kind.cc',
         '../../src/elements-kind.h',
         '../../src/elements.cc',
@@ -379,6 +380,8 @@
         '../../src/hydrogen-uint32-analysis.h',
         '../../src/hydrogen-osr.cc',
         '../../src/hydrogen-osr.h',
+        '../../src/i18n.cc',
+        '../../src/i18n.h',
         '../../src/icu_util.cc',
         '../../src/icu_util.h',
         '../../src/ic-inl.h',
@@ -822,25 +825,18 @@
         }],
         ['v8_enable_i18n_support==1', {
           'sources': [
-            '../../src/extensions/i18n/break-iterator.cc',
-            '../../src/extensions/i18n/break-iterator.h',
-            '../../src/extensions/i18n/collator.cc',
-            '../../src/extensions/i18n/collator.h',
-            '../../src/extensions/i18n/date-format.cc',
-            '../../src/extensions/i18n/date-format.h',
             '../../src/extensions/i18n/i18n-extension.cc',
             '../../src/extensions/i18n/i18n-extension.h',
-            '../../src/extensions/i18n/i18n-utils.cc',
-            '../../src/extensions/i18n/i18n-utils.h',
-            '../../src/extensions/i18n/locale.cc',
-            '../../src/extensions/i18n/locale.h',
-            '../../src/extensions/i18n/number-format.cc',
-            '../../src/extensions/i18n/number-format.h',
           ],
           'dependencies': [
             '<(DEPTH)/third_party/icu/icu.gyp:icui18n',
             '<(DEPTH)/third_party/icu/icu.gyp:icuuc',
           ]
+        }, {  # v8_enable_i18n_support==0
+          'sources!': [
+            '../../src/i18n.cc',
+            '../../src/i18n.h',
+          ],
         }],
         ['OS=="win" and v8_enable_i18n_support==1', {
           'dependencies': [
@@ -895,6 +891,8 @@
           '../../src/date.js',
           '../../src/json.js',
           '../../src/regexp.js',
+          '../../src/arraybuffer.js',
+          '../../src/typedarray.js',
           '../../src/macros.py',
         ],
         'experimental_library_files': [
@@ -903,11 +901,10 @@
           '../../src/proxy.js',
           '../../src/collection.js',
           '../../src/object-observe.js',
-          '../../src/arraybuffer.js',
-          '../../src/typedarray.js',
           '../../src/generator.js',
           '../../src/array-iterator.js',
-          '../../src/harmony-string.js'
+          '../../src/harmony-string.js',
+          '../../src/harmony-array.js',
         ],
         'i18n_library_files': [
           '../../src/extensions/i18n/header.js',

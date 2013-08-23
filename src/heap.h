@@ -189,9 +189,7 @@ namespace internal {
   V(Symbol, elements_transition_symbol, ElementsTransitionSymbol)              \
   V(SeededNumberDictionary, empty_slow_element_dictionary,                     \
       EmptySlowElementDictionary)                                              \
-  V(Symbol, observed_symbol, ObservedSymbol)                                   \
-  V(HeapObject, i18n_template_one, I18nTemplateOne)                            \
-  V(HeapObject, i18n_template_two, I18nTemplateTwo)
+  V(Symbol, observed_symbol, ObservedSymbol)
 
 #define ROOT_LIST(V)                                  \
   STRONG_ROOT_LIST(V)                                 \
@@ -738,7 +736,7 @@ class Heap {
   // failed.
   // Please note this does not perform a garbage collection.
   MUST_USE_RESULT MaybeObject* AllocateJSObjectFromMap(
-      Map* map, PretenureFlag pretenure = NOT_TENURED);
+      Map* map, PretenureFlag pretenure = NOT_TENURED, bool alloc_props = true);
 
   MUST_USE_RESULT MaybeObject* AllocateJSObjectFromMapWithAllocationSite(
       Map* map, Handle<AllocationSite> allocation_site);
@@ -1256,10 +1254,7 @@ class Heap {
   void EnsureHeapIsIterable();
 
   // Notify the heap that a context has been disposed.
-  int NotifyContextDisposed() {
-    flush_monomorphic_ics_ = true;
-    return ++contexts_disposed_;
-  }
+  int NotifyContextDisposed();
 
   // Utility to invoke the scavenger. This is needed in test code to
   // ensure correct callback for weak global handles.
@@ -1301,12 +1296,6 @@ class Heap {
   void SetGlobalGCEpilogueCallback(GCCallback callback) {
     ASSERT((callback == NULL) ^ (global_gc_epilogue_callback_ == NULL));
     global_gc_epilogue_callback_ = callback;
-  }
-  void SetI18nTemplateOne(ObjectTemplateInfo* tmpl) {
-    set_i18n_template_one(tmpl);
-  }
-  void SetI18nTemplateTwo(ObjectTemplateInfo* tmpl) {
-    set_i18n_template_two(tmpl);
   }
 
   // Heap root getters.  We have versions with and without type::cast() here.
@@ -1401,6 +1390,10 @@ class Heap {
   // Finds out which space an object should get promoted to based on its type.
   inline OldSpace* TargetSpace(HeapObject* object);
   static inline AllocationSpace TargetSpaceId(InstanceType type);
+
+  // Checks whether the given object is allowed to be migrated from it's
+  // current space into the given destination space. Used for debugging.
+  inline bool AllowedToBeMigrated(HeapObject* object, AllocationSpace dest);
 
   // Sets the stub_cache_ (only used when expanding the dictionary).
   void public_set_code_stubs(UnseededNumberDictionary* value) {
@@ -1501,6 +1494,10 @@ class Heap {
   inline bool IsInGCPostProcessing() { return gc_post_processing_depth_ > 0; }
 
 #ifdef DEBUG
+  void set_allocation_timeout(int timeout) {
+    allocation_timeout_ = timeout;
+  }
+
   bool disallow_allocation_failure() {
     return disallow_allocation_failure_;
   }
@@ -1626,6 +1623,8 @@ class Heap {
   // Generated code can embed direct references to non-writable roots if
   // they are in new space.
   static bool RootCanBeWrittenAfterInitialization(RootListIndex root_index);
+  // Generated code can treat direct references to this root as constant.
+  bool RootCanBeTreatedAsConstant(RootListIndex root_index);
 
   MUST_USE_RESULT MaybeObject* NumberToString(
       Object* number, bool check_number_string_cache = true,

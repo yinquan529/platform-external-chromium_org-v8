@@ -1567,14 +1567,27 @@ MaybeObject* JSObject::MigrateInstance() {
   // Converting any field to the most specific type will cause the
   // GeneralizeFieldRepresentation algorithm to create the most general existing
   // transition that matches the object. This achieves what is needed.
-  return GeneralizeFieldRepresentation(0, Representation::None());
+  Map* original_map = map();
+  MaybeObject* maybe_result = GeneralizeFieldRepresentation(
+      0, Representation::None());
+  JSObject* result;
+  if (FLAG_trace_migration && maybe_result->To(&result)) {
+    PrintInstanceMigration(stdout, original_map, result->map());
+  }
+  return maybe_result;
 }
 
 
 MaybeObject* JSObject::TryMigrateInstance() {
   Map* new_map = map()->CurrentMapForDeprecated();
   if (new_map == NULL) return Smi::FromInt(0);
-  return MigrateToMap(new_map);
+  Map* original_map = map();
+  MaybeObject* maybe_result = MigrateToMap(new_map);
+  JSObject* result;
+  if (FLAG_trace_migration && maybe_result->To(&result)) {
+    PrintInstanceMigration(stdout, original_map, result->map());
+  }
+  return maybe_result;
 }
 
 
@@ -3617,6 +3630,17 @@ bool Map::is_deprecated() {
 }
 
 
+void Map::set_migration_target(bool value) {
+  set_bit_field3(IsMigrationTarget::update(bit_field3(), value));
+}
+
+
+bool Map::is_migration_target() {
+  if (!FLAG_track_fields) return false;
+  return IsMigrationTarget::decode(bit_field3());
+}
+
+
 void Map::freeze() {
   set_bit_field3(IsFrozen::update(bit_field3(), true));
 }
@@ -3674,11 +3698,6 @@ void Map::NotifyLeafMapLayoutChange() {
         GetIsolate(),
         DependentCode::kPrototypeCheckGroup);
   }
-}
-
-
-bool Map::CanOmitPrototypeChecks() {
-  return is_stable() && FLAG_omit_prototype_checks_for_leaf_maps;
 }
 
 
@@ -3816,7 +3835,6 @@ inline void Code::set_is_crankshafted(bool value) {
 
 int Code::major_key() {
   ASSERT(kind() == STUB ||
-         kind() == UNARY_OP_IC ||
          kind() == BINARY_OP_IC ||
          kind() == COMPARE_IC ||
          kind() == COMPARE_NIL_IC ||
@@ -3831,7 +3849,6 @@ int Code::major_key() {
 
 void Code::set_major_key(int major) {
   ASSERT(kind() == STUB ||
-         kind() == UNARY_OP_IC ||
          kind() == BINARY_OP_IC ||
          kind() == COMPARE_IC ||
          kind() == COMPARE_NIL_IC ||
@@ -4021,21 +4038,6 @@ void Code::set_check_type(CheckType value) {
 }
 
 
-byte Code::unary_op_type() {
-  ASSERT(is_unary_op_stub());
-  return UnaryOpTypeField::decode(
-      READ_UINT32_FIELD(this, kKindSpecificFlags1Offset));
-}
-
-
-void Code::set_unary_op_type(byte value) {
-  ASSERT(is_unary_op_stub());
-  int previous = READ_UINT32_FIELD(this, kKindSpecificFlags1Offset);
-  int updated = UnaryOpTypeField::update(previous, value);
-  WRITE_UINT32_FIELD(this, kKindSpecificFlags1Offset, updated);
-}
-
-
 byte Code::to_boolean_state() {
   return extended_extra_ic_state();
 }
@@ -4082,8 +4084,8 @@ bool Code::is_inline_cache_stub() {
 }
 
 
-bool Code::is_debug_break() {
-  return ic_state() == DEBUG_STUB && extra_ic_state() == DEBUG_BREAK;
+bool Code::is_debug_stub() {
+  return ic_state() == DEBUG_STUB;
 }
 
 
@@ -4220,7 +4222,20 @@ void Map::InitializeDescriptors(DescriptorArray* descriptors) {
 
 
 ACCESSORS(Map, instance_descriptors, DescriptorArray, kDescriptorsOffset)
-SMI_ACCESSORS(Map, bit_field3, kBitField3Offset)
+
+
+void Map::set_bit_field3(uint32_t bits) {
+  // Ensure the upper 2 bits have the same value by sign extending it. This is
+  // necessary to be able to use the 31st bit.
+  int value = bits << 1;
+  WRITE_FIELD(this, kBitField3Offset, Smi::FromInt(value >> 1));
+}
+
+
+uint32_t Map::bit_field3() {
+  Object* value = READ_FIELD(this, kBitField3Offset);
+  return Smi::cast(value)->value();
+}
 
 
 void Map::ClearTransitions(Heap* heap, WriteBarrierMode mode) {

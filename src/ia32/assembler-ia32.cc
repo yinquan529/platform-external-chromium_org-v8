@@ -1227,6 +1227,10 @@ void Assembler::test_b(Register reg, const Operand& op) {
 
 
 void Assembler::test(const Operand& op, const Immediate& imm) {
+  if (op.is_reg_only()) {
+    test(op.reg(), imm);
+    return;
+  }
   EnsureSpace ensure_space(this);
   EMIT(0xF7);
   emit_operand(eax, op);
@@ -1303,14 +1307,6 @@ void Assembler::int3() {
 void Assembler::nop() {
   EnsureSpace ensure_space(this);
   EMIT(0x90);
-}
-
-
-void Assembler::rdtsc() {
-  ASSERT(IsEnabled(RDTSC));
-  EnsureSpace ensure_space(this);
-  EMIT(0x0F);
-  EMIT(0x31);
 }
 
 
@@ -1634,6 +1630,13 @@ void Assembler::fstp_s(const Operand& adr) {
   EnsureSpace ensure_space(this);
   EMIT(0xD9);
   emit_operand(ebx, adr);
+}
+
+
+void Assembler::fst_s(const Operand& adr) {
+  EnsureSpace ensure_space(this);
+  EMIT(0xD9);
+  emit_operand(edx, adr);
 }
 
 

@@ -2682,9 +2682,6 @@ static void CheckInternalFieldsAreZero(v8::Handle<T> value) {
 
 
 THREADED_TEST(ArrayBuffer_ApiInternalToExternal) {
-  i::FLAG_harmony_array_buffer = true;
-  i::FLAG_harmony_typed_arrays = true;
-
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
@@ -2721,9 +2718,6 @@ THREADED_TEST(ArrayBuffer_ApiInternalToExternal) {
 
 
 THREADED_TEST(ArrayBuffer_JSInternalToExternal) {
-  i::FLAG_harmony_array_buffer = true;
-  i::FLAG_harmony_typed_arrays = true;
-
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
@@ -2766,9 +2760,6 @@ THREADED_TEST(ArrayBuffer_JSInternalToExternal) {
 
 
 THREADED_TEST(ArrayBuffer_External) {
-  i::FLAG_harmony_array_buffer = true;
-  i::FLAG_harmony_typed_arrays = true;
-
   LocalContext env;
   v8::Isolate* isolate = env->GetIsolate();
   v8::HandleScope handle_scope(isolate);
@@ -3185,6 +3176,44 @@ THREADED_TEST(GlobalHandleUpcast) {
   CHECK(v8::Local<v8::Value>::New(isolate, global_value)->IsString());
   CHECK(global_string == v8::Persistent<String>::Cast(global_value));
   global_string.Dispose();
+}
+
+
+THREADED_TEST(HandleEquality) {
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  v8::Persistent<String> global1;
+  v8::Persistent<String> global2;
+  {
+    v8::HandleScope scope(isolate);
+    global1.Reset(isolate, v8_str("str"));
+    global2.Reset(isolate, v8_str("str2"));
+  }
+  CHECK_EQ(global1 == global1, true);
+  CHECK_EQ(global1 != global1, false);
+  {
+    v8::HandleScope scope(isolate);
+    Local<String> local1 = Local<String>::New(isolate, global1);
+    Local<String> local2 = Local<String>::New(isolate, global2);
+
+    CHECK_EQ(global1 == local1, true);
+    CHECK_EQ(global1 != local1, false);
+    CHECK_EQ(local1 == global1, true);
+    CHECK_EQ(local1 != global1, false);
+
+    CHECK_EQ(global1 == local2, false);
+    CHECK_EQ(global1 != local2, true);
+    CHECK_EQ(local2 == global1, false);
+    CHECK_EQ(local2 != global1, true);
+
+    CHECK_EQ(local1 == local2, false);
+    CHECK_EQ(local1 != local2, true);
+
+    Local<String> anotherLocal1 = Local<String>::New(isolate, global1);
+    CHECK_EQ(local1 == anotherLocal1, true);
+    CHECK_EQ(local1 != anotherLocal1, false);
+  }
+  global1.Dispose();
+  global2.Dispose();
 }
 
 
@@ -4388,7 +4417,7 @@ TEST(APIThrowMessageOverwrittenToString) {
 }
 
 
-static void check_custom_error_message(
+static void check_custom_error_tostring(
     v8::Handle<v8::Message> message,
     v8::Handle<v8::Value> data) {
   const char* uncaught_error = "Uncaught MyError toString";
@@ -4399,7 +4428,7 @@ static void check_custom_error_message(
 TEST(CustomErrorToString) {
   LocalContext context;
   v8::HandleScope scope(context->GetIsolate());
-  v8::V8::AddMessageListener(check_custom_error_message);
+  v8::V8::AddMessageListener(check_custom_error_tostring);
   CompileRun(
     "function MyError(name, message) {                   "
     "  this.name = name;                                 "
@@ -4410,6 +4439,58 @@ TEST(CustomErrorToString) {
     "  return 'MyError toString';                        "
     "};                                                  "
     "throw new MyError('my name', 'my message');         ");
+  v8::V8::RemoveMessageListeners(check_custom_error_tostring);
+}
+
+
+static void check_custom_error_message(
+    v8::Handle<v8::Message> message,
+    v8::Handle<v8::Value> data) {
+  const char* uncaught_error = "Uncaught MyError: my message";
+  printf("%s\n", *v8::String::Utf8Value(message->Get()));
+  CHECK(message->Get()->Equals(v8_str(uncaught_error)));
+}
+
+
+TEST(CustomErrorMessage) {
+  LocalContext context;
+  v8::HandleScope scope(context->GetIsolate());
+  v8::V8::AddMessageListener(check_custom_error_message);
+
+  // Handlebars.
+  CompileRun(
+    "function MyError(msg) {                             "
+    "  this.name = 'MyError';                            "
+    "  this.message = msg;                               "
+    "}                                                   "
+    "MyError.prototype = new Error();                    "
+    "throw new MyError('my message');                    ");
+
+  // Closure.
+  CompileRun(
+    "function MyError(msg) {                             "
+    "  this.name = 'MyError';                            "
+    "  this.message = msg;                               "
+    "}                                                   "
+    "inherits = function(childCtor, parentCtor) {        "
+    "    function tempCtor() {};                         "
+    "    tempCtor.prototype = parentCtor.prototype;      "
+    "    childCtor.superClass_ = parentCtor.prototype;   "
+    "    childCtor.prototype = new tempCtor();           "
+    "    childCtor.prototype.constructor = childCtor;    "
+    "};                                                  "
+    "inherits(MyError, Error);                           "
+    "throw new MyError('my message');                    ");
+
+  // Object.create.
+  CompileRun(
+    "function MyError(msg) {                             "
+    "  this.name = 'MyError';                            "
+    "  this.message = msg;                               "
+    "}                                                   "
+    "MyError.prototype = Object.create(Error.prototype); "
+    "throw new MyError('my message');                    ");
+
   v8::V8::RemoveMessageListeners(check_custom_error_message);
 }
 
@@ -12906,9 +12987,6 @@ TEST(SetFunctionEntryHook) {
   // Experimental natives are compiled during snapshot deserialization.
   // This test breaks because InstallGetter (function from snapshot that
   // only gets called from experimental natives) is compiled with entry hooks.
-  i::FLAG_harmony_typed_arrays = false;
-  i::FLAG_harmony_array_buffer = false;
-
   i::FLAG_allow_natives_syntax = true;
   i::FLAG_use_inlining = false;
 
@@ -16105,8 +16183,6 @@ THREADED_TEST(DataView) {
 
 #define IS_ARRAY_BUFFER_VIEW_TEST(View)                                       \
   THREADED_TEST(Is##View) {                                                   \
-    i::FLAG_harmony_array_buffer = true;                                      \
-    i::FLAG_harmony_typed_arrays = true;                                      \
     LocalContext env;                                                         \
     v8::Isolate* isolate = env->GetIsolate();                                 \
     v8::HandleScope handle_scope(isolate);                                    \
@@ -19863,6 +19939,26 @@ THREADED_TEST(Regress260106) {
 }
 
 
+THREADED_TEST(JSONParseObject) {
+  LocalContext context;
+  HandleScope scope(context->GetIsolate());
+  Local<Value> obj = v8::JSON::Parse(v8_str("{\"x\":42}"));
+  Handle<Object> global = context->Global();
+  global->Set(v8_str("obj"), obj);
+  ExpectString("JSON.stringify(obj)", "{\"x\":42}");
+}
+
+
+THREADED_TEST(JSONParseNumber) {
+  LocalContext context;
+  HandleScope scope(context->GetIsolate());
+  Local<Value> obj = v8::JSON::Parse(v8_str("42"));
+  Handle<Object> global = context->Global();
+  global->Set(v8_str("obj"), obj);
+  ExpectString("JSON.stringify(obj)", "42");
+}
+
+
 #ifndef WIN32
 class ThreadInterruptTest {
  public:
@@ -20099,6 +20195,10 @@ TEST(AccessCheckThrows) {
   CheckCorrectThrow("%GetLocalPropertyNames(other, true)");
   CheckCorrectThrow("%DefineOrRedefineAccessorProperty("
                         "other, 'x', null, null, 1)");
+
+  // Reset the failed access check callback so it does not influence
+  // the other tests.
+  v8::V8::SetFailedAccessCheckCallbackFunction(NULL);
 }
 
 #endif  // WIN32

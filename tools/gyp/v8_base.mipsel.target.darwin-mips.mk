@@ -98,6 +98,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-sce.cc \
 	v8/src/hydrogen-uint32-analysis.cc \
 	v8/src/hydrogen-osr.cc \
+	v8/src/i18n.cc \
 	v8/src/icu_util.cc \
 	v8/src/ic.cc \
 	v8/src/incremental-marking.cc \
@@ -182,13 +183,7 @@ LOCAL_SRC_FILES := \
 	v8/src/mips/simulator-mips.cc \
 	v8/src/mips/stub-cache-mips.cc \
 	v8/src/platform-posix.cc \
-	v8/src/extensions/i18n/break-iterator.cc \
-	v8/src/extensions/i18n/collator.cc \
-	v8/src/extensions/i18n/date-format.cc \
 	v8/src/extensions/i18n/i18n-extension.cc \
-	v8/src/extensions/i18n/i18n-utils.cc \
-	v8/src/extensions/i18n/locale.cc \
-	v8/src/extensions/i18n/number-format.cc \
 	v8/src/platform-linux.cc
 
 
@@ -245,7 +240,6 @@ MY_DEFS_Debug := \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
-	'-D_MIPS_ARCH_MIPS32R2' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
@@ -345,7 +339,6 @@ MY_DEFS_Release := \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
-	'-D_MIPS_ARCH_MIPS32R2' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \

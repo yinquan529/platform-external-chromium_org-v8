@@ -273,7 +273,8 @@ void ObjectLiteral::CalculateEmitStore(Zone* zone) {
     uint32_t hash = literal->Hash();
     // If the key of a computed property is in the table, do not emit
     // a store for the property later.
-    if (property->kind() == ObjectLiteral::Property::COMPUTED &&
+    if ((property->kind() == ObjectLiteral::Property::MATERIALIZED_LITERAL ||
+         property->kind() == ObjectLiteral::Property::COMPUTED) &&
         table.Lookup(literal, hash, false, allocator) != NULL) {
       property->set_emit_store(false);
     } else {
@@ -301,17 +302,6 @@ void UnaryOperation::RecordToBooleanTypeFeedback(TypeFeedbackOracle* oracle) {
   // corresponding to the TestContext, therefore we have to store it here and
   // not on the operand.
   set_to_boolean_types(oracle->ToBooleanTypes(expression()->test_id()));
-}
-
-
-bool UnaryOperation::ResultOverwriteAllowed() {
-  switch (op_) {
-    case Token::BIT_NOT:
-    case Token::SUB:
-      return true;
-    default:
-      return false;
-  }
 }
 
 
@@ -868,12 +858,13 @@ bool RegExpCapture::IsAnchoredAtEnd() {
 // in as many cases as possible, to make it more difficult for incorrect
 // parses to look as correct ones which is likely if the input and
 // output formats are alike.
-class RegExpUnparser: public RegExpVisitor {
+class RegExpUnparser V8_FINAL : public RegExpVisitor {
  public:
   explicit RegExpUnparser(Zone* zone);
   void VisitCharacterRange(CharacterRange that);
   SmartArrayPointer<const char> ToString() { return stream_.ToCString(); }
-#define MAKE_CASE(Name) virtual void* Visit##Name(RegExp##Name*, void* data);
+#define MAKE_CASE(Name) virtual void* Visit##Name(RegExp##Name*,          \
+                                                  void* data) V8_OVERRIDE;
   FOR_EACH_REG_EXP_TREE_TYPE(MAKE_CASE)
 #undef MAKE_CASE
  private:

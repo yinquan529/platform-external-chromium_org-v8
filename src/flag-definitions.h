@@ -164,9 +164,9 @@ DEFINE_bool(harmony_collections, false,
             "enable harmony collections (sets, maps, and weak maps)")
 DEFINE_bool(harmony_observation, false,
             "enable harmony object observation (implies harmony collections")
-DEFINE_bool(harmony_typed_arrays, false,
+DEFINE_bool(harmony_typed_arrays, true,
             "enable harmony typed arrays")
-DEFINE_bool(harmony_array_buffer, false,
+DEFINE_bool(harmony_array_buffer, true,
             "enable harmony array buffer")
 DEFINE_implication(harmony_typed_arrays, harmony_array_buffer)
 DEFINE_bool(harmony_generators, false, "enable harmony generators")
@@ -174,6 +174,7 @@ DEFINE_bool(harmony_iteration, false, "enable harmony iteration (for-of)")
 DEFINE_bool(harmony_numeric_literals, false,
             "enable harmony numeric literals (0o77, 0b11)")
 DEFINE_bool(harmony_strings, false, "enable harmony string")
+DEFINE_bool(harmony_arrays, false, "enable harmony arrays")
 DEFINE_bool(harmony, false, "enable all harmony features (except typeof)")
 DEFINE_implication(harmony, harmony_scoping)
 DEFINE_implication(harmony, harmony_modules)
@@ -185,6 +186,7 @@ DEFINE_implication(harmony, harmony_generators)
 DEFINE_implication(harmony, harmony_iteration)
 DEFINE_implication(harmony, harmony_numeric_literals)
 DEFINE_implication(harmony, harmony_strings)
+DEFINE_implication(harmony, harmony_arrays)
 DEFINE_implication(harmony_modules, harmony_scoping)
 DEFINE_implication(harmony_observation, harmony_collections)
 // TODO[dslomov] add harmony => harmony_typed_arrays
@@ -192,8 +194,6 @@ DEFINE_implication(harmony_observation, harmony_collections)
 // Flags for experimental implementation features.
 DEFINE_bool(packed_arrays, true, "optimizes arrays that have no holes")
 DEFINE_bool(smi_only_arrays, true, "tracks arrays with only smi values")
-DEFINE_bool(compiled_keyed_stores, true, "use optimizing compiler to "
-            "generate keyed store stubs")
 DEFINE_bool(clever_optimizations,
             true,
             "Optimize object size, Array shift, DOM strings and string +")
@@ -262,10 +262,11 @@ DEFINE_int(deopt_every_n_garbage_collections,
            "deoptimize every n garbage collections")
 DEFINE_bool(print_deopt_stress, false, "print number of possible deopt points")
 DEFINE_bool(trap_on_deopt, false, "put a break point before deoptimizing")
+DEFINE_bool(trap_on_stub_deopt, false,
+            "put a break point before deoptimizing a stub")
 DEFINE_bool(deoptimize_uncommon_cases, true, "deoptimize uncommon cases")
 DEFINE_bool(polymorphic_inlining, true, "polymorphic inlining")
 DEFINE_bool(use_osr, true, "use on-stack replacement")
-DEFINE_bool(idefs, false, "use informative definitions")
 DEFINE_bool(array_bounds_checks_elimination, true,
             "perform array bounds checks elimination")
 DEFINE_bool(array_bounds_checks_hoisting, false,
@@ -309,9 +310,6 @@ DEFINE_int(parallel_recompilation_queue_length, 8,
            "the length of the parallel compilation queue")
 DEFINE_int(parallel_recompilation_delay, 0,
            "artificial compilation delay in ms")
-DEFINE_bool(omit_prototype_checks_for_leaf_maps, true,
-            "do not emit prototype checks if all prototypes have leaf maps, "
-            "deoptimize the optimized code if the layout of the maps changes.")
 DEFINE_bool(omit_map_checks_for_leaf_maps, true,
             "do not emit check maps for constant values that have a leaf map, "
             "deoptimize the optimized code if the layout of the maps changes.")
@@ -358,8 +356,6 @@ DEFINE_bool(enable_sse4_1, true,
             "enable use of SSE4.1 instructions if available")
 DEFINE_bool(enable_cmov, true,
             "enable use of CMOV instruction if available")
-DEFINE_bool(enable_rdtsc, true,
-            "enable use of RDTSC instruction if available")
 DEFINE_bool(enable_sahf, true,
             "enable use of SAHF instruction if available (X64 only)")
 DEFINE_bool(enable_vfp3, ENABLE_VFP3_DEFAULT,
