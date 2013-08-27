@@ -882,7 +882,7 @@ class HValue : public ZoneObject {
   bool Equals(HValue* other);
   virtual intptr_t Hashcode();
 
-  // Compute unique ids upfront that is safe wrt GC and parallel recompilation.
+  // Compute unique ids upfront that is safe wrt GC and concurrent compilation.
   virtual void FinalizeUniqueValueId() { }
 
   // Printing support.
@@ -2608,6 +2608,7 @@ class HCheckMaps V8_FINAL : public HTemplateInstruction<2> {
     omit_ = true;
     for (int i = 0; i < map_set_.length(); i++) {
       Handle<Map> map = map_set_.at(i);
+      if (!map->CanTransition()) continue;
       map->AddDependentCompilationInfo(DependentCode::kPrototypeCheckGroup,
                                        info);
     }
@@ -3207,8 +3208,8 @@ class HArgumentsObject V8_FINAL : public HDematerializedObject {
 
 class HCapturedObject V8_FINAL : public HDematerializedObject {
  public:
-  HCapturedObject(int length, Zone* zone)
-      : HDematerializedObject(length, zone) {
+  HCapturedObject(int length, int id, Zone* zone)
+      : HDematerializedObject(length, zone), capture_id_(id) {
     set_representation(Representation::Tagged());
     values_.AddBlock(NULL, length, zone);  // Resize list.
   }
@@ -3218,8 +3219,15 @@ class HCapturedObject V8_FINAL : public HDematerializedObject {
   // properties or elements backing store are not tracked here.
   const ZoneList<HValue*>* values() const { return &values_; }
   int length() const { return values_.length(); }
+  int capture_id() const { return capture_id_; }
+
+  // Replay effects of this instruction on the given environment.
+  void ReplayEnvironment(HEnvironment* env);
 
   DECLARE_CONCRETE_INSTRUCTION(CapturedObject)
+
+ private:
+  int capture_id_;
 };
 
 
@@ -3243,10 +3251,10 @@ class HConstant V8_FINAL : public HTemplateInstruction<0> {
     return handle_;
   }
 
-  bool InstanceOf(Handle<Map> map) {
+  bool HasMap(Handle<Map> map) {
     Handle<Object> constant_object = handle();
-    return constant_object->IsJSObject() &&
-        Handle<JSObject>::cast(constant_object)->map() == *map;
+    return constant_object->IsHeapObject() &&
+        Handle<HeapObject>::cast(constant_object)->map() == *map;
   }
 
   bool IsSpecialDouble() const {
@@ -5598,7 +5606,6 @@ class HLoadNamedField V8_FINAL : public HTemplateInstruction<1> {
 
   HValue* object() { return OperandAt(0); }
   bool HasTypeCheck() { return object()->IsCheckMaps(); }
-  void ClearTypeCheck() { SetOperandAt(0, object()->ActualValue()); }
   HObjectAccess access() const { return access_; }
   Representation field_representation() const {
       return access_.representation();

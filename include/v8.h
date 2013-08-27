@@ -43,7 +43,7 @@
 // We reserve the V8_* prefix for macros defined in V8 public API and
 // assume there are no name conflicts with the embedder's code.
 
-#ifdef _WIN32
+#ifdef V8_OS_WIN
 
 // Setup for Windows DLL export/import. When building the V8 DLL the
 // BUILDING_V8_SHARED needs to be defined. When building a program which uses
@@ -56,52 +56,27 @@
 #endif
 
 #ifdef BUILDING_V8_SHARED
-#define V8_EXPORT __declspec(dllexport)
+# define V8_EXPORT __declspec(dllexport)
 #elif USING_V8_SHARED
-#define V8_EXPORT __declspec(dllimport)
+# define V8_EXPORT __declspec(dllimport)
 #else
-#define V8_EXPORT
+# define V8_EXPORT
 #endif  // BUILDING_V8_SHARED
 
-#else  // _WIN32
+#else  // V8_OS_WIN
 
 // Setup for Linux shared library export.
-#if defined(__GNUC__) && ((__GNUC__ >= 4) || \
-    (__GNUC__ == 3 && __GNUC_MINOR__ >= 3)) && defined(V8_SHARED)
-#ifdef BUILDING_V8_SHARED
-#define V8_EXPORT __attribute__ ((visibility("default")))
+#if V8_HAS_ATTRIBUTE_VISIBILITY && defined(V8_SHARED)
+# ifdef BUILDING_V8_SHARED
+#  define V8_EXPORT __attribute__ ((visibility("default")))
+# else
+#  define V8_EXPORT
+# endif
 #else
-#define V8_EXPORT
-#endif
-#else
-#define V8_EXPORT
-#endif
-
-#endif  // _WIN32
-
-#if defined(__GNUC__) && !defined(DEBUG)
-#define V8_INLINE(declarator) inline __attribute__((always_inline)) declarator
-#elif defined(_MSC_VER) && !defined(DEBUG)
-#define V8_INLINE(declarator) __forceinline declarator
-#else
-#define V8_INLINE(declarator) inline declarator
+# define V8_EXPORT
 #endif
 
-#if defined(__GNUC__) && !V8_DISABLE_DEPRECATIONS
-#define V8_DEPRECATED(declarator) declarator __attribute__ ((deprecated))
-#elif defined(_MSC_VER) && !V8_DISABLE_DEPRECATIONS
-#define V8_DEPRECATED(declarator) __declspec(deprecated) declarator
-#else
-#define V8_DEPRECATED(declarator) declarator
-#endif
-
-#if __GNUC__ > 2 || (__GNUC__ == 2 && (__GNUC_MINOR__ > 95))
-  #define V8_UNLIKELY(condition) __builtin_expect((condition), 0)
-  #define V8_LIKELY(condition) __builtin_expect((condition), 1)
-#else
-  #define V8_UNLIKELY(condition) (condition)
-  #define V8_LIKELY(condition) (condition)
-#endif
+#endif  // V8_OS_WIN
 
 /**
  * The v8 JavaScript engine.
@@ -145,6 +120,7 @@ class Utils;
 class Value;
 template <class T> class Handle;
 template <class T> class Local;
+template <class T> class Eternal;
 template <class T> class Persistent;
 class FunctionTemplate;
 class ObjectTemplate;
@@ -395,11 +371,6 @@ template <class T> class Handle {
 };
 
 
-// A value which will never be returned by Local::Eternalize
-// Useful for static initialization
-const int kUninitializedEternalIndex = -1;
-
-
 /**
  * A light-weight stack-allocated object handle.  All operations
  * that return objects from within v8 return them in local handles.  They
@@ -445,11 +416,6 @@ template <class T> class Local : public Handle<T> {
     return Local<S>::Cast(*this);
   }
 
-  // Keep this Local alive for the lifetime of the Isolate.
-  // It remains retrievable via the returned index,
-  V8_INLINE(int Eternalize(Isolate* isolate));
-  V8_INLINE(static Local<T> GetEternal(Isolate* isolate, int index));
-
   /**
    * Create a local handle for the content of another handle.
    * The referee is kept alive by the local handle even when
@@ -470,6 +436,7 @@ template <class T> class Local : public Handle<T> {
 
  private:
   friend class Utils;
+  template<class F> friend class Eternal;
   template<class F> friend class Persistent;
   template<class F> friend class Handle;
   friend class Arguments;
@@ -484,6 +451,28 @@ template <class T> class Local : public Handle<T> {
 
   V8_INLINE(static Local<T> New(Isolate* isolate, T* that));
 };
+
+
+// Eternal handles are set-once handles that live for the life of the isolate.
+template <class T> class Eternal {
+ public:
+  V8_INLINE(Eternal()) : index_(kInitialValue) { }
+  template<class S>
+  V8_INLINE(Eternal(Isolate* isolate, Local<S> handle))
+      : index_(kInitialValue) {
+    Set(isolate, handle);
+  }
+  // Can only be safely called if already set.
+  V8_INLINE(Local<T> Get(Isolate* isolate));
+  V8_INLINE(bool IsEmpty()) { return index_ != kInitialValue; }
+  template<class S>
+  V8_INLINE(void Set(Isolate* isolate, Local<S> handle));
+
+ private:
+  static const int kInitialValue = -1;
+  int index_;
+};
+
 
 /**
  * An object reference that is independent of any handle scope.  Where
@@ -2993,6 +2982,14 @@ class V8_EXPORT Template : public Data {
   void Set(Handle<String> name, Handle<Data> value,
            PropertyAttribute attributes = None);
   V8_INLINE(void Set(const char* name, Handle<Data> value));
+
+  void SetAccessorProperty(
+     Local<String> name,
+     Local<FunctionTemplate> getter = Local<FunctionTemplate>(),
+     Local<FunctionTemplate> setter = Local<FunctionTemplate>(),
+     PropertyAttribute attribute = None,
+     AccessControl settings = DEFAULT);
+
  private:
   Template();
 
@@ -4813,12 +4810,14 @@ class V8_EXPORT V8 {
                        void* data,
                        RevivableCallback weak_reference_callback);
   static void ClearWeak(internal::Object** global_handle);
-  static int Eternalize(internal::Isolate* isolate,
-                        internal::Object** handle);
-  static internal::Object** GetEternal(internal::Isolate* isolate, int index);
+  static void Eternalize(Isolate* isolate,
+                         Value* handle,
+                         int* index);
+  static Local<Value> GetEternal(Isolate* isolate, int index);
 
   template <class T> friend class Handle;
   template <class T> friend class Local;
+  template <class T> friend class Eternal;
   template <class T> friend class Persistent;
   friend class Context;
 };
@@ -5680,17 +5679,16 @@ Local<T> Local<T>::New(Isolate* isolate, T* that) {
 
 
 template<class T>
-int Local<T>::Eternalize(Isolate* isolate) {
-  return V8::Eternalize(reinterpret_cast<internal::Isolate*>(isolate),
-                        reinterpret_cast<internal::Object**>(this->val_));
+template<class S>
+void Eternal<T>::Set(Isolate* isolate, Local<S> handle) {
+  TYPE_CHECK(T, S);
+  V8::Eternalize(isolate, Value::Cast(*handle), &this->index_);
 }
 
 
 template<class T>
-Local<T> Local<T>::GetEternal(Isolate* isolate, int index) {
-  internal::Object** handle =
-      V8::GetEternal(reinterpret_cast<internal::Isolate*>(isolate), index);
-  return Local<T>(T::Cast(reinterpret_cast<Value*>(handle)));
+Local<T> Eternal<T>::Get(Isolate* isolate) {
+  return Local<T>::Cast(V8::GetEternal(isolate, index_));
 }
 
 

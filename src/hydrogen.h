@@ -320,7 +320,6 @@ class HGraph V8_FINAL : public ZoneObject {
   bool ProcessArgumentsObject();
   void OrderBlocks();
   void AssignDominators();
-  void SetupInformativeDefinitions();
   void RestoreActualValues();
 
   // Returns false if there are phi-uses of the arguments-object
@@ -468,9 +467,6 @@ class HGraph V8_FINAL : public ZoneObject {
     phase.Run();
   }
 
-  void CheckForBackEdge(HBasicBlock* block, HBasicBlock* successor);
-  void SetupInformativeDefinitionsInBlock(HBasicBlock* block);
-  void SetupInformativeDefinitionsRecursively(HBasicBlock* block);
   void EliminateRedundantBoundsChecksUsingInductionVariables();
 
   Isolate* isolate_;
@@ -1229,10 +1225,9 @@ class HGraphBuilder {
                                    bool is_jsarray);
 
   HInstruction* BuildUncheckedMonomorphicElementAccess(
-      HValue* object,
+      HValue* checked_object,
       HValue* key,
       HValue* val,
-      HCheckMaps* mapcheck,
       bool is_js_array,
       ElementsKind elements_kind,
       bool is_store,
@@ -1985,6 +1980,8 @@ class HOptimizedGraphBuilder V8_FINAL
                                                 HValue* key,
                                                 HValue* val,
                                                 SmallMapList* maps);
+
+  LoadKeyedHoleMode BuildKeyedHoleMode(Handle<Map> map);
 
   HInstruction* BuildMonomorphicElementAccess(HValue* object,
                                               HValue* key,

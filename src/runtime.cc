@@ -290,9 +290,7 @@ static Handle<Object> CreateObjectLiteralBoilerplate(
     }
     Handle<Object> result;
     uint32_t element_index = 0;
-    JSReceiver::StoreMode mode = value->IsJSObject()
-        ? JSReceiver::FORCE_FIELD
-        : JSReceiver::ALLOW_AS_CONSTANT;
+    StoreMode mode = value->IsJSObject() ? FORCE_FIELD : ALLOW_AS_CONSTANT;
     if (key->IsInternalizedString()) {
       if (Handle<String>::cast(key)->AsArrayIndex(&element_index)) {
         // Array index as string (uint32).
@@ -1664,6 +1662,14 @@ static bool CheckAccessException(Object* callback,
         (access_type == v8::ACCESS_GET && info->all_can_read()) ||
         (access_type == v8::ACCESS_SET && info->all_can_write());
   }
+  if (callback->IsAccessorPair()) {
+    AccessorPair* info = AccessorPair::cast(callback);
+    return
+        (access_type == v8::ACCESS_HAS &&
+           (info->all_can_read() || info->all_can_write())) ||
+        (access_type == v8::ACCESS_GET && info->all_can_read()) ||
+        (access_type == v8::ACCESS_SET && info->all_can_write());
+  }
   return false;
 }
 
@@ -1941,6 +1947,35 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_EnableAccessChecks) {
     new_map->set_is_access_check_needed(true);
     object->set_map(new_map);
   }
+  return isolate->heap()->undefined_value();
+}
+
+
+// Transform getter or setter into something DefineAccessor can handle.
+static Handle<Object> InstantiateAccessorComponent(Isolate* isolate,
+                                                   Handle<Object> component) {
+  if (component->IsUndefined()) return isolate->factory()->null_value();
+  Handle<FunctionTemplateInfo> info =
+      Handle<FunctionTemplateInfo>::cast(component);
+  return Utils::OpenHandle(*Utils::ToLocal(info)->GetFunction());
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_SetAccessorProperty) {
+  HandleScope scope(isolate);
+  ASSERT(args.length() == 6);
+  CONVERT_ARG_HANDLE_CHECKED(JSObject, object, 0);
+  CONVERT_ARG_HANDLE_CHECKED(Name, name, 1);
+  CONVERT_ARG_HANDLE_CHECKED(Object, getter, 2);
+  CONVERT_ARG_HANDLE_CHECKED(Object, setter, 3);
+  CONVERT_SMI_ARG_CHECKED(attribute, 4);
+  CONVERT_SMI_ARG_CHECKED(access_control, 5);
+  JSObject::DefineAccessor(object,
+                           name,
+                           InstantiateAccessorComponent(isolate, getter),
+                           InstantiateAccessorComponent(isolate, setter),
+                           static_cast<PropertyAttributes>(attribute),
+                           static_cast<v8::AccessControl>(access_control));
   return isolate->heap()->undefined_value();
 }
 
@@ -8265,7 +8300,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_LazyRecompile) {
 }
 
 
-RUNTIME_FUNCTION(MaybeObject*, Runtime_ParallelRecompile) {
+RUNTIME_FUNCTION(MaybeObject*, Runtime_ConcurrentRecompile) {
   HandleScope handle_scope(isolate);
   ASSERT(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
@@ -8274,8 +8309,8 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_ParallelRecompile) {
     return isolate->heap()->undefined_value();
   }
   function->shared()->code()->set_profiler_ticks(0);
-  ASSERT(FLAG_parallel_recompilation);
-  Compiler::RecompileParallel(function);
+  ASSERT(FLAG_concurrent_recompilation);
+  Compiler::RecompileConcurrent(function);
   return isolate->heap()->undefined_value();
 }
 
@@ -8284,7 +8319,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_InstallRecompiledCode) {
   HandleScope handle_scope(isolate);
   ASSERT(args.length() == 1);
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
-  ASSERT(V8::UseCrankshaft() && FLAG_parallel_recompilation);
+  ASSERT(V8::UseCrankshaft() && FLAG_concurrent_recompilation);
   isolate->optimizing_compiler_thread()->InstallOptimizedFunctions();
   return function->code();
 }
@@ -8424,9 +8459,9 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_RunningInSimulator) {
 }
 
 
-RUNTIME_FUNCTION(MaybeObject*, Runtime_IsParallelRecompilationSupported) {
+RUNTIME_FUNCTION(MaybeObject*, Runtime_IsConcurrentRecompilationSupported) {
   HandleScope scope(isolate);
-  return FLAG_parallel_recompilation
+  return FLAG_concurrent_recompilation
       ? isolate->heap()->true_value() : isolate->heap()->false_value();
 }
 
@@ -8448,8 +8483,8 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_OptimizeFunctionOnNextCall) {
         unoptimized->set_allow_osr_at_loop_nesting_level(i);
         isolate->runtime_profiler()->AttemptOnStackReplacement(*function);
       }
-    } else if (type->IsOneByteEqualTo(STATIC_ASCII_VECTOR("parallel"))) {
-      function->MarkForParallelRecompilation();
+    } else if (type->IsOneByteEqualTo(STATIC_ASCII_VECTOR("concurrent"))) {
+      function->MarkForConcurrentRecompilation();
     }
   }
 
@@ -8481,7 +8516,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_GetOptimizationStatus) {
     }
   }
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
-  if (FLAG_parallel_recompilation && sync_with_compiler_thread) {
+  if (FLAG_concurrent_recompilation && sync_with_compiler_thread) {
     while (function->IsInRecompileQueue() ||
            function->IsMarkedForInstallingRecompiledCode()) {
       isolate->optimizing_compiler_thread()->InstallOptimizedFunctions();
@@ -12974,7 +13009,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_DebugSetScriptSource) {
 RUNTIME_FUNCTION(MaybeObject*, Runtime_SystemBreak) {
   SealHandleScope shs(isolate);
   ASSERT(args.length() == 0);
-  CPU::DebugBreak();
+  OS::DebugBreak();
   return isolate->heap()->undefined_value();
 }
 

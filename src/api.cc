@@ -676,13 +676,16 @@ void V8::DisposeGlobal(i::Object** obj) {
 }
 
 
-int V8::Eternalize(i::Isolate* isolate, i::Object** handle) {
-  return isolate->eternal_handles()->Create(isolate, *handle);
+void V8::Eternalize(Isolate* v8_isolate, Value* value, int* index) {
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(v8_isolate);
+  i::Object* object = *Utils::OpenHandle(value);
+  isolate->eternal_handles()->Create(isolate, object, index);
 }
 
 
-i::Object** V8::GetEternal(i::Isolate* isolate, int index) {
-  return isolate->eternal_handles()->Get(index).location();
+Local<Value> V8::GetEternal(Isolate* v8_isolate, int index) {
+  i::Isolate* isolate = reinterpret_cast<i::Isolate*>(v8_isolate);
+  return Utils::ToLocal(isolate->eternal_handles()->Get(index));
 }
 
 
@@ -955,21 +958,62 @@ static void InitializeTemplate(i::Handle<i::TemplateInfo> that, int type) {
 }
 
 
-void Template::Set(v8::Handle<String> name, v8::Handle<Data> value,
+static void TemplateSet(i::Isolate* isolate,
+                        v8::Template* templ,
+                        int length,
+                        v8::Handle<v8::Data>* data) {
+  i::Handle<i::Object> list(Utils::OpenHandle(templ)->property_list(), isolate);
+  if (list->IsUndefined()) {
+    list = NeanderArray().value();
+    Utils::OpenHandle(templ)->set_property_list(*list);
+  }
+  NeanderArray array(list);
+  array.add(Utils::OpenHandle(*v8::Integer::New(length)));
+  for (int i = 0; i < length; i++) {
+    i::Handle<i::Object> value = data[i].IsEmpty() ?
+        i::Handle<i::Object>(isolate->factory()->undefined_value()) :
+        Utils::OpenHandle(*data[i]);
+    array.add(value);
+  }
+}
+
+
+void Template::Set(v8::Handle<String> name,
+                   v8::Handle<Data> value,
                    v8::PropertyAttribute attribute) {
   i::Isolate* isolate = i::Isolate::Current();
   if (IsDeadCheck(isolate, "v8::Template::Set()")) return;
   ENTER_V8(isolate);
   i::HandleScope scope(isolate);
-  i::Handle<i::Object> list(Utils::OpenHandle(this)->property_list(), isolate);
-  if (list->IsUndefined()) {
-    list = NeanderArray().value();
-    Utils::OpenHandle(this)->set_property_list(*list);
-  }
-  NeanderArray array(list);
-  array.add(Utils::OpenHandle(*name));
-  array.add(Utils::OpenHandle(*value));
-  array.add(Utils::OpenHandle(*v8::Integer::New(attribute)));
+  const int kSize = 3;
+  v8::Handle<v8::Data> data[kSize] = {
+      name,
+      value,
+      v8::Integer::New(attribute)};
+  TemplateSet(isolate, this, kSize, data);
+}
+
+
+void Template::SetAccessorProperty(
+    v8::Local<v8::String> name,
+    v8::Local<FunctionTemplate> getter,
+    v8::Local<FunctionTemplate> setter,
+    v8::PropertyAttribute attribute,
+    v8::AccessControl access_control) {
+  i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
+  if (IsDeadCheck(isolate, "v8::Template::SetAccessor()")) return;
+  ENTER_V8(isolate);
+  ASSERT(!name.IsEmpty());
+  ASSERT(!getter.IsEmpty() || !setter.IsEmpty());
+  i::HandleScope scope(isolate);
+  const int kSize = 5;
+  v8::Handle<v8::Data> data[kSize] = {
+      name,
+      getter,
+      setter,
+      v8::Integer::New(attribute),
+      v8::Integer::New(access_control)};
+  TemplateSet(isolate, this, kSize, data);
 }
 
 
