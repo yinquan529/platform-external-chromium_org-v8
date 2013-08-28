@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2013 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,20 +25,68 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// The GYP based build ends up defining USING_V8_SHARED when compiling this
-// file.
-#undef USING_V8_SHARED
-#include "../include/v8.h"
+var extend = function (d, b) {
+  function __() { this.constructor = d; }
+  __.prototype = b.prototype;
+  d.prototype = new __();
+};
 
-#if V8_OS_WIN
-#include "win32-headers.h"
+var Car = (function (Super) {
+  var Car = function () {
+    var self = this;
 
-extern "C" {
-BOOL WINAPI DllMain(HANDLE hinstDLL,
-                    DWORD dwReason,
-                    LPVOID lpvReserved) {
-  // Do nothing.
-  return TRUE;
-}
-}
-#endif  // V8_OS_WIN
+    Super.call(self);
+
+    Object.defineProperties(self, {
+      "make": {
+        enumerable: true,
+        configurable: true,
+        get: function () {
+          return "Ford";
+        }
+      }
+    });
+
+    self.copy = function () {
+      throw new Error("Meant to be overriden");
+    };
+
+    return self;
+  };
+
+  extend(Car, Super);
+
+  return Car;
+}(Object));
+
+
+var SuperCar = ((function (Super) {
+  var SuperCar = function (make) {
+    var self = this;
+
+    Super.call(self);
+
+
+    Object.defineProperties(self, {
+      "make": {
+        enumerable: true,
+        configurable: true,
+        get: function () {
+          return make;
+        }
+      }
+    });
+
+    // Convert self.copy from CONSTANT to FIELD.
+    self.copy = function () { };
+
+    return self;
+  };
+  extend(SuperCar, Super);
+  return SuperCar;
+})(Car));
+
+assertEquals("Ford", new Car().make);
+assertEquals("Bugatti", new SuperCar("Bugatti").make);
+assertEquals("Lambo", new SuperCar("Lambo").make);
+assertEquals("Shelby", new SuperCar("Shelby").make);
