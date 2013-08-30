@@ -121,6 +121,8 @@ LOCAL_SRC_FILES := \
 	v8/src/once.cc \
 	v8/src/optimizing-compiler-thread.cc \
 	v8/src/parser.cc \
+	v8/src/platform/time.cc \
+	v8/src/platform/mutex.cc \
 	v8/src/preparse-data.cc \
 	v8/src/preparser.cc \
 	v8/src/prettyprinter.cc \

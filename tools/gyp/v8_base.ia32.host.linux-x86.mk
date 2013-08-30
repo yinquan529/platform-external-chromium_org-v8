@@ -120,6 +120,8 @@ LOCAL_SRC_FILES := \
 	v8/src/once.cc \
 	v8/src/optimizing-compiler-thread.cc \
 	v8/src/parser.cc \
+	v8/src/platform/time.cc \
+	v8/src/platform/mutex.cc \
 	v8/src/preparse-data.cc \
 	v8/src/preparser.cc \
 	v8/src/prettyprinter.cc \
@@ -224,6 +226,7 @@ MY_DEFS_Debug := \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \
+	'-DV8_LIBRT_NOT_AVAILABLE' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -293,6 +296,7 @@ MY_DEFS_Release := \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \
+	'-DV8_LIBRT_NOT_AVAILABLE' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'
