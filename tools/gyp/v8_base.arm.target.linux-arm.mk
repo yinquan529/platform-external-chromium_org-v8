@@ -38,7 +38,6 @@ LOCAL_SRC_FILES := \
 	v8/src/builtins.cc \
 	v8/src/cached-powers.cc \
 	v8/src/checks.cc \
-	v8/src/circular-queue.cc \
 	v8/src/code-stubs.cc \
 	v8/src/code-stubs-hydrogen.cc \
 	v8/src/codegen.cc \
@@ -48,6 +47,7 @@ LOCAL_SRC_FILES := \
 	v8/src/conversions.cc \
 	v8/src/counters.cc \
 	v8/src/cpu-profiler.cc \
+	v8/src/cpu.cc \
 	v8/src/data-flow.cc \
 	v8/src/date.cc \
 	v8/src/dateparser.cc \

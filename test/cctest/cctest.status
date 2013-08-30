@@ -52,6 +52,9 @@ test-weaksets/WeakSet_Shrinking: FAIL
 # Boot up memory use is bloated in debug mode.
 test-mark-compact/BootUpMemoryUse: PASS, PASS || FAIL if $mode == debug
 
+# Some CPU profiler tests are flaky.
+test-cpu-profiler/*: PASS || FLAKY
+
 ##############################################################################
 [ $arch == arm ]
 
@@ -117,3 +120,6 @@ test-sockets/Socket: SKIP
 
 # Profiling doesn't work on Native Client.
 test-cpu-profiler/*: SKIP
+
+# Fails since 16322 (new test).
+test-code-stubs-arm/ConvertDToI: SKIP

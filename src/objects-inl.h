@@ -675,6 +675,7 @@ TYPE_CHECKER(Oddball, ODDBALL_TYPE)
 TYPE_CHECKER(Cell, CELL_TYPE)
 TYPE_CHECKER(PropertyCell, PROPERTY_CELL_TYPE)
 TYPE_CHECKER(SharedFunctionInfo, SHARED_FUNCTION_INFO_TYPE)
+TYPE_CHECKER(OptimizedCodeEntry, OPTIMIZED_CODE_ENTRY_TYPE)
 TYPE_CHECKER(JSGeneratorObject, JS_GENERATOR_OBJECT_TYPE)
 TYPE_CHECKER(JSModule, JS_MODULE_TYPE)
 TYPE_CHECKER(JSValue, JS_VALUE_TYPE)
@@ -1312,7 +1313,7 @@ void JSObject::ValidateElements() {
 
 
 bool JSObject::ShouldTrackAllocationInfo() {
-  if (map()->CanTrackAllocationSite()) {
+  if (AllocationSite::CanTrack(map()->instance_type())) {
     if (!IsJSArray()) {
       return true;
     }
@@ -1346,6 +1347,11 @@ AllocationSiteMode AllocationSite::GetMode(ElementsKind from,
   }
 
   return DONT_TRACK_ALLOCATION_SITE;
+}
+
+
+inline bool AllocationSite::CanTrack(InstanceType type) {
+  return type == JS_ARRAY_TYPE;
 }
 
 
@@ -1569,7 +1575,7 @@ MaybeObject* JSObject::MigrateInstance() {
   // transition that matches the object. This achieves what is needed.
   Map* original_map = map();
   MaybeObject* maybe_result = GeneralizeFieldRepresentation(
-      0, Representation::None());
+      0, Representation::None(), ALLOW_AS_CONSTANT);
   JSObject* result;
   if (FLAG_trace_migration && maybe_result->To(&result)) {
     PrintInstanceMigration(stdout, original_map, result->map());
@@ -1865,14 +1871,15 @@ bool JSObject::HasFastProperties() {
 }
 
 
-bool JSObject::TooManyFastProperties(int properties,
-                                     JSObject::StoreFromKeyed store_mode) {
+bool JSObject::TooManyFastProperties(StoreFromKeyed store_mode) {
   // Allow extra fast properties if the object has more than
-  // kFastPropertiesSoftLimit in-object properties. When this is the case,
-  // it is very unlikely that the object is being used as a dictionary
-  // and there is a good chance that allowing more map transitions
-  // will be worth it.
-  int inobject = map()->inobject_properties();
+  // kFastPropertiesSoftLimit in-object properties. When this is the case, it is
+  // very unlikely that the object is being used as a dictionary and there is a
+  // good chance that allowing more map transitions will be worth it.
+  Map* map = this->map();
+  if (map->unused_property_fields() != 0) return false;
+
+  int inobject = map->inobject_properties();
 
   int limit;
   if (store_mode == CERTAINLY_NOT_STORE_FROM_KEYED) {
@@ -1880,7 +1887,7 @@ bool JSObject::TooManyFastProperties(int properties,
   } else {
     limit = Max(inobject, kFastPropertiesSoftLimit);
   }
-  return properties > limit;
+  return properties()->length() > limit;
 }
 
 
@@ -2086,28 +2093,21 @@ void FixedArray::NoWriteBarrierSet(FixedArray* array,
 
 
 void FixedArray::set_undefined(int index) {
-  ASSERT(map() != HEAP->fixed_cow_array_map());
-  set_undefined(GetHeap(), index);
-}
-
-
-void FixedArray::set_undefined(Heap* heap, int index) {
+  ASSERT(map() != GetHeap()->fixed_cow_array_map());
   ASSERT(index >= 0 && index < this->length());
-  ASSERT(!heap->InNewSpace(heap->undefined_value()));
-  WRITE_FIELD(this, kHeaderSize + index * kPointerSize,
-              heap->undefined_value());
+  ASSERT(!GetHeap()->InNewSpace(GetHeap()->undefined_value()));
+  WRITE_FIELD(this,
+              kHeaderSize + index * kPointerSize,
+              GetHeap()->undefined_value());
 }
 
 
 void FixedArray::set_null(int index) {
-  set_null(GetHeap(), index);
-}
-
-
-void FixedArray::set_null(Heap* heap, int index) {
   ASSERT(index >= 0 && index < this->length());
-  ASSERT(!heap->InNewSpace(heap->null_value()));
-  WRITE_FIELD(this, kHeaderSize + index * kPointerSize, heap->null_value());
+  ASSERT(!GetHeap()->InNewSpace(GetHeap()->null_value()));
+  WRITE_FIELD(this,
+              kHeaderSize + index * kPointerSize,
+              GetHeap()->null_value());
 }
 
 
@@ -2361,6 +2361,7 @@ PropertyType DescriptorArray::GetType(int descriptor_number) {
 
 
 int DescriptorArray::GetFieldIndex(int descriptor_number) {
+  ASSERT(GetDetails(descriptor_number).type() == FIELD);
   return GetDetails(descriptor_number).field_index();
 }
 
@@ -2572,6 +2573,7 @@ CAST_ACCESSOR(Oddball)
 CAST_ACCESSOR(Cell)
 CAST_ACCESSOR(PropertyCell)
 CAST_ACCESSOR(SharedFunctionInfo)
+CAST_ACCESSOR(OptimizedCodeEntry)
 CAST_ACCESSOR(Map)
 CAST_ACCESSOR(JSFunction)
 CAST_ACCESSOR(GlobalObject)
@@ -3591,11 +3593,6 @@ Code::Flags Code::flags() {
 }
 
 
-inline bool Map::CanTrackAllocationSite() {
-  return instance_type() == JS_ARRAY_TYPE;
-}
-
-
 void Map::set_owns_descriptors(bool is_shared) {
   set_bit_field3(OwnsDescriptors::update(bit_field3(), is_shared));
 }
@@ -4453,6 +4450,7 @@ ACCESSORS(Box, value, Object, kValueOffset)
 
 ACCESSORS(AccessorPair, getter, Object, kGetterOffset)
 ACCESSORS(AccessorPair, setter, Object, kSetterOffset)
+ACCESSORS_TO_SMI(AccessorPair, access_flags, kAccessFlagsOffset)
 
 ACCESSORS(AccessCheckInfo, named_callback, Object, kNamedCallbackOffset)
 ACCESSORS(AccessCheckInfo, indexed_callback, Object, kIndexedCallbackOffset)
@@ -4573,6 +4571,8 @@ BOOL_ACCESSORS(FunctionTemplateInfo, flag, needs_access_check,
                kNeedsAccessCheckBit)
 BOOL_ACCESSORS(FunctionTemplateInfo, flag, read_only_prototype,
                kReadOnlyPrototypeBit)
+BOOL_ACCESSORS(FunctionTemplateInfo, flag, remove_prototype,
+               kRemovePrototypeBit)
 BOOL_ACCESSORS(SharedFunctionInfo, start_position_and_type, is_expression,
                kIsExpressionBit)
 BOOL_ACCESSORS(SharedFunctionInfo, start_position_and_type, is_toplevel,
@@ -4926,6 +4926,52 @@ void SharedFunctionInfo::TryReenableOptimization() {
 }
 
 
+ACCESSORS(OptimizedCodeEntry, native_context, Context, kNativeContextOffset)
+ACCESSORS(OptimizedCodeEntry, function, JSFunction, kFunctionOffset)
+ACCESSORS(OptimizedCodeEntry, code, Code, kCodeOffset)
+ACCESSORS(OptimizedCodeEntry, literals, FixedArray, kLiteralsOffset)
+
+
+OptimizedCodeEntry* OptimizedCodeEntry::next_by_shared_info() {
+  Object* object = READ_FIELD(this, kNextBySharedInfoOffset);
+  if (object == NULL) return NULL;
+  return OptimizedCodeEntry::cast(object);
+}
+
+
+OptimizedCodeEntry* OptimizedCodeEntry::next_by_native_context() {
+  Object* object = READ_FIELD(this, kNextByNativeContextOffset);
+  if (object == NULL) return NULL;
+  return OptimizedCodeEntry::cast(object);
+}
+
+
+void OptimizedCodeEntry::set_next_by_shared_info(OptimizedCodeEntry* value,
+    WriteBarrierMode mode) {
+  WRITE_FIELD(this, kNextBySharedInfoOffset, value);
+  CONDITIONAL_WRITE_BARRIER(
+      GetHeap(), this, kNextBySharedInfoOffset, value, mode);
+}
+
+
+void OptimizedCodeEntry::set_next_by_native_context(OptimizedCodeEntry* value,
+    WriteBarrierMode mode) {
+  WRITE_FIELD(this, kNextByNativeContextOffset, value);
+  CONDITIONAL_WRITE_BARRIER(
+      GetHeap(), this, kNextByNativeContextOffset, value, mode);
+}
+
+
+bool OptimizedCodeEntry::cacheable() {
+  return static_cast<bool>(READ_BYTE_FIELD(this, kCacheableOffset));
+}
+
+
+void OptimizedCodeEntry::set_cacheable(bool val) {
+  WRITE_BYTE_FIELD(this, kCacheableOffset, static_cast<byte>(val));
+}
+
+
 bool JSFunction::IsBuiltin() {
   return context()->global_object()->IsJSBuiltinsObject();
 }
@@ -4958,9 +5004,9 @@ bool JSFunction::IsMarkedForInstallingRecompiledCode() {
 }
 
 
-bool JSFunction::IsMarkedForParallelRecompilation() {
+bool JSFunction::IsMarkedForConcurrentRecompilation() {
   return code() == GetIsolate()->builtins()->builtin(
-      Builtins::kParallelRecompile);
+      Builtins::kConcurrentRecompile);
 }
 
 
@@ -5846,6 +5892,36 @@ bool AccessorInfo::IsCompatibleReceiver(Object* receiver) {
   Object* function_template = expected_receiver_type();
   if (!function_template->IsFunctionTemplateInfo()) return true;
   return receiver->IsInstanceOf(FunctionTemplateInfo::cast(function_template));
+}
+
+
+void AccessorPair::set_access_flags(v8::AccessControl access_control) {
+  int current = access_flags()->value();
+  current = BooleanBit::set(current,
+                            kProhibitsOverwritingBit,
+                            access_control & PROHIBITS_OVERWRITING);
+  current = BooleanBit::set(current,
+                            kAllCanReadBit,
+                            access_control & ALL_CAN_READ);
+  current = BooleanBit::set(current,
+                            kAllCanWriteBit,
+                            access_control & ALL_CAN_WRITE);
+  set_access_flags(Smi::FromInt(current));
+}
+
+
+bool AccessorPair::all_can_read() {
+  return BooleanBit::get(access_flags(), kAllCanReadBit);
+}
+
+
+bool AccessorPair::all_can_write() {
+  return BooleanBit::get(access_flags(), kAllCanWriteBit);
+}
+
+
+bool AccessorPair::prohibits_overwriting() {
+  return BooleanBit::get(access_flags(), kProhibitsOverwritingBit);
 }
 
 

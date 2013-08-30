@@ -991,13 +991,6 @@ void OS::Sleep(int milliseconds) {
 }
 
 
-int OS::NumberOfCores() {
-  SYSTEM_INFO info;
-  GetSystemInfo(&info);
-  return info.dwNumberOfProcessors;
-}
-
-
 void OS::Abort() {
   if (IsDebuggerPresent() || FLAG_break_on_abort) {
     DebugBreak();
@@ -1010,6 +1003,9 @@ void OS::Abort() {
 
 void OS::DebugBreak() {
 #ifdef _MSC_VER
+  // To avoid Visual Studio runtime support the following code can be used
+  // instead
+  // __asm { int 3 }
   __debugbreak();
 #else
   ::DebugBreak();

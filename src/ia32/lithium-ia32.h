@@ -62,12 +62,12 @@ class LCodeGen;
   V(CallNewArray)                               \
   V(CallRuntime)                                \
   V(CallStub)                                   \
-  V(CheckFunction)                              \
   V(CheckInstanceType)                          \
   V(CheckMaps)                                  \
   V(CheckMapValue)                              \
   V(CheckNonSmi)                                \
   V(CheckSmi)                                   \
+  V(CheckValue)                                 \
   V(ClampDToUint8)                              \
   V(ClampIToUint8)                              \
   V(ClampTToUint8)                              \
@@ -161,6 +161,7 @@ class LCodeGen;
   V(SmiTag)                                     \
   V(SmiUntag)                                   \
   V(StackCheck)                                 \
+  V(StoreCodeEntry)                             \
   V(StoreContextSlot)                           \
   V(StoreGlobalCell)                            \
   V(StoreGlobalGeneric)                         \
@@ -1777,7 +1778,24 @@ class LDrop V8_FINAL : public LTemplateInstruction<0, 0, 0> {
 };
 
 
-class LInnerAllocatedObject V8_FINAL : public LTemplateInstruction<1, 1, 0> {
+class LStoreCodeEntry V8_FINAL: public LTemplateInstruction<0, 1, 1> {
+ public:
+  LStoreCodeEntry(LOperand* function, LOperand* code_object) {
+    inputs_[0] = function;
+    temps_[0] = code_object;
+  }
+
+  LOperand* function() { return inputs_[0]; }
+  LOperand* code_object() { return temps_[0]; }
+
+  virtual void PrintDataTo(StringStream* stream);
+
+  DECLARE_CONCRETE_INSTRUCTION(StoreCodeEntry, "store-code-entry")
+  DECLARE_HYDROGEN_ACCESSOR(StoreCodeEntry)
+};
+
+
+class LInnerAllocatedObject V8_FINAL: public LTemplateInstruction<1, 1, 0> {
  public:
   explicit LInnerAllocatedObject(LOperand* base_object) {
     inputs_[0] = base_object;
@@ -2419,16 +2437,16 @@ class LStringCharFromCode V8_FINAL : public LTemplateInstruction<1, 2, 0> {
 };
 
 
-class LCheckFunction V8_FINAL : public LTemplateInstruction<0, 1, 0> {
+class LCheckValue V8_FINAL : public LTemplateInstruction<0, 1, 0> {
  public:
-  explicit LCheckFunction(LOperand* value) {
+  explicit LCheckValue(LOperand* value) {
     inputs_[0] = value;
   }
 
   LOperand* value() { return inputs_[0]; }
 
-  DECLARE_CONCRETE_INSTRUCTION(CheckFunction, "check-function")
-  DECLARE_HYDROGEN_ACCESSOR(CheckFunction)
+  DECLARE_CONCRETE_INSTRUCTION(CheckValue, "check-value")
+  DECLARE_HYDROGEN_ACCESSOR(CheckValue)
 };
 
 

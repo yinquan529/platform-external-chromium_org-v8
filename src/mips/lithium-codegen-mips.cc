@@ -409,7 +409,7 @@ Register LCodeGen::EmitLoadRegister(LOperand* op, Register scratch) {
     } else if (r.IsDouble()) {
       Abort(kEmitLoadRegisterUnsupportedDoubleImmediate);
     } else {
-      ASSERT(r.IsTagged());
+      ASSERT(r.IsSmiOrTagged());
       __ LoadObject(scratch, literal);
     }
     return scratch;
@@ -1398,10 +1398,7 @@ void LCodeGen::DoMulI(LMulI* instr) {
     instr->hydrogen()->CheckFlag(HValue::kBailoutOnMinusZero);
 
   if (right_op->IsConstantOperand() && !can_overflow) {
-    // Use optimized code for specific constants.
-    int32_t constant = ToRepresentation(
-        LConstantOperand::cast(right_op),
-        instr->hydrogen()->right()->representation());
+    int32_t constant = ToInteger32(LConstantOperand::cast(right_op));
 
     if (bailout_on_minus_zero && (constant < 0)) {
       // The case of a null constant will be handled separately.
@@ -4067,6 +4064,16 @@ void LCodeGen::DoCallRuntime(LCallRuntime* instr) {
 }
 
 
+void LCodeGen::DoStoreCodeEntry(LStoreCodeEntry* instr) {
+  Register function = ToRegister(instr->function());
+  Register code_object = ToRegister(instr->code_object());
+  __ Addu(code_object, code_object,
+          Operand(Code::kHeaderSize - kHeapObjectTag));
+  __ sw(code_object,
+        FieldMemOperand(function, JSFunction::kCodeEntryOffset));
+}
+
+
 void LCodeGen::DoInnerAllocatedObject(LInnerAllocatedObject* instr) {
   Register result = ToRegister(instr->result());
   Register base = ToRegister(instr->base_object());
@@ -5109,20 +5116,20 @@ void LCodeGen::DoCheckInstanceType(LCheckInstanceType* instr) {
 }
 
 
-void LCodeGen::DoCheckFunction(LCheckFunction* instr) {
+void LCodeGen::DoCheckValue(LCheckValue* instr) {
   Register reg = ToRegister(instr->value());
-  Handle<JSFunction> target = instr->hydrogen()->target();
+  Handle<HeapObject> object = instr->hydrogen()->object();
   AllowDeferredHandleDereference smi_check;
-  if (isolate()->heap()->InNewSpace(*target)) {
+  if (isolate()->heap()->InNewSpace(*object)) {
     Register reg = ToRegister(instr->value());
-    Handle<Cell> cell = isolate()->factory()->NewCell(target);
+    Handle<Cell> cell = isolate()->factory()->NewCell(object);
     __ li(at, Operand(Handle<Object>(cell)));
     __ lw(at, FieldMemOperand(at, Cell::kValueOffset));
     DeoptimizeIf(ne, instr->environment(), reg,
                  Operand(at));
   } else {
     DeoptimizeIf(ne, instr->environment(), reg,
-                 Operand(target));
+                 Operand(object));
   }
 }
 
@@ -5407,8 +5414,7 @@ void LCodeGen::DoFunctionLiteral(LFunctionLiteral* instr) {
   if (!pretenure && instr->hydrogen()->has_no_literals()) {
     FastNewClosureStub stub(instr->hydrogen()->language_mode(),
                             instr->hydrogen()->is_generator());
-    __ li(a1, Operand(instr->hydrogen()->shared_info()));
-    __ push(a1);
+    __ li(a2, Operand(instr->hydrogen()->shared_info()));
     CallCode(stub.GetCode(isolate()), RelocInfo::CODE_TARGET, instr);
   } else {
     __ li(a2, Operand(instr->hydrogen()->shared_info()));

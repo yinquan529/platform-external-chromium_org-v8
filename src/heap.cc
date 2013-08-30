@@ -704,7 +704,7 @@ bool Heap::CollectGarbage(AllocationSpace space,
 
 
 int Heap::NotifyContextDisposed() {
-  if (FLAG_parallel_recompilation) {
+  if (FLAG_concurrent_recompilation) {
     // Flush the queued recompilation tasks.
     isolate()->optimizing_compiler_thread()->Flush();
   }
@@ -2429,6 +2429,7 @@ MaybeObject* Heap::AllocateAccessorPair() {
   }
   accessors->set_getter(the_hole_value(), SKIP_WRITE_BARRIER);
   accessors->set_setter(the_hole_value(), SKIP_WRITE_BARRIER);
+  accessors->set_access_flags(Smi::FromInt(0), SKIP_WRITE_BARRIER);
   return accessors;
 }
 
@@ -2822,6 +2823,12 @@ bool Heap::CreateInitialMaps() {
     if (!maybe_obj->ToObject(&obj)) return false;
   }
   set_shared_function_info_map(Map::cast(obj));
+
+  { MaybeObject* maybe_obj = AllocateMap(OPTIMIZED_CODE_ENTRY_TYPE,
+                                         OptimizedCodeEntry::kAlignedSize);
+    if (!maybe_obj->ToObject(&obj)) return false;
+  }
+  set_optimized_code_entry_map(Map::cast(obj));
 
   { MaybeObject* maybe_obj = AllocateMap(JS_MESSAGE_OBJECT_TYPE,
                                          JSMessageObject::kSize);
@@ -3413,7 +3420,7 @@ void Heap::FlushNumberStringCache() {
   // Flush the number to string cache.
   int len = number_string_cache()->length();
   for (int i = 0; i < len; i++) {
-    number_string_cache()->set_undefined(this, i);
+    number_string_cache()->set_undefined(i);
   }
 }
 
@@ -3647,6 +3654,30 @@ MaybeObject* Heap::AllocateSharedFunctionInfo(Object* name) {
   share->set_opt_count(0);
 
   return share;
+}
+
+
+MaybeObject* Heap::AllocateOptimizedCodeEntry(
+      Context* native_context,
+      JSFunction* function,
+      Code* code,
+      FixedArray* literals) {
+  OptimizedCodeEntry* entry;
+  MaybeObject* maybe = Allocate(optimized_code_entry_map(), OLD_POINTER_SPACE);
+  if (!maybe->To<OptimizedCodeEntry>(&entry)) return maybe;
+
+  // Set pointer fields.
+  entry->set_native_context(native_context);
+  entry->set_function(function);
+  entry->set_code(code);
+  entry->set_literals(literals);
+
+  // NULL-out link fields.
+  entry->set_next_by_shared_info(NULL, SKIP_WRITE_BARRIER);
+  entry->set_next_by_native_context(NULL, SKIP_WRITE_BARRIER);
+  entry->set_cacheable(false);
+
+  return entry;
 }
 
 
@@ -4970,7 +5001,7 @@ MaybeObject* Heap::CopyJSObjectWithAllocationSite(
   int object_size = map->instance_size();
   Object* clone;
 
-  ASSERT(map->CanTrackAllocationSite());
+  ASSERT(AllocationSite::CanTrack(map->instance_type()));
   ASSERT(map->instance_type() == JS_ARRAY_TYPE);
   WriteBarrierMode wb_mode = UPDATE_WRITE_BARRIER;
 
@@ -6896,7 +6927,7 @@ bool Heap::SetUp() {
 
   store_buffer()->SetUp();
 
-  if (FLAG_parallel_recompilation) relocation_mutex_ = OS::CreateMutex();
+  if (FLAG_concurrent_recompilation) relocation_mutex_ = OS::CreateMutex();
 #ifdef DEBUG
   relocation_mutex_locked_by_optimizer_thread_ = false;
 #endif  // DEBUG
@@ -8047,7 +8078,7 @@ void Heap::CheckpointObjectStats() {
 
 
 Heap::RelocationLock::RelocationLock(Heap* heap) : heap_(heap) {
-  if (FLAG_parallel_recompilation) {
+  if (FLAG_concurrent_recompilation) {
     heap_->relocation_mutex_->Lock();
 #ifdef DEBUG
     heap_->relocation_mutex_locked_by_optimizer_thread_ =

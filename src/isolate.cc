@@ -137,7 +137,7 @@ v8::TryCatch* ThreadLocalTop::TryCatchHandler() {
 
 int SystemThreadManager::NumberOfParallelSystemThreads(
     ParallelSystemComponent type) {
-  int number_of_threads = Min(OS::NumberOfCores(), kMaxThreads);
+  int number_of_threads = Min(CPU::NumberOfProcessorsOnline(), kMaxThreads);
   ASSERT(number_of_threads > 0);
   if (number_of_threads ==  1) {
     return 0;
@@ -522,7 +522,7 @@ void Isolate::IterateDeferredHandles(ObjectVisitor* visitor) {
 #ifdef DEBUG
 bool Isolate::IsDeferredHandle(Object** handle) {
   // Each DeferredHandles instance keeps the handles to one job in the
-  // parallel recompilation queue, containing a list of blocks.  Each block
+  // concurrent recompilation queue, containing a list of blocks.  Each block
   // contains kHandleBlockSize handles except for the first block, which may
   // not be fully filled.
   // We iterate through all the blocks to see whether the argument handle
@@ -1793,7 +1793,6 @@ Isolate::Isolate()
       optimizing_compiler_thread_(this),
       marking_thread_(NULL),
       sweeper_thread_(NULL),
-      callback_table_(NULL),
       stress_deopt_count_(0) {
   id_ = NoBarrier_AtomicIncrement(&isolate_counter_, 1);
   TRACE_ISOLATE(constructor);
@@ -1886,7 +1885,7 @@ void Isolate::Deinit() {
     debugger()->UnloadDebugger();
 #endif
 
-    if (FLAG_parallel_recompilation) optimizing_compiler_thread_.Stop();
+    if (FLAG_concurrent_recompilation) optimizing_compiler_thread_.Stop();
 
     if (FLAG_sweeper_threads > 0) {
       for (int i = 0; i < FLAG_sweeper_threads; i++) {
@@ -2062,9 +2061,6 @@ Isolate::~Isolate() {
 
   delete external_reference_table_;
   external_reference_table_ = NULL;
-
-  delete callback_table_;
-  callback_table_ = NULL;
 
 #ifdef ENABLE_DEBUGGER_SUPPORT
   delete debugger_;
@@ -2329,9 +2325,10 @@ bool Isolate::Init(Deserializer* des) {
     ToBooleanStub::InitializeForIsolate(this);
     ArrayConstructorStubBase::InstallDescriptors(this);
     InternalArrayConstructorStubBase::InstallDescriptors(this);
+    FastNewClosureStub::InstallDescriptors(this);
   }
 
-  if (FLAG_parallel_recompilation) optimizing_compiler_thread_.Start();
+  if (FLAG_concurrent_recompilation) optimizing_compiler_thread_.Start();
 
   if (FLAG_marking_threads > 0) {
     marking_thread_ = new MarkingThread*[FLAG_marking_threads];

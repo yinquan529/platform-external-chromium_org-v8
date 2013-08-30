@@ -195,6 +195,9 @@ void HeapObject::HeapObjectPrint(FILE* out) {
     case SHARED_FUNCTION_INFO_TYPE:
       SharedFunctionInfo::cast(this)->SharedFunctionInfoPrint(out);
       break;
+    case OPTIMIZED_CODE_ENTRY_TYPE:
+      OptimizedCodeEntry::cast(this)->OptimizedCodeEntryPrint(out);
+      break;
     case JS_MESSAGE_OBJECT_TYPE:
       JSMessageObject::cast(this)->JSMessageObjectPrint(out);
       break;
@@ -890,6 +893,25 @@ void SharedFunctionInfo::SharedFunctionInfoPrint(FILE* out) {
 }
 
 
+void OptimizedCodeEntry::OptimizedCodeEntryPrint(FILE* out) {
+  HeapObject::PrintHeader(out, "OptimizedCodeEntry");
+  PrintF(out, "\n - native_context = ");
+  native_context()->ShortPrint(out);
+  PrintF(out, "\n - function = ");
+  function()->ShortPrint(out);
+  PrintF(out, "\n - code = ");
+  code()->ShortPrint(out);
+  PrintF(out, "\n - literals = ");
+  literals()->ShortPrint(out);
+  PrintF(out, "\n - next_by_shared_info = ");
+  next_by_shared_info()->ShortPrint(out);
+  PrintF(out, "\n - next_by_native_context = ");
+  next_by_native_context()->ShortPrint(out);
+  PrintF(out, "\n - cacheable = %s", cacheable() ? "true" : "false");
+  PrintF(out, "\n");
+}
+
+
 void JSGlobalProxy::JSGlobalProxyPrint(FILE* out) {
   PrintF(out, "global_proxy ");
   JSObjectPrint(out);
@@ -985,6 +1007,8 @@ void AccessorPair::AccessorPairPrint(FILE* out) {
   getter()->ShortPrint(out);
   PrintF(out, "\n - setter: ");
   setter()->ShortPrint(out);
+  PrintF(out, "\n - flag: ");
+  access_flags()->ShortPrint(out);
 }
 
 

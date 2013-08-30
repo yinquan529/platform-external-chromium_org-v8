@@ -87,7 +87,7 @@ namespace internal {
   F(NewStrictArgumentsFast, 3, 1) \
   F(LazyCompile, 1, 1) \
   F(LazyRecompile, 1, 1) \
-  F(ParallelRecompile, 1, 1) \
+  F(ConcurrentRecompile, 1, 1) \
   F(InstallRecompiledCode, 1, 1) \
   F(NotifyDeoptimized, 1, 1) \
   F(NotifyStubFailure, 0, 1) \
@@ -95,7 +95,7 @@ namespace internal {
   F(DeoptimizeFunction, 1, 1) \
   F(ClearFunctionTypeFeedback, 1, 1) \
   F(RunningInSimulator, 0, 1) \
-  F(IsParallelRecompilationSupported, 0, 1) \
+  F(IsConcurrentRecompilationSupported, 0, 1) \
   F(OptimizeFunctionOnNextCall, -1, 1) \
   F(NeverOptimizeFunction, 1, 1) \
   F(GetOptimizationStatus, -1, 1) \
@@ -221,7 +221,8 @@ namespace internal {
   F(NumberToRadixString, 2, 1) \
   F(NumberToFixed, 2, 1) \
   F(NumberToExponential, 2, 1) \
-  F(NumberToPrecision, 2, 1)
+  F(NumberToPrecision, 2, 1) \
+  F(IsValidSmi, 1, 1)
 
 
 #define RUNTIME_FUNCTION_LIST_ALWAYS_2(F) \
@@ -258,6 +259,7 @@ namespace internal {
   F(GetTemplateField, 2, 1) \
   F(DisableAccessChecks, 1, 1) \
   F(EnableAccessChecks, 1, 1) \
+  F(SetAccessorProperty, 6, 1) \
   \
   /* Dates */ \
   F(DateCurrentTime, 0, 1) \
@@ -394,6 +396,7 @@ namespace internal {
   \
   /* Statements */ \
   F(NewClosure, 3, 1) \
+  F(NewClosureFromStubFailure, 1, 1) \
   F(NewObject, 1, 1) \
   F(NewObjectFromBound, 1, 1) \
   F(FinalizeInstanceSize, 1, 1) \

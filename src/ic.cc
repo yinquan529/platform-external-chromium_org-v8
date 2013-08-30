@@ -1615,7 +1615,8 @@ static bool LookupForWrite(Handle<JSObject> receiver,
   if (!value->FitsRepresentation(target_details.representation())) {
     Handle<Map> target(lookup->GetTransitionMapFromMap(receiver->map()));
     Map::GeneralizeRepresentation(
-        target, target->LastAdded(), value->OptimalRepresentation());
+        target, target->LastAdded(),
+        value->OptimalRepresentation(), FORCE_FIELD);
     // Lookup the transition again since the transition tree may have changed
     // entirely by the migration above.
     receiver->map()->LookupTransition(*holder, *name, lookup);
@@ -2580,7 +2581,7 @@ static BinaryOpIC::TypeInfo TypeInfoFromValue(Handle<Object> value,
   v8::internal::TypeInfo type = v8::internal::TypeInfo::FromValue(value);
   if (type.IsSmi()) return BinaryOpIC::SMI;
   if (type.IsInteger32()) {
-    if (kSmiValueSize == 32) return BinaryOpIC::SMI;
+    if (SmiValuesAre32Bits()) return BinaryOpIC::SMI;
     return BinaryOpIC::INT32;
   }
   if (type.IsNumber()) return BinaryOpIC::NUMBER;
@@ -2592,7 +2593,7 @@ static BinaryOpIC::TypeInfo TypeInfoFromValue(Handle<Object> value,
         op == Token::SAR ||
         op == Token::SHL ||
         op == Token::SHR) {
-      if (kSmiValueSize == 32) return BinaryOpIC::SMI;
+      if (SmiValuesAre32Bits()) return BinaryOpIC::SMI;
       return BinaryOpIC::INT32;
     }
     return BinaryOpIC::ODDBALL;
@@ -2670,7 +2671,7 @@ RUNTIME_FUNCTION(MaybeObject*, BinaryOp_Patch) {
       if (op == Token::DIV ||
           op == Token::MUL ||
           op == Token::SHR ||
-          kSmiValueSize == 32) {
+          SmiValuesAre32Bits()) {
         // Arithmetic on two Smi inputs has yielded a heap number.
         // That is the only way to get here from the Smi stub.
         // With 32-bit Smis, all overflows give heap numbers, but with

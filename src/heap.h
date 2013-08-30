@@ -63,6 +63,7 @@ namespace internal {
   V(Map, cell_map, CellMap)                                                    \
   V(Map, global_property_cell_map, GlobalPropertyCellMap)                      \
   V(Map, shared_function_info_map, SharedFunctionInfoMap)                      \
+  V(Map, optimized_code_entry_map, OptimizedCodeEntryMap)                      \
   V(Map, meta_map, MetaMap)                                                    \
   V(Map, heap_number_map, HeapNumberMap)                                       \
   V(Map, native_context_map, NativeContextMap)                                 \
@@ -78,9 +79,9 @@ namespace internal {
   V(DescriptorArray, empty_descriptor_array, EmptyDescriptorArray)             \
   V(Smi, stack_limit, StackLimit)                                              \
   V(Oddball, arguments_marker, ArgumentsMarker)                                \
-  /* The first 32 roots above this line should be boring from a GC point of */ \
-  /* view.  This means they are never in new space and never on a page that */ \
-  /* is being compacted.                                                    */ \
+  /* The roots above this line should be boring from a GC point of view.    */ \
+  /* This means they are never in new space and never on a page that is     */ \
+  /* being compacted.                                                       */ \
   V(FixedArray, number_string_cache, NumberStringCache)                        \
   V(Object, instanceof_cache_function, InstanceofCacheFunction)                \
   V(Object, instanceof_cache_map, InstanceofCacheMap)                          \
@@ -1097,6 +1098,16 @@ class Heap {
   // Please note this does not perform a garbage collection.
   MUST_USE_RESULT MaybeObject* AllocateSharedFunctionInfo(Object* name);
 
+  // Allocates a new OptimizedCodeEntry object.
+  // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
+  // failed.
+  // Please note this does not perform a garbage collection.
+  MUST_USE_RESULT MaybeObject* AllocateOptimizedCodeEntry(
+      Context* native_context,
+      JSFunction* function,
+      Code* code,
+      FixedArray* literals);
+
   // Allocates a new JSMessageObject object.
   // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
   // failed.
@@ -1872,13 +1883,13 @@ class Heap {
   void CheckpointObjectStats();
 
   // We don't use a ScopedLock here since we want to lock the heap
-  // only when FLAG_parallel_recompilation is true.
+  // only when FLAG_concurrent_recompilation is true.
   class RelocationLock {
    public:
     explicit RelocationLock(Heap* heap);
 
     ~RelocationLock() {
-      if (FLAG_parallel_recompilation) {
+      if (FLAG_concurrent_recompilation) {
 #ifdef DEBUG
         heap_->relocation_mutex_locked_by_optimizer_thread_ = false;
 #endif  // DEBUG
