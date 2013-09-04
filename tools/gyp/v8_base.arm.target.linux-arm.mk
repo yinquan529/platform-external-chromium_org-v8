@@ -125,6 +125,7 @@ LOCAL_SRC_FILES := \
 	v8/src/platform/condition-variable.cc \
 	v8/src/platform/mutex.cc \
 	v8/src/platform/semaphore.cc \
+	v8/src/platform/socket.cc \
 	v8/src/preparse-data.cc \
 	v8/src/preparser.cc \
 	v8/src/prettyprinter.cc \
