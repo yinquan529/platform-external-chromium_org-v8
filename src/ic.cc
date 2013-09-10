@@ -1360,7 +1360,8 @@ Handle<Code> LoadIC::ComputeLoadHandler(LookupResult* lookup,
         Handle<JSFunction> function = Handle<JSFunction>::cast(getter);
         CallOptimization call_optimization(function);
         if (call_optimization.is_simple_api_call() &&
-            call_optimization.IsCompatibleReceiver(*receiver)) {
+            call_optimization.IsCompatibleReceiver(*receiver) &&
+            FLAG_js_accessor_ics) {
           return isolate()->stub_cache()->ComputeLoadCallback(
               name, receiver, holder, call_optimization);
         }
@@ -1568,7 +1569,8 @@ Handle<Code> KeyedLoadIC::ComputeLoadHandler(LookupResult* lookup,
         Handle<JSFunction> function = Handle<JSFunction>::cast(getter);
         CallOptimization call_optimization(function);
         if (call_optimization.is_simple_api_call() &&
-            call_optimization.IsCompatibleReceiver(*receiver)) {
+            call_optimization.IsCompatibleReceiver(*receiver) &&
+            FLAG_js_accessor_ics) {
           return isolate()->stub_cache()->ComputeKeyedLoadCallback(
               name, receiver, holder, call_optimization);
         }
@@ -1831,6 +1833,14 @@ Handle<Code> StoreIC::ComputeStoreMonomorphic(LookupResult* lookup,
         if (!setter->IsJSFunction()) break;
         if (holder->IsGlobalObject()) break;
         if (!holder->HasFastProperties()) break;
+        Handle<JSFunction> function = Handle<JSFunction>::cast(setter);
+        CallOptimization call_optimization(function);
+        if (call_optimization.is_simple_api_call() &&
+            call_optimization.IsCompatibleReceiver(*receiver) &&
+            FLAG_js_accessor_ics) {
+          return isolate()->stub_cache()->ComputeStoreCallback(
+              name, receiver, holder, call_optimization, strict_mode);
+        }
         return isolate()->stub_cache()->ComputeStoreViaSetter(
             name, receiver, holder, Handle<JSFunction>::cast(setter),
             strict_mode);
