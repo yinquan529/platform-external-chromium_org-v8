@@ -285,16 +285,17 @@ void MacroAssembler::InNewSpace(Register object,
     cmpq(scratch, kScratchRegister);
     j(cc, branch, distance);
   } else {
-    ASSERT(is_int32(static_cast<int64_t>(HEAP->NewSpaceMask())));
+    ASSERT(is_int32(static_cast<int64_t>(isolate()->heap()->NewSpaceMask())));
     intptr_t new_space_start =
-        reinterpret_cast<intptr_t>(HEAP->NewSpaceStart());
+        reinterpret_cast<intptr_t>(isolate()->heap()->NewSpaceStart());
     movq(kScratchRegister, -new_space_start, RelocInfo::NONE64);
     if (scratch.is(object)) {
       addq(scratch, kScratchRegister);
     } else {
       lea(scratch, Operand(object, kScratchRegister, times_1, 0));
     }
-    and_(scratch, Immediate(static_cast<int32_t>(HEAP->NewSpaceMask())));
+    and_(scratch,
+         Immediate(static_cast<int32_t>(isolate()->heap()->NewSpaceMask())));
     j(cc, branch, distance);
   }
 }
@@ -958,7 +959,10 @@ void MacroAssembler::Set(const Operand& dst, int64_t x) {
 }
 
 
-bool MacroAssembler::IsUnsafeInt(const int x) {
+// ----------------------------------------------------------------------------
+// Smi tagging, untagging and tag detection.
+
+bool MacroAssembler::IsUnsafeInt(const int32_t x) {
   static const int kMaxBits = 17;
   return !is_intn(x, kMaxBits);
 }
@@ -988,9 +992,6 @@ void MacroAssembler::SafePush(Smi* src) {
   }
 }
 
-
-// ----------------------------------------------------------------------------
-// Smi tagging, untagging and tag detection.
 
 Register MacroAssembler::GetSmiConstant(Smi* source) {
   int value = source->value();
@@ -2196,6 +2197,17 @@ void MacroAssembler::AddSmiField(Register dst, const Operand& src) {
 }
 
 
+void MacroAssembler::Push(Smi* source) {
+  intptr_t smi = reinterpret_cast<intptr_t>(source);
+  if (is_int32(smi)) {
+    push(Immediate(static_cast<int32_t>(smi)));
+  } else {
+    Register constant = GetSmiConstant(source);
+    push(constant);
+  }
+}
+
+
 void MacroAssembler::PushInt64AsTwoSmis(Register src, Register scratch) {
   movq(scratch, src);
   // High bits.
@@ -2218,6 +2230,14 @@ void MacroAssembler::PopInt64AsTwoSmis(Register dst, Register scratch) {
   shl(dst, Immediate(64 - kSmiShift));
   or_(dst, scratch);
 }
+
+
+void MacroAssembler::Test(const Operand& src, Smi* source) {
+  testl(Operand(src, kIntSize), Immediate(source->value()));
+}
+
+
+// ----------------------------------------------------------------------------
 
 
 void MacroAssembler::JumpIfNotString(Register object,
@@ -2459,26 +2479,10 @@ void MacroAssembler::LoadGlobalCell(Register dst, Handle<Cell> cell) {
 }
 
 
-void MacroAssembler::Push(Smi* source) {
-  intptr_t smi = reinterpret_cast<intptr_t>(source);
-  if (is_int32(smi)) {
-    push(Immediate(static_cast<int32_t>(smi)));
-  } else {
-    Register constant = GetSmiConstant(source);
-    push(constant);
-  }
-}
-
-
 void MacroAssembler::Drop(int stack_elements) {
   if (stack_elements > 0) {
     addq(rsp, Immediate(stack_elements * kPointerSize));
   }
-}
-
-
-void MacroAssembler::Test(const Operand& src, Smi* source) {
-  testl(Operand(src, kIntSize), Immediate(source->value()));
 }
 
 
@@ -2986,6 +2990,117 @@ void MacroAssembler::LoadUint32(XMMRegister dst,
     Assert(below_equal, kInputGPRIsExpectedToHaveUpper32Cleared);
   }
   cvtqsi2sd(dst, src);
+}
+
+
+void MacroAssembler::SlowTruncateToI(Register result_reg,
+                                     Register input_reg,
+                                     int offset) {
+  DoubleToIStub stub(input_reg, result_reg, offset, true);
+  call(stub.GetCode(isolate()), RelocInfo::CODE_TARGET);
+}
+
+
+void MacroAssembler::TruncateHeapNumberToI(Register result_reg,
+                                           Register input_reg) {
+  Label done;
+  movsd(xmm0, FieldOperand(input_reg, HeapNumber::kValueOffset));
+  cvttsd2siq(result_reg, xmm0);
+  Set(kScratchRegister, V8_UINT64_C(0x8000000000000000));
+  cmpq(result_reg, kScratchRegister);
+  j(not_equal, &done, Label::kNear);
+
+  // Slow case.
+  if (input_reg.is(result_reg)) {
+    subq(rsp, Immediate(kDoubleSize));
+    movsd(MemOperand(rsp, 0), xmm0);
+    SlowTruncateToI(result_reg, rsp, 0);
+    addq(rsp, Immediate(kDoubleSize));
+  } else {
+    SlowTruncateToI(result_reg, input_reg);
+  }
+
+  bind(&done);
+}
+
+
+void MacroAssembler::TruncateDoubleToI(Register result_reg,
+                                       XMMRegister input_reg) {
+  Label done;
+  cvttsd2siq(result_reg, input_reg);
+  movq(kScratchRegister,
+      V8_INT64_C(0x8000000000000000),
+      RelocInfo::NONE64);
+  cmpq(result_reg, kScratchRegister);
+  j(not_equal, &done, Label::kNear);
+
+  subq(rsp, Immediate(kDoubleSize));
+  movsd(MemOperand(rsp, 0), input_reg);
+  SlowTruncateToI(result_reg, rsp, 0);
+  addq(rsp, Immediate(kDoubleSize));
+
+  bind(&done);
+}
+
+
+void MacroAssembler::DoubleToI(Register result_reg,
+                               XMMRegister input_reg,
+                               XMMRegister scratch,
+                               MinusZeroMode minus_zero_mode,
+                               Label* conversion_failed,
+                               Label::Distance dst) {
+  cvttsd2si(result_reg, input_reg);
+  cvtlsi2sd(xmm0, result_reg);
+  ucomisd(xmm0, input_reg);
+  j(not_equal, conversion_failed, dst);
+  j(parity_even, conversion_failed, dst);  // NaN.
+  if (minus_zero_mode == FAIL_ON_MINUS_ZERO) {
+    Label done;
+    // The integer converted back is equal to the original. We
+    // only have to test if we got -0 as an input.
+    testl(result_reg, result_reg);
+    j(not_zero, &done, Label::kNear);
+    movmskpd(result_reg, input_reg);
+    // Bit 0 contains the sign of the double in input_reg.
+    // If input was positive, we are ok and return 0, otherwise
+    // jump to conversion_failed.
+    andl(result_reg, Immediate(1));
+    j(not_zero, conversion_failed, dst);
+    bind(&done);
+  }
+}
+
+
+void MacroAssembler::TaggedToI(Register result_reg,
+                               Register input_reg,
+                               XMMRegister temp,
+                               MinusZeroMode minus_zero_mode,
+                               Label* lost_precision,
+                               Label::Distance dst) {
+  Label done;
+  ASSERT(!temp.is(xmm0));
+
+  // Heap number map check.
+  CompareRoot(FieldOperand(input_reg, HeapObject::kMapOffset),
+              Heap::kHeapNumberMapRootIndex);
+  j(not_equal, lost_precision, dst);
+
+  movsd(xmm0, FieldOperand(input_reg, HeapNumber::kValueOffset));
+  cvttsd2si(result_reg, xmm0);
+  cvtlsi2sd(temp, result_reg);
+  ucomisd(xmm0, temp);
+  RecordComment("Deferred TaggedToI: lost precision");
+  j(not_equal, lost_precision, dst);
+  RecordComment("Deferred TaggedToI: NaN");
+  j(parity_even, lost_precision, dst);  // NaN.
+  if (minus_zero_mode == FAIL_ON_MINUS_ZERO) {
+    testl(result_reg, result_reg);
+    j(not_zero, &done, Label::kNear);
+    movmskpd(result_reg, xmm0);
+    andl(result_reg, Immediate(1));
+    j(not_zero, lost_precision, dst);
+  }
+  bind(&done);
 }
 
 

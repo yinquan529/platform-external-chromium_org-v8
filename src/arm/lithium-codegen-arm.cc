@@ -31,6 +31,7 @@
 #include "arm/lithium-gap-resolver-arm.h"
 #include "code-stubs.h"
 #include "stub-cache.h"
+#include "hydrogen-osr.h"
 
 namespace v8 {
 namespace internal {
@@ -253,6 +254,21 @@ bool LCodeGen::GeneratePrologue() {
 }
 
 
+void LCodeGen::GenerateOsrPrologue() {
+  // Generate the OSR entry prologue at the first unknown OSR value, or if there
+  // are none, at the OSR entrypoint instruction.
+  if (osr_pc_offset_ >= 0) return;
+
+  osr_pc_offset_ = masm()->pc_offset();
+
+  // Adjust the frame size, subsuming the unoptimized frame into the
+  // optimized frame.
+  int slots = GetStackSlotCount() - graph()->osr()->UnoptimizedFrameSlots();
+  ASSERT(slots >= 0);
+  __ sub(sp, sp, Operand(slots * kPointerSize));
+}
+
+
 bool LCodeGen::GenerateBody() {
   ASSERT(is_generating());
   bool emit_instructions = true;
@@ -423,7 +439,7 @@ Register LCodeGen::EmitLoadRegister(LOperand* op, Register scratch) {
   } else if (op->IsConstantOperand()) {
     LConstantOperand* const_op = LConstantOperand::cast(op);
     HConstant* constant = chunk_->LookupConstant(const_op);
-    Handle<Object> literal = constant->handle();
+    Handle<Object> literal = constant->handle(isolate());
     Representation r = chunk_->LookupLiteralRepresentation(const_op);
     if (r.IsInteger32()) {
       ASSERT(literal->IsNumber());
@@ -458,7 +474,7 @@ DwVfpRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
   } else if (op->IsConstantOperand()) {
     LConstantOperand* const_op = LConstantOperand::cast(op);
     HConstant* constant = chunk_->LookupConstant(const_op);
-    Handle<Object> literal = constant->handle();
+    Handle<Object> literal = constant->handle(isolate());
     Representation r = chunk_->LookupLiteralRepresentation(const_op);
     if (r.IsInteger32()) {
       ASSERT(literal->IsNumber());
@@ -486,7 +502,7 @@ DwVfpRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
 Handle<Object> LCodeGen::ToHandle(LConstantOperand* op) const {
   HConstant* constant = chunk_->LookupConstant(op);
   ASSERT(chunk_->LookupLiteralRepresentation(op).IsSmiOrTagged());
-  return constant->handle();
+  return constant->handle(isolate());
 }
 
 
@@ -543,7 +559,7 @@ Operand LCodeGen::ToOperand(LOperand* op) {
       Abort(kToOperandUnsupportedDoubleImmediate);
     }
     ASSERT(r.IsTagged());
-    return Operand(constant->handle());
+    return Operand(constant->handle(isolate()));
   } else if (op->IsRegister()) {
     return Operand(ToRegister(op));
   } else if (op->IsDoubleRegister()) {
@@ -690,7 +706,7 @@ void LCodeGen::AddToTranslation(LEnvironment* environment,
     translation->StoreDoubleRegister(reg);
   } else if (op->IsConstantOperand()) {
     HConstant* constant = chunk()->LookupConstant(LConstantOperand::cast(op));
-    int src_index = DefineDeoptimizationLiteral(constant->handle());
+    int src_index = DefineDeoptimizationLiteral(constant->handle(isolate()));
     translation->StoreLiteral(src_index);
   } else {
     UNREACHABLE();
@@ -1098,8 +1114,7 @@ void LCodeGen::DoCallStub(LCallStub* instr) {
 
 
 void LCodeGen::DoUnknownOSRValue(LUnknownOSRValue* instr) {
-  // Record the address of the first unknown OSR value as the place to enter.
-  if (osr_pc_offset_ == -1) osr_pc_offset_ = masm()->pc_offset();
+  GenerateOsrPrologue();
 }
 
 
@@ -1573,17 +1588,16 @@ void LCodeGen::DoMathFloorOfDiv(LMathFloorOfDiv* instr) {
 
 
 void LCodeGen::DoMulI(LMulI* instr) {
-  Register scratch = scratch0();
   Register result = ToRegister(instr->result());
   // Note that result may alias left.
   Register left = ToRegister(instr->left());
   LOperand* right_op = instr->right();
 
-  bool can_overflow = instr->hydrogen()->CheckFlag(HValue::kCanOverflow);
   bool bailout_on_minus_zero =
     instr->hydrogen()->CheckFlag(HValue::kBailoutOnMinusZero);
+  bool overflow = instr->hydrogen()->CheckFlag(HValue::kCanOverflow);
 
-  if (right_op->IsConstantOperand() && !can_overflow) {
+  if (right_op->IsConstantOperand()) {
     int32_t constant = ToInteger32(LConstantOperand::cast(right_op));
 
     if (bailout_on_minus_zero && (constant < 0)) {
@@ -1595,7 +1609,12 @@ void LCodeGen::DoMulI(LMulI* instr) {
 
     switch (constant) {
       case -1:
-        __ rsb(result, left, Operand::Zero());
+        if (overflow) {
+          __ rsb(result, left, Operand::Zero(), SetCC);
+          DeoptimizeIf(vs, instr->environment());
+        } else {
+          __ rsb(result, left, Operand::Zero());
+        }
         break;
       case 0:
         if (bailout_on_minus_zero) {
@@ -1616,23 +1635,21 @@ void LCodeGen::DoMulI(LMulI* instr) {
         int32_t mask = constant >> 31;
         uint32_t constant_abs = (constant + mask) ^ mask;
 
-        if (IsPowerOf2(constant_abs) ||
-            IsPowerOf2(constant_abs - 1) ||
-            IsPowerOf2(constant_abs + 1)) {
-          if (IsPowerOf2(constant_abs)) {
-            int32_t shift = WhichPowerOf2(constant_abs);
-            __ mov(result, Operand(left, LSL, shift));
-          } else if (IsPowerOf2(constant_abs - 1)) {
-            int32_t shift = WhichPowerOf2(constant_abs - 1);
-            __ add(result, left, Operand(left, LSL, shift));
-          } else if (IsPowerOf2(constant_abs + 1)) {
-            int32_t shift = WhichPowerOf2(constant_abs + 1);
-            __ rsb(result, left, Operand(left, LSL, shift));
-          }
-
+        if (IsPowerOf2(constant_abs)) {
+          int32_t shift = WhichPowerOf2(constant_abs);
+          __ mov(result, Operand(left, LSL, shift));
           // Correct the sign of the result is the constant is negative.
           if (constant < 0)  __ rsb(result, result, Operand::Zero());
-
+        } else if (IsPowerOf2(constant_abs - 1)) {
+          int32_t shift = WhichPowerOf2(constant_abs - 1);
+          __ add(result, left, Operand(left, LSL, shift));
+          // Correct the sign of the result is the constant is negative.
+          if (constant < 0)  __ rsb(result, result, Operand::Zero());
+        } else if (IsPowerOf2(constant_abs + 1)) {
+          int32_t shift = WhichPowerOf2(constant_abs + 1);
+          __ rsb(result, left, Operand(left, LSL, shift));
+          // Correct the sign of the result is the constant is negative.
+          if (constant < 0)  __ rsb(result, result, Operand::Zero());
         } else {
           // Generate standard code.
           __ mov(ip, Operand(constant));
@@ -1641,12 +1658,11 @@ void LCodeGen::DoMulI(LMulI* instr) {
     }
 
   } else {
-    Register right = EmitLoadRegister(right_op, scratch);
-    if (bailout_on_minus_zero) {
-      __ orr(ToRegister(instr->temp()), left, right);
-    }
+    ASSERT(right_op->IsRegister());
+    Register right = ToRegister(right_op);
 
-    if (can_overflow) {
+    if (overflow) {
+      Register scratch = scratch0();
       // scratch:result = left * right.
       if (instr->hydrogen()->representation().IsSmi()) {
         __ SmiUntag(result, left);
@@ -1666,12 +1682,12 @@ void LCodeGen::DoMulI(LMulI* instr) {
     }
 
     if (bailout_on_minus_zero) {
-      // Bail out if the result is supposed to be negative zero.
       Label done;
+      __ teq(left, Operand(right));
+      __ b(pl, &done);
+      // Bail out if the result is minus zero.
       __ cmp(result, Operand::Zero());
-      __ b(ne, &done);
-      __ cmp(ToRegister(instr->temp()), Operand::Zero());
-      DeoptimizeIf(mi, instr->environment());
+      DeoptimizeIf(eq, instr->environment());
       __ bind(&done);
     }
   }
@@ -1868,7 +1884,7 @@ void LCodeGen::DoConstantE(LConstantE* instr) {
 
 
 void LCodeGen::DoConstantT(LConstantT* instr) {
-  Handle<Object> value = instr->value();
+  Handle<Object> value = instr->value(isolate());
   AllowDeferredHandleDereference smi_check;
   __ LoadObject(ToRegister(instr->result()), value);
 }
@@ -5643,9 +5659,10 @@ void LCodeGen::DoStackCheck(LStackCheck* instr) {
     __ LoadRoot(ip, Heap::kStackLimitRootIndex);
     __ cmp(sp, Operand(ip));
     __ b(hs, &done);
-    StackCheckStub stub;
     PredictableCodeSizeScope predictable(masm_, 2 * Assembler::kInstrSize);
-    CallCode(stub.GetCode(isolate()), RelocInfo::CODE_TARGET, instr);
+    CallCode(isolate()->builtins()->StackCheck(),
+             RelocInfo::CODE_TARGET,
+             instr);
     EnsureSpaceForLazyDeopt();
     last_lazy_deopt_pc_ = masm()->pc_offset();
     __ bind(&done);
@@ -5682,9 +5699,7 @@ void LCodeGen::DoOsrEntry(LOsrEntry* instr) {
   ASSERT(!environment->HasBeenRegistered());
   RegisterEnvironmentForDeoptimization(environment, Safepoint::kNoLazyDeopt);
 
-  // Normally we record the first unknown OSR value as the entrypoint to the OSR
-  // code, but if there were none, record the entrypoint here.
-  if (osr_pc_offset_ == -1) osr_pc_offset_ = masm()->pc_offset();
+  GenerateOsrPrologue();
 }
 
 

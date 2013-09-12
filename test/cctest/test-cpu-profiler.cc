@@ -44,14 +44,16 @@ using i::ProfileNode;
 using i::ProfilerEventsProcessor;
 using i::ScopedVector;
 using i::SmartPointer;
+using i::TimeDelta;
 using i::Vector;
 
 
 TEST(StartStop) {
-  CpuProfilesCollection profiles;
+  i::Isolate* isolate = CcTest::i_isolate();
+  CpuProfilesCollection profiles(isolate->heap());
   ProfileGenerator generator(&profiles);
-  SmartPointer<ProfilerEventsProcessor> processor(
-      new ProfilerEventsProcessor(&generator, NULL, 100));
+  SmartPointer<ProfilerEventsProcessor> processor(new ProfilerEventsProcessor(
+          &generator, NULL, TimeDelta::FromMicroseconds(100)));
   processor->Start();
   processor->StopSynchronously();
 }
@@ -139,11 +141,11 @@ TEST(CodeEvents) {
   i::Code* args3_code = CreateCode(&env);
   i::Code* args4_code = CreateCode(&env);
 
-  CpuProfilesCollection* profiles = new CpuProfilesCollection;
+  CpuProfilesCollection* profiles = new CpuProfilesCollection(isolate->heap());
   profiles->StartProfiling("", 1, false);
   ProfileGenerator generator(profiles);
-  SmartPointer<ProfilerEventsProcessor> processor(
-      new ProfilerEventsProcessor(&generator, NULL, 100));
+  SmartPointer<ProfilerEventsProcessor> processor(new ProfilerEventsProcessor(
+          &generator, NULL, TimeDelta::FromMicroseconds(100)));
   processor->Start();
   CpuProfiler profiler(isolate, profiles, &generator, *processor);
 
@@ -201,11 +203,11 @@ TEST(TickEvents) {
   i::Code* frame2_code = CreateCode(&env);
   i::Code* frame3_code = CreateCode(&env);
 
-  CpuProfilesCollection* profiles = new CpuProfilesCollection;
+  CpuProfilesCollection* profiles = new CpuProfilesCollection(isolate->heap());
   profiles->StartProfiling("", 1, false);
   ProfileGenerator generator(profiles);
-  SmartPointer<ProfilerEventsProcessor> processor(
-      new ProfilerEventsProcessor(&generator, NULL, 100));
+  SmartPointer<ProfilerEventsProcessor> processor(new ProfilerEventsProcessor(
+          &generator, NULL, TimeDelta::FromMicroseconds(100)));
   processor->Start();
   CpuProfiler profiler(isolate, profiles, &generator, *processor);
 
@@ -270,11 +272,11 @@ TEST(Issue1398) {
 
   i::Code* code = CreateCode(&env);
 
-  CpuProfilesCollection* profiles = new CpuProfilesCollection;
+  CpuProfilesCollection* profiles = new CpuProfilesCollection(isolate->heap());
   profiles->StartProfiling("", 1, false);
   ProfileGenerator generator(profiles);
-  SmartPointer<ProfilerEventsProcessor> processor(
-      new ProfilerEventsProcessor(&generator, NULL, 100));
+  SmartPointer<ProfilerEventsProcessor> processor(new ProfilerEventsProcessor(
+          &generator, NULL, TimeDelta::FromMicroseconds(100)));
   processor->Start();
   CpuProfiler profiler(isolate, profiles, &generator, *processor);
 
@@ -419,13 +421,10 @@ TEST(ProfileStartEndTime) {
   v8::HandleScope scope(env->GetIsolate());
   v8::CpuProfiler* cpu_profiler = env->GetIsolate()->GetCpuProfiler();
 
-  int64_t time_before_profiling = i::OS::Ticks();
   v8::Local<v8::String> profile_name = v8::String::New("test");
   cpu_profiler->StartCpuProfiling(profile_name);
   const v8::CpuProfile* profile = cpu_profiler->StopCpuProfiling(profile_name);
-  CHECK(time_before_profiling <= profile->GetStartTime());
   CHECK(profile->GetStartTime() <= profile->GetEndTime());
-  CHECK(profile->GetEndTime() <= i::OS::Ticks());
 }
 
 

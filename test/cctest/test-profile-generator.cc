@@ -399,7 +399,7 @@ class TestSetup {
 
 TEST(RecordTickSample) {
   TestSetup test_setup;
-  CpuProfilesCollection profiles;
+  CpuProfilesCollection profiles(CcTest::i_isolate()->heap());
   profiles.StartProfiling("", 1, false);
   ProfileGenerator generator(&profiles);
   CodeEntry* entry1 = profiles.NewCodeEntry(i::Logger::FUNCTION_TAG, "aaa");
@@ -465,7 +465,7 @@ static void CheckNodeIds(ProfileNode* node, int* expectedId) {
 
 TEST(SampleIds) {
   TestSetup test_setup;
-  CpuProfilesCollection profiles;
+  CpuProfilesCollection profiles(CcTest::i_isolate()->heap());
   profiles.StartProfiling("", 1, true);
   ProfileGenerator generator(&profiles);
   CodeEntry* entry1 = profiles.NewCodeEntry(i::Logger::FUNCTION_TAG, "aaa");
@@ -513,7 +513,7 @@ TEST(SampleIds) {
 
 TEST(NoSamples) {
   TestSetup test_setup;
-  CpuProfilesCollection profiles;
+  CpuProfilesCollection profiles(CcTest::i_isolate()->heap());
   profiles.StartProfiling("", 1, false);
   ProfileGenerator generator(&profiles);
   CodeEntry* entry1 = profiles.NewCodeEntry(i::Logger::FUNCTION_TAG, "aaa");
@@ -652,7 +652,7 @@ TEST(RecordStackTraceAtStartProfiling) {
 
 
 TEST(Issue51919) {
-  CpuProfilesCollection collection;
+  CpuProfilesCollection collection(CcTest::i_isolate()->heap());
   i::EmbeddedVector<char*,
       CpuProfilesCollection::kMaxSimultaneousProfiles> titles;
   for (int i = 0; i < CpuProfilesCollection::kMaxSimultaneousProfiles; ++i) {
@@ -781,4 +781,50 @@ TEST(LineNumber) {
   CHECK_EQ(0, GetFunctionLineNumber(&env, "lazy_func_at_6th_line"));
 
   profiler->StopProfiling("LineNumber");
+}
+
+
+
+TEST(BailoutReason) {
+  const char* extensions[] = { "v8/profiler" };
+  v8::ExtensionConfiguration config(1, extensions);
+  LocalContext env(&config);
+  v8::HandleScope hs(env->GetIsolate());
+
+  v8::CpuProfiler* profiler = env->GetIsolate()->GetCpuProfiler();
+  CHECK_EQ(0, profiler->GetProfileCount());
+  v8::Handle<v8::Script> script = v8::Script::Compile(v8::String::New(
+      "function TryCatch() {\n"
+      "  try {\n"
+      "    startProfiling();\n"
+      "  } catch (e) { };\n"
+      "}\n"
+      "function TryFinally() {\n"
+      "  try {\n"
+      "    TryCatch();\n"
+      "  } finally { };\n"
+      "}\n"
+      "TryFinally();\n"
+      "stopProfiling();"));
+  script->Run();
+  CHECK_EQ(1, profiler->GetProfileCount());
+  const v8::CpuProfile* profile = profiler->GetCpuProfile(0);
+  const v8::CpuProfileNode* current = profile->GetTopDownRoot();
+  reinterpret_cast<ProfileNode*>(
+      const_cast<v8::CpuProfileNode*>(current))->Print(0);
+  // The tree should look like this:
+  //  (root)
+  //   (anonymous function)
+  //     kTryFinally
+  //       kTryCatch
+  current = PickChild(current, i::ProfileGenerator::kAnonymousFunctionName);
+  CHECK_NE(NULL, const_cast<v8::CpuProfileNode*>(current));
+
+  current = PickChild(current, "TryFinally");
+  CHECK_NE(NULL, const_cast<v8::CpuProfileNode*>(current));
+  CHECK(!strcmp("TryFinallyStatement", current->GetBailoutReason()));
+
+  current = PickChild(current, "TryCatch");
+  CHECK_NE(NULL, const_cast<v8::CpuProfileNode*>(current));
+  CHECK(!strcmp("TryCatchStatement", current->GetBailoutReason()));
 }

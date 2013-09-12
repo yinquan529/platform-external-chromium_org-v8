@@ -41,7 +41,7 @@ struct OffsetRange;
 // forever, even if they disappear from JS heap or external storage.
 class StringsStorage {
  public:
-  StringsStorage();
+  explicit StringsStorage(Heap* heap);
   ~StringsStorage();
 
   const char* GetCopy(const char* src);
@@ -63,6 +63,7 @@ class StringsStorage {
   const char* AddOrDisposeString(char* str, uint32_t hash);
 
   // Mapping of strings by String::Hash to const char* strings.
+  uint32_t hash_seed_;
   HashMap names_;
 
   DISALLOW_COPY_AND_ASSIGN(StringsStorage);
@@ -88,6 +89,10 @@ class CodeEntry {
   INLINE(void set_shared_id(int shared_id)) { shared_id_ = shared_id; }
   INLINE(int script_id() const) { return script_id_; }
   INLINE(void set_script_id(int script_id)) { script_id_ = script_id; }
+  INLINE(void set_bailout_reason(const char* bailout_reason)) {
+    bailout_reason_ = bailout_reason;
+  }
+  INLINE(const char* bailout_reason() const) { return bailout_reason_; }
 
   INLINE(static bool is_js_function_tag(Logger::LogEventsAndTags tag));
 
@@ -105,6 +110,7 @@ class CodeEntry {
 
   static const char* const kEmptyNamePrefix;
   static const char* const kEmptyResourceName;
+  static const char* const kEmptyBailoutReason;
 
  private:
   Logger::LogEventsAndTags tag_ : 8;
@@ -116,6 +122,7 @@ class CodeEntry {
   int shared_id_;
   int script_id_;
   List<OffsetRange>* no_frame_ranges_;
+  const char* bailout_reason_;
 
   DISALLOW_COPY_AND_ASSIGN(CodeEntry);
 };
@@ -202,8 +209,8 @@ class CpuProfile {
   int samples_count() const { return samples_.length(); }
   ProfileNode* sample(int index) const { return samples_.at(index); }
 
-  int64_t start_time_us() const { return start_time_us_; }
-  int64_t end_time_us() const { return end_time_us_; }
+  Time start_time() const { return start_time_; }
+  Time end_time() const { return end_time_; }
 
   void UpdateTicksScale();
 
@@ -213,8 +220,9 @@ class CpuProfile {
   const char* title_;
   unsigned uid_;
   bool record_samples_;
-  int64_t start_time_us_;
-  int64_t end_time_us_;
+  Time start_time_;
+  Time end_time_;
+  ElapsedTimer timer_;
   List<ProfileNode*> samples_;
   ProfileTree top_down_;
 
@@ -270,7 +278,7 @@ class CodeMap {
 
 class CpuProfilesCollection {
  public:
-  CpuProfilesCollection();
+  explicit CpuProfilesCollection(Heap* heap);
   ~CpuProfilesCollection();
 
   bool StartProfiling(const char* title, unsigned uid, bool record_samples);
@@ -311,7 +319,7 @@ class CpuProfilesCollection {
 
   // Accessed by VM thread and profile generator thread.
   List<CpuProfile*> current_profiles_;
-  Semaphore* current_profiles_semaphore_;
+  Semaphore current_profiles_semaphore_;
 
   DISALLOW_COPY_AND_ASSIGN(CpuProfilesCollection);
 };

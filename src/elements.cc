@@ -154,7 +154,8 @@ static void CopyObjectToObjectElements(FixedArrayBase* from_base,
                                        ElementsKind to_kind,
                                        uint32_t to_start,
                                        int raw_copy_size) {
-  ASSERT(to_base->map() != HEAP->fixed_cow_array_map());
+  ASSERT(to_base->map() !=
+      from_base->GetIsolate()->heap()->fixed_cow_array_map());
   DisallowHeapAllocation no_allocation;
   int copy_size = raw_copy_size;
   if (raw_copy_size < 0) {
@@ -492,7 +493,6 @@ static void TraceTopFrame(Isolate* isolate) {
   }
   StackFrame* raw_frame = it.frame();
   if (raw_frame->is_internal()) {
-    Isolate* isolate = Isolate::Current();
     Code* apply_builtin = isolate->builtins()->builtin(
         Builtins::kFunctionApply);
     if (raw_frame->unchecked_code() == apply_builtin) {

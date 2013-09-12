@@ -39,7 +39,7 @@ namespace internal {
 
 void OptimizingCompilerThread::Run() {
 #ifdef DEBUG
-  { ScopedLock lock(thread_id_mutex_);
+  { LockGuard<Mutex> lock_guard(&thread_id_mutex_);
     thread_id_ = ThreadId::Current().ToInteger();
   }
 #endif
@@ -48,11 +48,11 @@ void OptimizingCompilerThread::Run() {
   DisallowHandleAllocation no_handles;
   DisallowHandleDereference no_deref;
 
-  int64_t epoch = 0;
-  if (FLAG_trace_concurrent_recompilation) epoch = OS::Ticks();
+  ElapsedTimer total_timer;
+  if (FLAG_trace_concurrent_recompilation) total_timer.Start();
 
   while (true) {
-    input_queue_semaphore_->Wait();
+    input_queue_semaphore_.Wait();
     Logger::TimerEventScope timer(
         isolate_, Logger::TimerEventScope::v8_recompile_concurrent);
 
@@ -65,9 +65,9 @@ void OptimizingCompilerThread::Run() {
         break;
       case STOP:
         if (FLAG_trace_concurrent_recompilation) {
-          time_spent_total_ = OS::Ticks() - epoch;
+          time_spent_total_ = total_timer.Elapsed();
         }
-        stop_semaphore_->Signal();
+        stop_semaphore_.Signal();
         return;
       case FLUSH:
         // The main thread is blocked, waiting for the stop semaphore.
@@ -76,18 +76,18 @@ void OptimizingCompilerThread::Run() {
         }
         Release_Store(&queue_length_, static_cast<AtomicWord>(0));
         Release_Store(&stop_thread_, static_cast<AtomicWord>(CONTINUE));
-        stop_semaphore_->Signal();
+        stop_semaphore_.Signal();
         // Return to start of consumer loop.
         continue;
     }
 
-    int64_t compiling_start = 0;
-    if (FLAG_trace_concurrent_recompilation) compiling_start = OS::Ticks();
+    ElapsedTimer compiling_timer;
+    if (FLAG_trace_concurrent_recompilation) compiling_timer.Start();
 
     CompileNext();
 
     if (FLAG_trace_concurrent_recompilation) {
-      time_spent_compiling_ += OS::Ticks() - compiling_start;
+      time_spent_compiling_ += compiling_timer.Elapsed();
     }
   }
 }
@@ -108,12 +108,18 @@ void OptimizingCompilerThread::CompileNext() {
   // The function may have already been optimized by OSR.  Simply continue.
   // Use a mutex to make sure that functions marked for install
   // are always also queued.
-  ScopedLock mark_and_queue(install_mutex_);
-  { Heap::RelocationLock relocation_lock(isolate_->heap());
+  if (!optimizing_compiler->info()->osr_ast_id().IsNone()) {
+    ASSERT(FLAG_concurrent_osr);
+    LockGuard<Mutex> access_osr_lists(&osr_list_mutex_);
+    osr_candidates_.RemoveElement(optimizing_compiler);
+    ready_for_osr_.Add(optimizing_compiler);
+  } else {
+    LockGuard<Mutex> mark_and_queue(&install_mutex_);
+    Heap::RelocationLock relocation_lock(isolate_->heap());
     AllowHandleDereference ahd;
     optimizing_compiler->info()->closure()->MarkForInstallingRecompiledCode();
+    output_queue_.Enqueue(optimizing_compiler);
   }
-  output_queue_.Enqueue(optimizing_compiler);
 }
 
 
@@ -123,7 +129,7 @@ void OptimizingCompilerThread::FlushInputQueue(bool restore_function_code) {
   while (input_queue_.Dequeue(&optimizing_compiler)) {
     // This should not block, since we have one signal on the input queue
     // semaphore corresponding to each element in the input queue.
-    input_queue_semaphore_->Wait();
+    input_queue_semaphore_.Wait();
     CompilationInfo* info = optimizing_compiler->info();
     if (restore_function_code) {
       Handle<JSFunction> function = info->closure();
@@ -145,14 +151,17 @@ void OptimizingCompilerThread::FlushOutputQueue(bool restore_function_code) {
     }
     delete info;
   }
+
+  osr_candidates_.Clear();
+  RemoveStaleOSRCandidates(0);
 }
 
 
 void OptimizingCompilerThread::Flush() {
   ASSERT(!IsOptimizerThread());
   Release_Store(&stop_thread_, static_cast<AtomicWord>(FLUSH));
-  input_queue_semaphore_->Signal();
-  stop_semaphore_->Wait();
+  input_queue_semaphore_.Signal();
+  stop_semaphore_.Wait();
   FlushOutputQueue(true);
 }
 
@@ -160,8 +169,8 @@ void OptimizingCompilerThread::Flush() {
 void OptimizingCompilerThread::Stop() {
   ASSERT(!IsOptimizerThread());
   Release_Store(&stop_thread_, static_cast<AtomicWord>(STOP));
-  input_queue_semaphore_->Signal();
-  stop_semaphore_->Wait();
+  input_queue_semaphore_.Signal();
+  stop_semaphore_.Wait();
 
   if (FLAG_concurrent_recompilation_delay != 0) {
     // Barrier when loading queue length is not necessary since the write
@@ -175,10 +184,12 @@ void OptimizingCompilerThread::Stop() {
   }
 
   if (FLAG_trace_concurrent_recompilation) {
-    double compile_time = static_cast<double>(time_spent_compiling_);
-    double total_time = static_cast<double>(time_spent_total_);
-    double percentage = (compile_time * 100) / total_time;
+    double percentage = time_spent_compiling_.PercentOf(time_spent_total_);
     PrintF("  ** Compiler thread did %.2f%% useful work\n", percentage);
+  }
+
+  if (FLAG_trace_osr && FLAG_concurrent_osr) {
+    PrintF("[COSR hit rate %d / %d]\n", osr_hits_, osr_attempts_);
   }
 
   Join();
@@ -191,11 +202,15 @@ void OptimizingCompilerThread::InstallOptimizedFunctions() {
   OptimizingCompiler* compiler;
   while (true) {
     { // Memory barrier to ensure marked functions are queued.
-      ScopedLock marked_and_queued(install_mutex_);
+      LockGuard<Mutex> marked_and_queued(&install_mutex_);
       if (!output_queue_.Dequeue(&compiler)) return;
     }
     Compiler::InstallOptimizedCode(compiler);
   }
+
+  // Remove the oldest OSR candidates that are ready so that we
+  // only have limited number of them waiting.
+  if (FLAG_concurrent_osr) RemoveStaleOSRCandidates();
 }
 
 
@@ -204,16 +219,66 @@ void OptimizingCompilerThread::QueueForOptimization(
   ASSERT(IsQueueAvailable());
   ASSERT(!IsOptimizerThread());
   Barrier_AtomicIncrement(&queue_length_, static_cast<Atomic32>(1));
-  optimizing_compiler->info()->closure()->MarkInRecompileQueue();
+  if (optimizing_compiler->info()->osr_ast_id().IsNone()) {
+    optimizing_compiler->info()->closure()->MarkInRecompileQueue();
+  } else {
+    LockGuard<Mutex> access_osr_lists(&osr_list_mutex_);
+    osr_candidates_.Add(optimizing_compiler);
+    osr_attempts_++;
+  }
   input_queue_.Enqueue(optimizing_compiler);
-  input_queue_semaphore_->Signal();
+  input_queue_semaphore_.Signal();
+}
+
+
+OptimizingCompiler* OptimizingCompilerThread::FindReadyOSRCandidate(
+    Handle<JSFunction> function, uint32_t osr_pc_offset) {
+  ASSERT(!IsOptimizerThread());
+  LockGuard<Mutex> access_osr_lists(&osr_list_mutex_);
+  for (int i = 0; i < ready_for_osr_.length(); i++) {
+    if (ready_for_osr_[i]->info()->HasSameOsrEntry(function, osr_pc_offset)) {
+      osr_hits_++;
+      return ready_for_osr_.Remove(i);
+    }
+  }
+  return NULL;
+}
+
+
+bool OptimizingCompilerThread::IsQueuedForOSR(Handle<JSFunction> function,
+                                              uint32_t osr_pc_offset) {
+  ASSERT(!IsOptimizerThread());
+  LockGuard<Mutex> access_osr_lists(&osr_list_mutex_);
+  for (int i = 0; i < osr_candidates_.length(); i++) {
+    if (osr_candidates_[i]->info()->HasSameOsrEntry(function, osr_pc_offset)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
+void OptimizingCompilerThread::RemoveStaleOSRCandidates(int limit) {
+  ASSERT(!IsOptimizerThread());
+  LockGuard<Mutex> access_osr_lists(&osr_list_mutex_);
+  while (ready_for_osr_.length() > limit) {
+    OptimizingCompiler* compiler = ready_for_osr_.Remove(0);
+    CompilationInfo* throw_away = compiler->info();
+    if (FLAG_trace_osr) {
+      PrintF("[COSR - Discarded ");
+      throw_away->closure()->PrintName();
+      PrintF(", AST id %d]\n",
+             throw_away->osr_ast_id().ToInt());
+    }
+    delete throw_away;
+  }
 }
 
 
 #ifdef DEBUG
 bool OptimizingCompilerThread::IsOptimizerThread() {
   if (!FLAG_concurrent_recompilation) return false;
-  ScopedLock lock(thread_id_mutex_);
+  LockGuard<Mutex> lock_guard(&thread_id_mutex_);
   return ThreadId::Current().ToInteger() == thread_id_;
 }
 #endif

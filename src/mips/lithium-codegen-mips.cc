@@ -31,6 +31,7 @@
 #include "mips/lithium-gap-resolver-mips.h"
 #include "code-stubs.h"
 #include "stub-cache.h"
+#include "hydrogen-osr.h"
 
 namespace v8 {
 namespace internal {
@@ -247,6 +248,21 @@ bool LCodeGen::GeneratePrologue() {
 }
 
 
+void LCodeGen::GenerateOsrPrologue() {
+  // Generate the OSR entry prologue at the first unknown OSR value, or if there
+  // are none, at the OSR entrypoint instruction.
+  if (osr_pc_offset_ >= 0) return;
+
+  osr_pc_offset_ = masm()->pc_offset();
+
+  // Adjust the frame size, subsuming the unoptimized frame into the
+  // optimized frame.
+  int slots = GetStackSlotCount() - graph()->osr()->UnoptimizedFrameSlots();
+  ASSERT(slots >= 0);
+  __ Subu(sp, sp, Operand(slots * kPointerSize));
+}
+
+
 bool LCodeGen::GenerateBody() {
   ASSERT(is_generating());
   bool emit_instructions = true;
@@ -398,7 +414,7 @@ Register LCodeGen::EmitLoadRegister(LOperand* op, Register scratch) {
   } else if (op->IsConstantOperand()) {
     LConstantOperand* const_op = LConstantOperand::cast(op);
     HConstant* constant = chunk_->LookupConstant(const_op);
-    Handle<Object> literal = constant->handle();
+    Handle<Object> literal = constant->handle(isolate());
     Representation r = chunk_->LookupLiteralRepresentation(const_op);
     if (r.IsInteger32()) {
       ASSERT(literal->IsNumber());
@@ -436,7 +452,7 @@ DoubleRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
   } else if (op->IsConstantOperand()) {
     LConstantOperand* const_op = LConstantOperand::cast(op);
     HConstant* constant = chunk_->LookupConstant(const_op);
-    Handle<Object> literal = constant->handle();
+    Handle<Object> literal = constant->handle(isolate());
     Representation r = chunk_->LookupLiteralRepresentation(const_op);
     if (r.IsInteger32()) {
       ASSERT(literal->IsNumber());
@@ -462,7 +478,7 @@ DoubleRegister LCodeGen::EmitLoadDoubleRegister(LOperand* op,
 Handle<Object> LCodeGen::ToHandle(LConstantOperand* op) const {
   HConstant* constant = chunk_->LookupConstant(op);
   ASSERT(chunk_->LookupLiteralRepresentation(op).IsSmiOrTagged());
-  return constant->handle();
+  return constant->handle(isolate());
 }
 
 
@@ -519,7 +535,7 @@ Operand LCodeGen::ToOperand(LOperand* op) {
       Abort(kToOperandUnsupportedDoubleImmediate);
     }
     ASSERT(r.IsTagged());
-    return Operand(constant->handle());
+    return Operand(constant->handle(isolate()));
   } else if (op->IsRegister()) {
     return Operand(ToRegister(op));
   } else if (op->IsDoubleRegister()) {
@@ -666,7 +682,7 @@ void LCodeGen::AddToTranslation(LEnvironment* environment,
     translation->StoreDoubleRegister(reg);
   } else if (op->IsConstantOperand()) {
     HConstant* constant = chunk()->LookupConstant(LConstantOperand::cast(op));
-    int src_index = DefineDeoptimizationLiteral(constant->handle());
+    int src_index = DefineDeoptimizationLiteral(constant->handle(isolate()));
     translation->StoreLiteral(src_index);
   } else {
     UNREACHABLE();
@@ -1071,8 +1087,7 @@ void LCodeGen::DoCallStub(LCallStub* instr) {
 
 
 void LCodeGen::DoUnknownOSRValue(LUnknownOSRValue* instr) {
-  // Record the address of the first unknown OSR value as the place to enter.
-  if (osr_pc_offset_ == -1) osr_pc_offset_ = masm()->pc_offset();
+  GenerateOsrPrologue();
 }
 
 
@@ -1686,7 +1701,7 @@ void LCodeGen::DoConstantE(LConstantE* instr) {
 
 
 void LCodeGen::DoConstantT(LConstantT* instr) {
-  Handle<Object> value = instr->value();
+  Handle<Object> value = instr->value(isolate());
   AllowDeferredHandleDereference smi_check;
   __ LoadObject(ToRegister(instr->result()), value);
 }
@@ -4853,7 +4868,7 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
   Register scratch1 = scratch0();
   Register scratch2 = ToRegister(instr->temp());
   DoubleRegister double_scratch = double_scratch0();
-  DoubleRegister double_scratch2 = ToDoubleRegister(instr->temp3());
+  DoubleRegister double_scratch2 = ToDoubleRegister(instr->temp2());
 
   ASSERT(!scratch1.is(input_reg) && !scratch1.is(scratch2));
   ASSERT(!scratch2.is(input_reg) && !scratch2.is(scratch1));
@@ -4868,11 +4883,6 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
   // of the if.
 
   if (instr->truncating()) {
-    Register scratch3 = ToRegister(instr->temp2());
-    FPURegister single_scratch = double_scratch.low();
-    ASSERT(!scratch3.is(input_reg) &&
-           !scratch3.is(scratch1) &&
-           !scratch3.is(scratch2));
     // Performs a truncating conversion of a floating point number as used by
     // the JS bitwise operations.
     Label heap_number;
@@ -4886,14 +4896,8 @@ void LCodeGen::DoDeferredTaggedToI(LTaggedToI* instr) {
     __ Branch(&done);
 
     __ bind(&heap_number);
-    __ ldc1(double_scratch2,
-            FieldMemOperand(input_reg, HeapNumber::kValueOffset));
-    __ EmitECMATruncate(input_reg,
-                        double_scratch2,
-                        single_scratch,
-                        scratch1,
-                        scratch2,
-                        scratch3);
+    __ mov(scratch2, input_reg);
+    __ TruncateHeapNumberToI(input_reg, scratch2);
   } else {
     // Deoptimize if we don't have a heap number.
     DeoptimizeIf(ne, instr->environment(), scratch1, Operand(at));
@@ -4980,20 +4984,12 @@ void LCodeGen::DoNumberUntagD(LNumberUntagD* instr) {
 void LCodeGen::DoDoubleToI(LDoubleToI* instr) {
   Register result_reg = ToRegister(instr->result());
   Register scratch1 = scratch0();
-  Register scratch2 = ToRegister(instr->temp());
   DoubleRegister double_input = ToDoubleRegister(instr->value());
 
   if (instr->truncating()) {
-    Register scratch3 = ToRegister(instr->temp2());
-    FPURegister single_scratch = double_scratch0().low();
-    __ EmitECMATruncate(result_reg,
-                        double_input,
-                        single_scratch,
-                        scratch1,
-                        scratch2,
-                        scratch3);
+    __ TruncateDoubleToI(result_reg, double_input);
   } else {
-    Register except_flag = scratch2;
+    Register except_flag = LCodeGen::scratch1();
 
     __ EmitFPUTruncate(kRoundToMinusInf,
                        result_reg,
@@ -5020,21 +5016,13 @@ void LCodeGen::DoDoubleToI(LDoubleToI* instr) {
 
 void LCodeGen::DoDoubleToSmi(LDoubleToSmi* instr) {
   Register result_reg = ToRegister(instr->result());
-  Register scratch1 = scratch0();
-  Register scratch2 = ToRegister(instr->temp());
+  Register scratch1 = LCodeGen::scratch0();
   DoubleRegister double_input = ToDoubleRegister(instr->value());
 
   if (instr->truncating()) {
-    Register scratch3 = ToRegister(instr->temp2());
-    FPURegister single_scratch = double_scratch0().low();
-    __ EmitECMATruncate(result_reg,
-                        double_input,
-                        single_scratch,
-                        scratch1,
-                        scratch2,
-                        scratch3);
+    __ TruncateDoubleToI(result_reg, double_input);
   } else {
-    Register except_flag = scratch2;
+    Register except_flag = LCodeGen::scratch1();
 
     __ EmitFPUTruncate(kRoundToMinusInf,
                        result_reg,
@@ -5670,8 +5658,9 @@ void LCodeGen::DoStackCheck(LStackCheck* instr) {
     Label done;
     __ LoadRoot(at, Heap::kStackLimitRootIndex);
     __ Branch(&done, hs, sp, Operand(at));
-    StackCheckStub stub;
-    CallCode(stub.GetCode(isolate()), RelocInfo::CODE_TARGET, instr);
+    CallCode(isolate()->builtins()->StackCheck(),
+             RelocInfo::CODE_TARGET,
+             instr);
     EnsureSpaceForLazyDeopt();
     last_lazy_deopt_pc_ = masm()->pc_offset();
     __ bind(&done);
@@ -5707,9 +5696,7 @@ void LCodeGen::DoOsrEntry(LOsrEntry* instr) {
   ASSERT(!environment->HasBeenRegistered());
   RegisterEnvironmentForDeoptimization(environment, Safepoint::kNoLazyDeopt);
 
-  // Normally we record the first unknown OSR value as the entrypoint to the OSR
-  // code, but if there were none, record the entrypoint here.
-  if (osr_pc_offset_ == -1) osr_pc_offset_ = masm()->pc_offset();
+  GenerateOsrPrologue();
 }
 
 

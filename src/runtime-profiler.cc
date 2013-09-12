@@ -172,23 +172,12 @@ void RuntimeProfiler::AttemptOnStackReplacement(JSFunction* function) {
   // any back edge in any unoptimized frame will trigger on-stack
   // replacement for that frame.
   if (FLAG_trace_osr) {
-    PrintF("[patching back edges in ");
+    PrintF("[OSR - patching back edges in ");
     function->PrintName();
-    PrintF(" for on-stack replacement]\n");
+    PrintF("]\n");
   }
 
-  // Get the interrupt stub code object to match against.  We aren't
-  // prepared to generate it, but we don't expect to have to.
-  Code* interrupt_code = NULL;
-  InterruptStub interrupt_stub;
-  bool found_code = interrupt_stub.FindCodeInCache(&interrupt_code, isolate_);
-  if (found_code) {
-    Code* replacement_code =
-        isolate_->builtins()->builtin(Builtins::kOnStackReplacement);
-    Code* unoptimized_code = shared->code();
-    Deoptimizer::PatchInterruptCode(
-        unoptimized_code, interrupt_code, replacement_code);
-  }
+  Deoptimizer::PatchInterruptCode(isolate_, shared->code());
 }
 
 

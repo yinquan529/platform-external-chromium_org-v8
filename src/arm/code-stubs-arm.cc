@@ -2491,16 +2491,6 @@ Runtime::FunctionId TranscendentalCacheStub::RuntimeFunction() {
 }
 
 
-void StackCheckStub::Generate(MacroAssembler* masm) {
-  __ TailCallRuntime(Runtime::kStackGuard, 0, 1);
-}
-
-
-void InterruptStub::Generate(MacroAssembler* masm) {
-  __ TailCallRuntime(Runtime::kInterrupt, 0, 1);
-}
-
-
 void MathPowStub::Generate(MacroAssembler* masm) {
   const Register base = r1;
   const Register exponent = r2;
@@ -2705,7 +2695,7 @@ bool CEntryStub::NeedsImmovableCode() {
 
 
 bool CEntryStub::IsPregenerated() {
-  return (!save_doubles_ || ISOLATE->fp_stubs_generated()) &&
+  return (!save_doubles_ || Isolate::Current()->fp_stubs_generated()) &&
           result_size_ == 1;
 }
 
@@ -6153,6 +6143,11 @@ void ICCompareStub::GenerateMiss(MacroAssembler* masm) {
 
 
 void DirectCEntryStub::Generate(MacroAssembler* masm) {
+  // Place the return address on the stack, making the call
+  // GC safe. The RegExp backend also relies on this.
+  __ str(lr, MemOperand(sp, 0));
+  __ blx(ip);  // Call the C++ function.
+  __ VFPEnsureFPSCRState(r2);
   __ ldr(pc, MemOperand(sp, 0));
 }
 
@@ -6161,21 +6156,9 @@ void DirectCEntryStub::GenerateCall(MacroAssembler* masm,
                                     Register target) {
   intptr_t code =
       reinterpret_cast<intptr_t>(GetCode(masm->isolate()).location());
+  __ Move(ip, target);
   __ mov(lr, Operand(code, RelocInfo::CODE_TARGET));
-
-  // Prevent literal pool emission during calculation of return address.
-  Assembler::BlockConstPoolScope block_const_pool(masm);
-
-  // Push return address (accessible to GC through exit frame pc).
-  // Note that using pc with str is deprecated.
-  Label start;
-  __ bind(&start);
-  __ add(ip, pc, Operand(Assembler::kInstrSize));
-  __ str(ip, MemOperand(sp, 0));
-  __ Jump(target);  // Call the C++ function.
-  ASSERT_EQ(Assembler::kInstrSize + Assembler::kPcLoadDelta,
-            masm->SizeOfCodeGeneratedSince(&start));
-  __ VFPEnsureFPSCRState(r2);
+  __ blx(lr);  // Call the stub.
 }
 
 
@@ -6853,6 +6836,9 @@ void ProfileEntryHookStub::Generate(MacroAssembler* masm) {
 #else
   // Under the simulator we need to indirect the entry hook through a
   // trampoline function at a known address.
+  // It additionally takes an isolate as a third parameter
+  __ mov(r2, Operand(ExternalReference::isolate_address(masm->isolate())));
+
   ApiFunction dispatcher(FUNCTION_ADDR(EntryHookTrampoline));
   __ mov(ip, Operand(ExternalReference(&dispatcher,
                                        ExternalReference::BUILTIN_CALL,

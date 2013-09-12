@@ -30,6 +30,7 @@
 #include "lithium-allocator-inl.h"
 #include "arm/lithium-arm.h"
 #include "arm/lithium-codegen-arm.h"
+#include "hydrogen-osr.h"
 
 namespace v8 {
 namespace internal {
@@ -433,6 +434,15 @@ LPlatformChunk* LChunkBuilder::Build() {
   chunk_ = new(zone()) LPlatformChunk(info(), graph());
   LPhase phase("L_Building chunk", chunk_);
   status_ = BUILDING;
+
+  // If compiling for OSR, reserve space for the unoptimized frame,
+  // which will be subsumed into this frame.
+  if (graph()->has_osr()) {
+    for (int i = graph()->osr()->UnoptimizedFrameSlots(); i > 0; i--) {
+      chunk_->GetNextSpillIndex(false);
+    }
+  }
+
   const ZoneList<HBasicBlock*>* blocks = graph()->blocks();
   for (int i = 0; i < blocks->length(); i++) {
     HBasicBlock* next = NULL;
@@ -1511,20 +1521,39 @@ LInstruction* LChunkBuilder::DoMul(HMul* instr) {
   if (instr->representation().IsSmiOrInteger32()) {
     ASSERT(instr->left()->representation().Equals(instr->representation()));
     ASSERT(instr->right()->representation().Equals(instr->representation()));
-    LOperand* left;
-    LOperand* right = UseOrConstant(instr->BetterRightOperand());
-    LOperand* temp = NULL;
-    if (instr->CheckFlag(HValue::kBailoutOnMinusZero) &&
-        (instr->CheckFlag(HValue::kCanOverflow) ||
-        !right->IsConstantOperand())) {
-      left = UseRegister(instr->BetterLeftOperand());
-      temp = TempRegister();
+    HValue* left = instr->BetterLeftOperand();
+    HValue* right = instr->BetterRightOperand();
+    LOperand* left_op;
+    LOperand* right_op;
+    bool can_overflow = instr->CheckFlag(HValue::kCanOverflow);
+    bool bailout_on_minus_zero = instr->CheckFlag(HValue::kBailoutOnMinusZero);
+
+    if (right->IsConstant()) {
+      HConstant* constant = HConstant::cast(right);
+      int32_t constant_value = constant->Integer32Value();
+      // Constants -1, 0 and 1 can be optimized if the result can overflow.
+      // For other constants, it can be optimized only without overflow.
+      if (!can_overflow || ((constant_value >= -1) && (constant_value <= 1))) {
+        left_op = UseRegisterAtStart(left);
+        right_op = UseConstant(right);
+      } else {
+        if (bailout_on_minus_zero) {
+          left_op = UseRegister(left);
+        } else {
+          left_op = UseRegisterAtStart(left);
+        }
+        right_op = UseRegister(right);
+      }
     } else {
-      left = UseRegisterAtStart(instr->BetterLeftOperand());
+      if (bailout_on_minus_zero) {
+        left_op = UseRegister(left);
+      } else {
+        left_op = UseRegisterAtStart(left);
+      }
+      right_op = UseRegister(right);
     }
-    LMulI* mul = new(zone()) LMulI(left, right, temp);
-    if (instr->CheckFlag(HValue::kCanOverflow) ||
-        instr->CheckFlag(HValue::kBailoutOnMinusZero)) {
+    LMulI* mul = new(zone()) LMulI(left_op, right_op);
+    if (can_overflow || bailout_on_minus_zero) {
       AssignEnvironment(mul);
     }
     return DefineAsRegister(mul);
@@ -2420,10 +2449,18 @@ LInstruction* LChunkBuilder::DoParameter(HParameter* instr) {
 
 
 LInstruction* LChunkBuilder::DoUnknownOSRValue(HUnknownOSRValue* instr) {
-  int spill_index = chunk()->GetNextSpillIndex(false);  // Not double-width.
-  if (spill_index > LUnallocated::kMaxFixedSlotIndex) {
-    Abort(kTooManySpillSlotsNeededForOSR);
-    spill_index = 0;
+  // Use an index that corresponds to the location in the unoptimized frame,
+  // which the optimized frame will subsume.
+  int env_index = instr->index();
+  int spill_index = 0;
+  if (instr->environment()->is_parameter_index(env_index)) {
+    spill_index = chunk()->GetParameterStackSlot(env_index);
+  } else {
+    spill_index = env_index - instr->environment()->first_local_index();
+    if (spill_index > LUnallocated::kMaxFixedSlotIndex) {
+      Abort(kTooManySpillSlotsNeededForOSR);
+      spill_index = 0;
+    }
   }
   return DefineAsSpilled(new(zone()) LUnknownOSRValue, spill_index);
 }

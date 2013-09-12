@@ -46,7 +46,8 @@ class Descriptor BASE_EMBEDDED {
  public:
   MUST_USE_RESULT MaybeObject* KeyToUniqueName() {
     if (!key_->IsUniqueName()) {
-      MaybeObject* maybe_result = HEAP->InternalizeString(String::cast(key_));
+      MaybeObject* maybe_result =
+          key_->GetIsolate()->heap()->InternalizeString(String::cast(key_));
       if (!maybe_result->To(&key_)) return maybe_result;
     }
     return key_;
@@ -225,14 +226,14 @@ class LookupResult BASE_EMBEDDED {
   void HandlerResult(JSProxy* proxy) {
     lookup_type_ = HANDLER_TYPE;
     holder_ = proxy;
-    details_ = PropertyDetails(NONE, HANDLER, Representation::None());
+    details_ = PropertyDetails(NONE, HANDLER, Representation::Tagged());
     cacheable_ = false;
   }
 
   void InterceptorResult(JSObject* holder) {
     lookup_type_ = INTERCEPTOR_TYPE;
     holder_ = holder;
-    details_ = PropertyDetails(NONE, INTERCEPTOR, Representation::None());
+    details_ = PropertyDetails(NONE, INTERCEPTOR, Representation::Tagged());
   }
 
   void NotFound() {

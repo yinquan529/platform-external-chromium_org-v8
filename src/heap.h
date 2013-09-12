@@ -63,7 +63,6 @@ namespace internal {
   V(Map, cell_map, CellMap)                                                    \
   V(Map, global_property_cell_map, GlobalPropertyCellMap)                      \
   V(Map, shared_function_info_map, SharedFunctionInfoMap)                      \
-  V(Map, optimized_code_entry_map, OptimizedCodeEntryMap)                      \
   V(Map, meta_map, MetaMap)                                                    \
   V(Map, heap_number_map, HeapNumberMap)                                       \
   V(Map, native_context_map, NativeContextMap)                                 \
@@ -524,7 +523,7 @@ class Heap {
   int InitialSemiSpaceSize() { return initial_semispace_size_; }
   intptr_t MaxOldGenerationSize() { return max_old_generation_size_; }
   intptr_t MaxExecutableSize() { return max_executable_size_; }
-  int MaxRegularSpaceAllocationSize() { return InitialSemiSpaceSize() * 3/4; }
+  int MaxRegularSpaceAllocationSize() { return InitialSemiSpaceSize() * 4/5; }
 
   // Returns the capacity of the heap in bytes w/o growing. Heap grows when
   // more spaces are needed until it reaches the limit.
@@ -1097,16 +1096,6 @@ class Heap {
   // failed.
   // Please note this does not perform a garbage collection.
   MUST_USE_RESULT MaybeObject* AllocateSharedFunctionInfo(Object* name);
-
-  // Allocates a new OptimizedCodeEntry object.
-  // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
-  // failed.
-  // Please note this does not perform a garbage collection.
-  MUST_USE_RESULT MaybeObject* AllocateOptimizedCodeEntry(
-      Context* native_context,
-      JSFunction* function,
-      Code* code,
-      FixedArray* literals);
 
   // Allocates a new JSMessageObject object.
   // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
@@ -1882,7 +1871,7 @@ class Heap {
 
   void CheckpointObjectStats();
 
-  // We don't use a ScopedLock here since we want to lock the heap
+  // We don't use a LockGuard here since we want to lock the heap
   // only when FLAG_concurrent_recompilation is true.
   class RelocationLock {
    public:
@@ -2892,7 +2881,7 @@ class TranscendentalCache {
   class SubCache {
     static const int kCacheSize = 512;
 
-    explicit SubCache(Type t);
+    explicit SubCache(Isolate* isolate, Type t);
 
     MUST_USE_RESULT inline MaybeObject* Get(double input);
 
@@ -2929,7 +2918,7 @@ class TranscendentalCache {
     DISALLOW_COPY_AND_ASSIGN(SubCache);
   };
 
-  TranscendentalCache() {
+  explicit TranscendentalCache(Isolate* isolate) : isolate_(isolate) {
     for (int i = 0; i < kNumberOfCaches; ++i) caches_[i] = NULL;
   }
 
@@ -2947,6 +2936,7 @@ class TranscendentalCache {
   // Allow access to the caches_ array as an ExternalReference.
   friend class ExternalReference;
 
+  Isolate* isolate_;
   SubCache* caches_[kNumberOfCaches];
   DISALLOW_COPY_AND_ASSIGN(TranscendentalCache);
 };

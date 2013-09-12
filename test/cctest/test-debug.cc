@@ -37,12 +37,19 @@
 #include "compilation-cache.h"
 #include "debug.h"
 #include "deoptimizer.h"
+#include "frames.h"
 #include "platform.h"
+#include "platform/condition-variable.h"
+#include "platform/socket.h"
 #include "stub-cache.h"
 #include "utils.h"
 #undef V8_DISABLE_DEPRECATIONS
 
 
+using ::v8::internal::Mutex;
+using ::v8::internal::LockGuard;
+using ::v8::internal::ConditionVariable;
+using ::v8::internal::Semaphore;
 using ::v8::internal::EmbeddedVector;
 using ::v8::internal::Object;
 using ::v8::internal::OS;
@@ -54,6 +61,7 @@ using ::v8::internal::Debug;
 using ::v8::internal::Debugger;
 using ::v8::internal::CommandMessage;
 using ::v8::internal::CommandMessageQueue;
+using ::v8::internal::StackFrame;
 using ::v8::internal::StepAction;
 using ::v8::internal::StepIn;  // From StepAction enum
 using ::v8::internal::StepNext;  // From StepAction enum
@@ -384,7 +392,7 @@ static void ChangeBreakOnExceptionFromJS(bool caught, bool uncaught) {
 // Prepare to step to next break location.
 static void PrepareStep(StepAction step_action) {
   v8::internal::Debug* debug = v8::internal::Isolate::Current()->debug();
-  debug->PrepareStep(step_action, 1);
+  debug->PrepareStep(step_action, 1, StackFrame::NO_ID);
 }
 
 
@@ -4197,7 +4205,8 @@ TEST(DisableBreak) {
 
   {
     v8::Debug::DebugBreak();
-    v8::internal::DisableBreak disable_break(true);
+    i::Isolate* isolate = reinterpret_cast<i::Isolate*>(env->GetIsolate());
+    v8::internal::DisableBreak disable_break(isolate, true);
     f->Call(env->Global(), 0, NULL);
     CHECK_EQ(1, break_point_hit_count);
   }
@@ -4666,81 +4675,61 @@ TEST(NoHiddenProperties) {
 
 // Support classes
 
-// Provides synchronization between k threads, where k is an input to the
-// constructor.  The Wait() call blocks a thread until it is called for the
-// k'th time, then all calls return.  Each ThreadBarrier object can only
-// be used once.
-class ThreadBarrier {
+// Provides synchronization between N threads, where N is a template parameter.
+// The Wait() call blocks a thread until it is called for the Nth time, then all
+// calls return.  Each ThreadBarrier object can only be used once.
+template <int N>
+class ThreadBarrier V8_FINAL {
  public:
-  explicit ThreadBarrier(int num_threads);
-  ~ThreadBarrier();
-  void Wait();
- private:
-  int num_threads_;
-  int num_blocked_;
-  v8::internal::Mutex* lock_;
-  v8::internal::Semaphore* sem_;
-  bool invalid_;
-};
+  ThreadBarrier() : num_blocked_(0) {}
 
-ThreadBarrier::ThreadBarrier(int num_threads)
-    : num_threads_(num_threads), num_blocked_(0) {
-  lock_ = OS::CreateMutex();
-  sem_ = OS::CreateSemaphore(0);
-  invalid_ = false;  // A barrier may only be used once.  Then it is invalid.
-}
-
-
-// Do not call, due to race condition with Wait().
-// Could be resolved with Pthread condition variables.
-ThreadBarrier::~ThreadBarrier() {
-  lock_->Lock();
-  delete lock_;
-  delete sem_;
-}
-
-
-void ThreadBarrier::Wait() {
-  lock_->Lock();
-  CHECK(!invalid_);
-  if (num_blocked_ == num_threads_ - 1) {
-    // Signal and unblock all waiting threads.
-    for (int i = 0; i < num_threads_ - 1; ++i) {
-      sem_->Signal();
+  ~ThreadBarrier() {
+    LockGuard<Mutex> lock_guard(&mutex_);
+    if (num_blocked_ != 0) {
+      CHECK_EQ(N, num_blocked_);
     }
-    invalid_ = true;
-    printf("BARRIER\n\n");
-    fflush(stdout);
-    lock_->Unlock();
-  } else {  // Wait for the semaphore.
-    ++num_blocked_;
-    lock_->Unlock();  // Potential race condition with destructor because
-    sem_->Wait();  // these two lines are not atomic.
   }
-}
+
+  void Wait() {
+    LockGuard<Mutex> lock_guard(&mutex_);
+    CHECK_LT(num_blocked_, N);
+    num_blocked_++;
+    if (N == num_blocked_) {
+      // Signal and unblock all waiting threads.
+      cv_.NotifyAll();
+      printf("BARRIER\n\n");
+      fflush(stdout);
+    } else {  // Wait for the semaphore.
+      while (num_blocked_ < N) {
+        cv_.Wait(&mutex_);
+      }
+    }
+    CHECK_EQ(N, num_blocked_);
+  }
+
+ private:
+  ConditionVariable cv_;
+  Mutex mutex_;
+  int num_blocked_;
+
+  STATIC_CHECK(N > 0);
+
+  DISALLOW_COPY_AND_ASSIGN(ThreadBarrier);
+};
 
 
 // A set containing enough barriers and semaphores for any of the tests.
 class Barriers {
  public:
-  Barriers();
-  void Initialize();
-  ThreadBarrier barrier_1;
-  ThreadBarrier barrier_2;
-  ThreadBarrier barrier_3;
-  ThreadBarrier barrier_4;
-  ThreadBarrier barrier_5;
-  v8::internal::Semaphore* semaphore_1;
-  v8::internal::Semaphore* semaphore_2;
+  Barriers() : semaphore_1(0), semaphore_2(0) {}
+  ThreadBarrier<2> barrier_1;
+  ThreadBarrier<2> barrier_2;
+  ThreadBarrier<2> barrier_3;
+  ThreadBarrier<2> barrier_4;
+  ThreadBarrier<2> barrier_5;
+  v8::internal::Semaphore semaphore_1;
+  v8::internal::Semaphore semaphore_2;
 };
-
-Barriers::Barriers() : barrier_1(2), barrier_2(2),
-    barrier_3(2), barrier_4(2), barrier_5(2) {}
-
-void Barriers::Initialize() {
-  semaphore_1 = OS::CreateSemaphore(0);
-  semaphore_2 = OS::CreateSemaphore(0);
-}
 
 
 // We match parts of the message to decide if it is a break message.
@@ -4853,12 +4842,12 @@ static void MessageHandler(const v8::Debug::Message& message) {
   if (IsBreakEventMessage(*ascii)) {
     // Lets test script wait until break occurs to send commands.
     // Signals when a break is reported.
-    message_queue_barriers.semaphore_2->Signal();
+    message_queue_barriers.semaphore_2.Signal();
   }
 
   // Allow message handler to block on a semaphore, to test queueing of
   // messages while blocked.
-  message_queue_barriers.semaphore_1->Wait();
+  message_queue_barriers.semaphore_1.Wait();
 }
 
 
@@ -4893,7 +4882,7 @@ void MessageQueueDebuggerThread::Run() {
 
   /* Interleaved sequence of actions by the two threads:*/
   // Main thread compiles and runs source_1
-  message_queue_barriers.semaphore_1->Signal();
+  message_queue_barriers.semaphore_1.Signal();
   message_queue_barriers.barrier_1.Wait();
   // Post 6 commands, filling the command queue and making it expand.
   // These calls return immediately, but the commands stay on the queue
@@ -4914,15 +4903,15 @@ void MessageQueueDebuggerThread::Run() {
   // All the commands added so far will fail to execute as long as call stack
   // is empty on beforeCompile event.
   for (int i = 0; i < 6 ; ++i) {
-    message_queue_barriers.semaphore_1->Signal();
+    message_queue_barriers.semaphore_1.Signal();
   }
   message_queue_barriers.barrier_3.Wait();
   // Main thread compiles and runs source_3.
   // Don't stop in the afterCompile handler.
-  message_queue_barriers.semaphore_1->Signal();
+  message_queue_barriers.semaphore_1.Signal();
   // source_3 includes a debugger statement, which causes a break event.
   // Wait on break event from hitting "debugger" statement
-  message_queue_barriers.semaphore_2->Wait();
+  message_queue_barriers.semaphore_2.Wait();
   // These should execute after the "debugger" statement in source_2
   v8::Debug::SendCommand(buffer_1, AsciiToUtf16(command_1, buffer_1));
   v8::Debug::SendCommand(buffer_2, AsciiToUtf16(command_2, buffer_2));
@@ -4930,15 +4919,15 @@ void MessageQueueDebuggerThread::Run() {
   v8::Debug::SendCommand(buffer_2, AsciiToUtf16(command_single_step, buffer_2));
   // Run after 2 break events, 4 responses.
   for (int i = 0; i < 6 ; ++i) {
-    message_queue_barriers.semaphore_1->Signal();
+    message_queue_barriers.semaphore_1.Signal();
   }
   // Wait on break event after a single step executes.
-  message_queue_barriers.semaphore_2->Wait();
+  message_queue_barriers.semaphore_2.Wait();
   v8::Debug::SendCommand(buffer_1, AsciiToUtf16(command_2, buffer_1));
   v8::Debug::SendCommand(buffer_2, AsciiToUtf16(command_continue, buffer_2));
   // Run after 2 responses.
   for (int i = 0; i < 2 ; ++i) {
-    message_queue_barriers.semaphore_1->Signal();
+    message_queue_barriers.semaphore_1.Signal();
   }
   // Main thread continues running source_3 to end, waits for this thread.
 }
@@ -4951,7 +4940,6 @@ TEST(MessageQueues) {
   // Create a V8 environment
   DebugLocalContext env;
   v8::HandleScope scope(env->GetIsolate());
-  message_queue_barriers.Initialize();
   v8::Debug::SetMessageHandler2(MessageHandler);
   message_queue_debugger_thread.Start();
 
@@ -5187,8 +5175,6 @@ TEST(ThreadedDebugging) {
   V8Thread v8_thread;
 
   // Create a V8 environment
-  threaded_debugging_barriers.Initialize();
-
   v8_thread.Start();
   debugger_thread.Start();
 
@@ -5234,10 +5220,10 @@ static void BreakpointsMessageHandler(const v8::Debug::Message& message) {
   if (IsBreakEventMessage(print_buffer)) {
     break_event_breakpoint_id =
         GetBreakpointIdFromBreakEventMessage(print_buffer);
-    breakpoints_barriers->semaphore_1->Signal();
+    breakpoints_barriers->semaphore_1.Signal();
   } else if (IsEvaluateResponseMessage(print_buffer)) {
     evaluate_int_result = GetEvaluateIntResult(print_buffer);
-    breakpoints_barriers->semaphore_1->Signal();
+    breakpoints_barriers->semaphore_1.Signal();
   }
 }
 
@@ -5346,42 +5332,42 @@ void BreakpointsDebuggerThread::Run() {
   breakpoints_barriers->barrier_2.Wait();
   // V8 thread starts compiling source_2.
   // Automatic break happens, to run queued commands
-  // breakpoints_barriers->semaphore_1->Wait();
+  // breakpoints_barriers->semaphore_1.Wait();
   // Commands 1 through 3 run, thread continues.
   // v8 thread runs source_2 to breakpoint in cat().
   // message callback receives break event.
-  breakpoints_barriers->semaphore_1->Wait();
+  breakpoints_barriers->semaphore_1.Wait();
   // Must have hit breakpoint #1.
   CHECK_EQ(1, break_event_breakpoint_id);
   // 4:Evaluate dog() (which has a breakpoint).
   v8::Debug::SendCommand(buffer, AsciiToUtf16(command_3, buffer));
   // V8 thread hits breakpoint in dog().
-  breakpoints_barriers->semaphore_1->Wait();  // wait for break event
+  breakpoints_barriers->semaphore_1.Wait();  // wait for break event
   // Must have hit breakpoint #2.
   CHECK_EQ(2, break_event_breakpoint_id);
   // 5:Evaluate (x + 1).
   v8::Debug::SendCommand(buffer, AsciiToUtf16(command_4, buffer));
   // Evaluate (x + 1) finishes.
-  breakpoints_barriers->semaphore_1->Wait();
+  breakpoints_barriers->semaphore_1.Wait();
   // Must have result 108.
   CHECK_EQ(108, evaluate_int_result);
   // 6:Continue evaluation of dog().
   v8::Debug::SendCommand(buffer, AsciiToUtf16(command_5, buffer));
   // Evaluate dog() finishes.
-  breakpoints_barriers->semaphore_1->Wait();
+  breakpoints_barriers->semaphore_1.Wait();
   // Must have result 107.
   CHECK_EQ(107, evaluate_int_result);
   // 7:Continue evaluation of source_2, finish cat(17), hit breakpoint
   // in cat(19).
   v8::Debug::SendCommand(buffer, AsciiToUtf16(command_6, buffer));
   // Message callback gets break event.
-  breakpoints_barriers->semaphore_1->Wait();  // wait for break event
+  breakpoints_barriers->semaphore_1.Wait();  // wait for break event
   // Must have hit breakpoint #1.
   CHECK_EQ(1, break_event_breakpoint_id);
   // 8: Evaluate dog() with breaks disabled.
   v8::Debug::SendCommand(buffer, AsciiToUtf16(command_7, buffer));
   // Evaluate dog() finishes.
-  breakpoints_barriers->semaphore_1->Wait();
+  breakpoints_barriers->semaphore_1.Wait();
   // Must have result 116.
   CHECK_EQ(116, evaluate_int_result);
   // 9: Continue evaluation of source2, reach end.
@@ -5397,7 +5383,6 @@ void TestRecursiveBreakpointsGeneric(bool global_evaluate) {
 
   // Create a V8 environment
   Barriers stack_allocated_breakpoints_barriers;
-  stack_allocated_breakpoints_barriers.Initialize();
   breakpoints_barriers = &stack_allocated_breakpoints_barriers;
 
   breakpoints_v8_thread.Start();
@@ -5790,7 +5775,7 @@ static void HostDispatchMessageHandler(const v8::Debug::Message& message) {
 
 
 static void HostDispatchDispatchHandler() {
-  host_dispatch_barriers->semaphore_1->Signal();
+  host_dispatch_barriers->semaphore_1.Signal();
 }
 
 
@@ -5842,7 +5827,7 @@ void HostDispatchDebuggerThread::Run() {
   // v8 thread starts compiling source_2.
   // Break happens, to run queued commands and host dispatches.
   // Wait for host dispatch to be processed.
-  host_dispatch_barriers->semaphore_1->Wait();
+  host_dispatch_barriers->semaphore_1.Wait();
   // 2: Continue evaluation
   v8::Debug::SendCommand(buffer, AsciiToUtf16(command_2, buffer));
 }
@@ -5855,7 +5840,6 @@ TEST(DebuggerHostDispatch) {
 
   // Create a V8 environment
   Barriers stack_allocated_host_dispatch_barriers;
-  stack_allocated_host_dispatch_barriers.Initialize();
   host_dispatch_barriers = &stack_allocated_host_dispatch_barriers;
 
   host_dispatch_v8_thread.Start();
@@ -5889,7 +5873,7 @@ Barriers* debug_message_dispatch_barriers;
 
 
 static void DebugMessageHandler() {
-  debug_message_dispatch_barriers->semaphore_1->Signal();
+  debug_message_dispatch_barriers->semaphore_1.Signal();
 }
 
 
@@ -5903,7 +5887,7 @@ void DebugMessageDispatchV8Thread::Run() {
 
   CompileRun("var y = 1 + 2;\n");
   debug_message_dispatch_barriers->barrier_1.Wait();
-  debug_message_dispatch_barriers->semaphore_1->Wait();
+  debug_message_dispatch_barriers->semaphore_1.Wait();
   debug_message_dispatch_barriers->barrier_2.Wait();
 }
 
@@ -5923,7 +5907,6 @@ TEST(DebuggerDebugMessageDispatch) {
 
   // Create a V8 environment
   Barriers stack_allocated_debug_message_dispatch_barriers;
-  stack_allocated_debug_message_dispatch_barriers.Initialize();
   debug_message_dispatch_barriers =
       &stack_allocated_debug_message_dispatch_barriers;
 
@@ -5951,9 +5934,6 @@ TEST(DebuggerAgent) {
 
   bool ok;
 
-  // Initialize the socket library.
-  i::Socket::SetUp();
-
   // Test starting and stopping the agent without any client connection.
   debugger->StartAgent("test", kPort1);
   debugger->StopAgent();
@@ -5962,7 +5942,7 @@ TEST(DebuggerAgent) {
   ok = debugger->StartAgent("test", kPort2);
   CHECK(ok);
   debugger->WaitForAgent();
-  i::Socket* client = i::OS::CreateSocket();
+  i::Socket* client = new i::Socket;
   ok = client->Connect("localhost", port2_str);
   CHECK(ok);
   // It is important to wait for a message from the agent. Otherwise,
@@ -5976,8 +5956,9 @@ TEST(DebuggerAgent) {
 
   // Test starting and stopping the agent with the required port already
   // occoupied.
-  i::Socket* server = i::OS::CreateSocket();
-  server->Bind(kPort3);
+  i::Socket* server = new i::Socket;
+  ok = server->Bind(kPort3);
+  CHECK(ok);
 
   debugger->StartAgent("test", kPort3);
   debugger->StopAgent();
@@ -5993,17 +5974,16 @@ class DebuggerAgentProtocolServerThread : public i::Thread {
         port_(port),
         server_(NULL),
         client_(NULL),
-        listening_(OS::CreateSemaphore(0)) {
+        listening_(0) {
   }
   ~DebuggerAgentProtocolServerThread() {
     // Close both sockets.
     delete client_;
     delete server_;
-    delete listening_;
   }
 
   void Run();
-  void WaitForListening() { listening_->Wait(); }
+  void WaitForListening() { listening_.Wait(); }
   char* body() { return *body_; }
 
  private:
@@ -6011,7 +5991,7 @@ class DebuggerAgentProtocolServerThread : public i::Thread {
   i::SmartArrayPointer<char> body_;
   i::Socket* server_;  // Server socket used for bind/accept.
   i::Socket* client_;  // Single client connection used by the test.
-  i::Semaphore* listening_;  // Signalled when the server is in listen mode.
+  i::Semaphore listening_;  // Signalled when the server is in listen mode.
 };
 
 
@@ -6019,7 +5999,7 @@ void DebuggerAgentProtocolServerThread::Run() {
   bool ok;
 
   // Create the server socket and bind it to the requested port.
-  server_ = i::OS::CreateSocket();
+  server_ = new i::Socket;
   CHECK(server_ != NULL);
   ok = server_->Bind(port_);
   CHECK(ok);
@@ -6027,7 +6007,7 @@ void DebuggerAgentProtocolServerThread::Run() {
   // Listen for new connections.
   ok = server_->Listen(1);
   CHECK(ok);
-  listening_->Signal();
+  listening_.Signal();
 
   // Accept a connection.
   client_ = server_->Accept();
@@ -6049,9 +6029,6 @@ TEST(DebuggerAgentProtocolOverflowHeader) {
   char port_str[kPortBufferLen];
   OS::SNPrintF(i::Vector<char>(port_str, kPortBufferLen), "%d", kPort);
 
-  // Initialize the socket library.
-  i::Socket::SetUp();
-
   // Create a socket server to receive a debugger agent message.
   DebuggerAgentProtocolServerThread* server =
       new DebuggerAgentProtocolServerThread(kPort);
@@ -6059,7 +6036,7 @@ TEST(DebuggerAgentProtocolOverflowHeader) {
   server->WaitForListening();
 
   // Connect.
-  i::Socket* client = i::OS::CreateSocket();
+  i::Socket* client = new i::Socket;
   CHECK(client != NULL);
   bool ok = client->Connect(kLocalhost, port_str);
   CHECK(ok);
@@ -6076,7 +6053,8 @@ TEST(DebuggerAgentProtocolOverflowHeader) {
   buffer[kBufferSize - 3] = '0';
   buffer[kBufferSize - 2] = '\r';
   buffer[kBufferSize - 1] = '\n';
-  client->Send(buffer, kBufferSize);
+  int result = client->Send(buffer, kBufferSize);
+  CHECK_EQ(kBufferSize, result);
 
   // Short key and long value: X:XXXX....XXXX\r\n.
   buffer[0] = 'X';
@@ -6086,13 +6064,16 @@ TEST(DebuggerAgentProtocolOverflowHeader) {
   }
   buffer[kBufferSize - 2] = '\r';
   buffer[kBufferSize - 1] = '\n';
-  client->Send(buffer, kBufferSize);
+  result = client->Send(buffer, kBufferSize);
+  CHECK_EQ(kBufferSize, result);
 
   // Add empty body to request.
   const char* content_length_zero_header = "Content-Length:0\r\n";
-  client->Send(content_length_zero_header,
-               StrLength(content_length_zero_header));
-  client->Send("\r\n", 2);
+  int length = StrLength(content_length_zero_header);
+  result = client->Send(content_length_zero_header, length);
+  CHECK_EQ(length, result);
+  result = client->Send("\r\n", 2);
+  CHECK_EQ(2, result);
 
   // Wait until data is received.
   server->Join();
@@ -6640,7 +6621,7 @@ TEST(ScriptCollectedEventContext) {
         v8::Local<v8::Context>::New(isolate, context);
     local_context->Exit();
   }
-  context.Dispose(isolate);
+  context.Dispose();
 
   // Do garbage collection to collect the script above which is no longer
   // referenced.

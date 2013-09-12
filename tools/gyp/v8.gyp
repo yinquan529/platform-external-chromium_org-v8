@@ -436,8 +436,19 @@
         '../../src/optimizing-compiler-thread.cc',
         '../../src/parser.cc',
         '../../src/parser.h',
+        '../../src/platform/elapsed-timer.h',
+        '../../src/platform/time.cc',
+        '../../src/platform/time.h',
         '../../src/platform-posix.h',
         '../../src/platform.h',
+        '../../src/platform/condition-variable.cc',
+        '../../src/platform/condition-variable.h',
+        '../../src/platform/mutex.cc',
+        '../../src/platform/mutex.h',
+        '../../src/platform/semaphore.cc',
+        '../../src/platform/semaphore.h',
+        '../../src/platform/socket.cc',
+        '../../src/platform/socket.h',
         '../../src/preparse-data-format.h',
         '../../src/preparse-data.cc',
         '../../src/preparse-data.h',
@@ -520,6 +531,8 @@
         '../../src/utils-inl.h',
         '../../src/utils.cc',
         '../../src/utils.h',
+        '../../src/utils/random-number-generator.cc',
+        '../../src/utils/random-number-generator.h',
         '../../src/v8-counters.cc',
         '../../src/v8-counters.h',
         '../../src/v8.cc',
@@ -688,6 +701,9 @@
                   ]
                 }],
               ],
+              'libraries': [
+                '-lrt'
+              ]
             },
             'sources': [  ### gcmole(os:linux) ###
               '../../src/platform-linux.cc',
@@ -700,7 +716,7 @@
               'CAN_USE_VFP_INSTRUCTIONS',
             ],
             'sources': [
-              '../../src/platform-posix.cc',
+              '../../src/platform-posix.cc'
             ],
             'conditions': [
               ['host_os=="mac"', {
@@ -716,6 +732,28 @@
                   }],
                 ],
               }, {
+                # TODO(bmeurer): What we really want here, is this:
+                #
+                # 'link_settings': {
+                #   'target_conditions': [
+                #     ['_toolset=="host"', {
+                #       'libraries': [
+                #         '-lrt'
+                #       ]
+                #     }]
+                #   ]
+                # },
+                #
+                # but we can't do this right now, as the AOSP does not support
+                # linking against the host librt, so we need to work around this
+                # for now, using the following hack (see platform/time.cc):
+                'target_conditions': [
+                  ['_toolset=="host"', {
+                    'defines': [
+                      'V8_LIBRT_NOT_AVAILABLE=1',
+                    ],
+                  }],
+                ],
                 'sources': [
                   '../../src/platform-linux.cc'
                 ]
@@ -763,7 +801,7 @@
             ]},
             'sources': [
               '../../src/platform-solaris.cc',
-              '../../src/platform-posix.cc',
+              '../../src/platform-posix.cc'
             ],
           }
         ],
@@ -786,13 +824,13 @@
                 ['build_env=="Cygwin"', {
                   'sources': [
                     '../../src/platform-cygwin.cc',
-                    '../../src/platform-posix.cc',
+                    '../../src/platform-posix.cc'
                   ],
                 }, {
                   'sources': [
                     '../../src/platform-win32.cc',
-                    '../../src/win32-math.h',
                     '../../src/win32-math.cc',
+                    '../../src/win32-math.h'
                   ],
                 }],
               ],
@@ -802,8 +840,8 @@
             }, {
               'sources': [
                 '../../src/platform-win32.cc',
-                '../../src/win32-math.h',
                 '../../src/win32-math.cc',
+                '../../src/win32-math.h'
               ],
               'msvs_disabled_warnings': [4351, 4355, 4800],
               'link_settings':  {

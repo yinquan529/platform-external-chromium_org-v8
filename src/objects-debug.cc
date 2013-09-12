@@ -201,9 +201,6 @@ void HeapObject::HeapObjectVerify() {
     case SHARED_FUNCTION_INFO_TYPE:
       SharedFunctionInfo::cast(this)->SharedFunctionInfoVerify();
       break;
-    case OPTIMIZED_CODE_ENTRY_TYPE:
-      OptimizedCodeEntry::cast(this)->OptimizedCodeEntryVerify();
-      break;
     case JS_MESSAGE_OBJECT_TYPE:
       JSMessageObject::cast(this)->JSMessageObjectVerify();
       break;
@@ -233,7 +230,8 @@ void HeapObject::HeapObjectVerify() {
 
 void HeapObject::VerifyHeapPointer(Object* p) {
   CHECK(p->IsHeapObject());
-  CHECK(HEAP->Contains(HeapObject::cast(p)));
+  HeapObject* ho = HeapObject::cast(p);
+  CHECK(ho->GetHeap()->Contains(ho));
 }
 
 
@@ -340,11 +338,12 @@ void JSObject::JSObjectVerify() {
 
 
 void Map::MapVerify() {
-  CHECK(!HEAP->InNewSpace(this));
+  Heap* heap = GetHeap();
+  CHECK(!heap->InNewSpace(this));
   CHECK(FIRST_TYPE <= instance_type() && instance_type() <= LAST_TYPE);
   CHECK(instance_size() == kVariableSizeSentinel ||
          (kPointerSize <= instance_size() &&
-          instance_size() < HEAP->Capacity()));
+          instance_size() < heap->Capacity()));
   VerifyHeapPointer(prototype());
   VerifyHeapPointer(instance_descriptors());
   SLOW_ASSERT(instance_descriptors()->IsSortedNoDuplicates());
@@ -504,7 +503,7 @@ void JSDate::JSDateVerify() {
   }
   if (cache_stamp()->IsSmi()) {
     CHECK(Smi::cast(cache_stamp())->value() <=
-          Smi::cast(Isolate::Current()->date_cache()->stamp())->value());
+          Smi::cast(GetIsolate()->date_cache()->stamp())->value());
   }
 }
 
@@ -526,7 +525,7 @@ void String::StringVerify() {
   CHECK(IsString());
   CHECK(length() >= 0 && length() <= Smi::kMaxValue);
   if (IsInternalizedString()) {
-    CHECK(!HEAP->InNewSpace(this));
+    CHECK(!GetHeap()->InNewSpace(this));
   }
   if (IsConsString()) {
     ConsString::cast(this)->ConsStringVerify();
@@ -580,17 +579,6 @@ void SharedFunctionInfo::SharedFunctionInfoVerify() {
 }
 
 
-void OptimizedCodeEntry::OptimizedCodeEntryVerify() {
-  CHECK(IsOptimizedCodeEntry());
-  VerifyObjectField(kNativeContextOffset);
-  VerifyObjectField(kFunctionOffset);
-  VerifyObjectField(kCodeOffset);
-  VerifyObjectField(kLiteralsOffset);
-  VerifyObjectField(kNextBySharedInfoOffset);
-  VerifyObjectField(kNextByNativeContextOffset);
-}
-
-
 void JSGlobalProxy::JSGlobalProxyVerify() {
   CHECK(IsJSGlobalProxy());
   JSObjectVerify();
@@ -629,7 +617,7 @@ void Oddball::OddballVerify() {
   VerifyHeapPointer(to_string());
   Object* number = to_number();
   if (number->IsHeapObject()) {
-    CHECK(number == HEAP->nan_value());
+    CHECK(number == HeapObject::cast(number)->GetHeap()->nan_value());
   } else {
     CHECK(number->IsSmi());
     int value = Smi::cast(number)->value();
@@ -903,6 +891,7 @@ void CallHandlerInfo::CallHandlerInfoVerify() {
 void TemplateInfo::TemplateInfoVerify() {
   VerifyPointer(tag());
   VerifyPointer(property_list());
+  VerifyPointer(property_accessors());
 }
 
 
@@ -911,7 +900,6 @@ void FunctionTemplateInfo::FunctionTemplateInfoVerify() {
   TemplateInfoVerify();
   VerifyPointer(serial_number());
   VerifyPointer(call_code());
-  VerifyPointer(property_accessors());
   VerifyPointer(prototype_template());
   VerifyPointer(parent_template());
   VerifyPointer(named_property_handler());
@@ -1057,7 +1045,7 @@ void JSObject::IncrementSpillStatistics(SpillInformation* info) {
       int holes = 0;
       FixedArray* e = FixedArray::cast(elements());
       int len = e->length();
-      Heap* heap = HEAP;
+      Heap* heap = GetHeap();
       for (int i = 0; i < len; i++) {
         if (e->get(i) == heap->the_hole_value()) holes++;
       }

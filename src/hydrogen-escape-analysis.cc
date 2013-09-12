@@ -31,21 +31,33 @@ namespace v8 {
 namespace internal {
 
 
-void HEscapeAnalysisPhase::CollectIfNoEscapingUses(HInstruction* instr) {
-  for (HUseIterator it(instr->uses()); !it.Done(); it.Advance()) {
+bool HEscapeAnalysisPhase::HasNoEscapingUses(HValue* value, int size) {
+  for (HUseIterator it(value->uses()); !it.Done(); it.Advance()) {
     HValue* use = it.value();
     if (use->HasEscapingOperandAt(it.index())) {
       if (FLAG_trace_escape_analysis) {
-        PrintF("#%d (%s) escapes through #%d (%s) @%d\n", instr->id(),
-               instr->Mnemonic(), use->id(), use->Mnemonic(), it.index());
+        PrintF("#%d (%s) escapes through #%d (%s) @%d\n", value->id(),
+               value->Mnemonic(), use->id(), use->Mnemonic(), it.index());
       }
-      return;
+      return false;
+    }
+    if (use->HasOutOfBoundsAccess(size)) {
+      if (FLAG_trace_escape_analysis) {
+        PrintF("#%d (%s) out of bounds at #%d (%s) @%d\n", value->id(),
+               value->Mnemonic(), use->id(), use->Mnemonic(), it.index());
+      }
+      return false;
+    }
+    int redefined_index = use->RedefinedOperandIndex();
+    if (redefined_index == it.index() && !HasNoEscapingUses(use, size)) {
+      if (FLAG_trace_escape_analysis) {
+        PrintF("#%d (%s) escapes redefinition #%d (%s) @%d\n", value->id(),
+               value->Mnemonic(), use->id(), use->Mnemonic(), it.index());
+      }
+      return false;
     }
   }
-  if (FLAG_trace_escape_analysis) {
-    PrintF("#%d (%s) is being captured\n", instr->id(), instr->Mnemonic());
-  }
-  captured_.Add(instr, zone());
+  return true;
 }
 
 
@@ -55,8 +67,16 @@ void HEscapeAnalysisPhase::CollectCapturedValues() {
     HBasicBlock* block = graph()->blocks()->at(i);
     for (HInstructionIterator it(block); !it.Done(); it.Advance()) {
       HInstruction* instr = it.Current();
-      if (instr->IsAllocate()) {
-        CollectIfNoEscapingUses(instr);
+      if (!instr->IsAllocate()) continue;
+      HAllocate* allocate = HAllocate::cast(instr);
+      if (!allocate->size()->IsInteger32Constant()) continue;
+      int size_in_bytes = allocate->size()->GetInteger32Constant();
+      if (HasNoEscapingUses(instr, size_in_bytes)) {
+        if (FLAG_trace_escape_analysis) {
+          PrintF("#%d (%s) is being captured\n", instr->id(),
+                 instr->Mnemonic());
+        }
+        captured_.Add(instr, zone());
       }
     }
   }
@@ -282,7 +302,6 @@ void HEscapeAnalysisPhase::PerformScalarReplacement() {
     HAllocate* allocate = HAllocate::cast(captured_.at(i));
 
     // Compute number of scalar values and start with clean slate.
-    if (!allocate->size()->IsInteger32Constant()) continue;
     int size_in_bytes = allocate->size()->GetInteger32Constant();
     number_of_values_ = size_in_bytes / kPointerSize;
     number_of_objects_++;
@@ -295,6 +314,15 @@ void HEscapeAnalysisPhase::PerformScalarReplacement() {
     ASSERT(allocate->HasNoUses());
     ASSERT(!allocate->IsLinked());
   }
+}
+
+
+void HEscapeAnalysisPhase::Run() {
+  // TODO(mstarzinger): We disable escape analysis with OSR for now, because
+  // spill slots might be uninitialized. Needs investigation.
+  if (graph()->has_osr()) return;
+  CollectCapturedValues();
+  PerformScalarReplacement();
 }
 
 

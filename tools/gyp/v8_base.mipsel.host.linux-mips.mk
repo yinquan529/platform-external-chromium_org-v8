@@ -120,6 +120,11 @@ LOCAL_SRC_FILES := \
 	v8/src/once.cc \
 	v8/src/optimizing-compiler-thread.cc \
 	v8/src/parser.cc \
+	v8/src/platform/time.cc \
+	v8/src/platform/condition-variable.cc \
+	v8/src/platform/mutex.cc \
+	v8/src/platform/semaphore.cc \
+	v8/src/platform/socket.cc \
 	v8/src/preparse-data.cc \
 	v8/src/preparser.cc \
 	v8/src/prettyprinter.cc \
@@ -154,6 +159,7 @@ LOCAL_SRC_FILES := \
 	v8/src/typing.cc \
 	v8/src/unicode.cc \
 	v8/src/utils.cc \
+	v8/src/utils/random-number-generator.cc \
 	v8/src/v8-counters.cc \
 	v8/src/v8.cc \
 	v8/src/v8conversions.cc \
@@ -209,6 +215,7 @@ MY_CFLAGS_Debug := \
 
 MY_DEFS_Debug := \
 	'-DANGLE_DX11' \
+	'-DWTF_VECTOR_INITIAL_SIZE=16' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DNO_TCMALLOC' \
 	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \
@@ -221,6 +228,7 @@ MY_DEFS_Debug := \
 	'-DENABLE_GPU=1' \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
+	'-DCLD_VERSION=1' \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
@@ -229,6 +237,7 @@ MY_DEFS_Debug := \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \
+	'-DV8_LIBRT_NOT_AVAILABLE=1' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
 	'-DWTF_USE_DYNAMIC_ANNOTATIONS=1' \
 	'-D_DEBUG' \
@@ -279,6 +288,7 @@ MY_CFLAGS_Release := \
 
 MY_DEFS_Release := \
 	'-DANGLE_DX11' \
+	'-DWTF_VECTOR_INITIAL_SIZE=16' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DNO_TCMALLOC' \
 	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \
@@ -291,6 +301,7 @@ MY_DEFS_Release := \
 	'-DENABLE_GPU=1' \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
+	'-DCLD_VERSION=1' \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
@@ -299,6 +310,7 @@ MY_DEFS_Release := \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \
+	'-DV8_LIBRT_NOT_AVAILABLE=1' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'

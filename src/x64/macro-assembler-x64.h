@@ -375,6 +375,11 @@ class MacroAssembler: public Assembler {
   // ---------------------------------------------------------------------------
   // Smi tagging, untagging and operations on tagged smis.
 
+  // Support for constant splitting.
+  bool IsUnsafeInt(const int32_t x);
+  void SafeMove(Register dst, Smi* src);
+  void SafePush(Smi* src);
+
   void InitializeSmiConstantRegister() {
     movq(kSmiConstantRegister,
          reinterpret_cast<uint64_t>(Smi::FromInt(kSmiConstantRegisterValue)),
@@ -782,11 +787,6 @@ class MacroAssembler: public Assembler {
   // Move if the registers are not identical.
   void Move(Register target, Register source);
 
-  // Support for constant splitting.
-  bool IsUnsafeInt(const int x);
-  void SafeMove(Register dst, Smi* src);
-  void SafePush(Smi* src);
-
   // Bit-field support.
   void TestBit(const Operand& dst, int bit_index);
 
@@ -974,6 +974,20 @@ class MacroAssembler: public Assembler {
   void ClampDoubleToUint8(XMMRegister input_reg,
                           XMMRegister temp_xmm_reg,
                           Register result_reg);
+
+  void SlowTruncateToI(Register result_reg, Register input_reg,
+      int offset = HeapNumber::kValueOffset - kHeapObjectTag);
+
+  void TruncateHeapNumberToI(Register result_reg, Register input_reg);
+  void TruncateDoubleToI(Register result_reg, XMMRegister input_reg);
+
+  void DoubleToI(Register result_reg, XMMRegister input_reg,
+      XMMRegister scratch, MinusZeroMode minus_zero_mode,
+      Label* conversion_failed, Label::Distance dst = Label::kFar);
+
+  void TaggedToI(Register result_reg, Register input_reg, XMMRegister temp,
+      MinusZeroMode minus_zero_mode, Label* lost_precision,
+      Label::Distance dst = Label::kFar);
 
   void LoadUint32(XMMRegister dst, Register src, XMMRegister scratch);
 

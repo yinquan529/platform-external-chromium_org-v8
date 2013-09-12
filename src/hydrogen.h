@@ -553,9 +553,6 @@ class HEnvironment V8_FINAL : public ZoneObject {
   void set_entry(HEnterInlined* entry) { entry_ = entry; }
 
   int length() const { return values_.length(); }
-  bool is_special_index(int i) const {
-    return i >= parameter_count() && i < parameter_count() + specials_count();
-  }
 
   int first_expression_index() const {
     return parameter_count() + specials_count() + local_count();
@@ -674,8 +671,15 @@ class HEnvironment V8_FINAL : public ZoneObject {
   }
 
   bool is_local_index(int i) const {
-    return i >= first_local_index() &&
-           i < first_expression_index();
+    return i >= first_local_index() && i < first_expression_index();
+  }
+
+  bool is_parameter_index(int i) const {
+    return i >= 0 && i < parameter_count();
+  }
+
+  bool is_special_index(int i) const {
+    return i >= parameter_count() && i < parameter_count() + specials_count();
   }
 
   void PrintTo(StringStream* stream);
@@ -1911,7 +1915,9 @@ class HOptimizedGraphBuilder V8_FINAL
 
   bool TryInlineCall(Call* expr, bool drop_extra = false);
   bool TryInlineConstruct(CallNew* expr, HValue* implicit_return_value);
-  bool TryInlineGetter(Handle<JSFunction> getter, Property* prop);
+  bool TryInlineGetter(Handle<JSFunction> getter,
+                       BailoutId ast_id,
+                       BailoutId return_id);
   bool TryInlineSetter(Handle<JSFunction> setter,
                        BailoutId id,
                        BailoutId assignment_id,
@@ -1939,26 +1945,24 @@ class HOptimizedGraphBuilder V8_FINAL
 
   void HandlePropertyAssignment(Assignment* expr);
   void HandleCompoundAssignment(Assignment* expr);
-  void HandlePolymorphicLoadNamedField(Property* expr,
+  void HandlePolymorphicLoadNamedField(int position,
+                                       BailoutId return_id,
                                        HValue* object,
                                        SmallMapList* types,
                                        Handle<String> name);
-  HInstruction* TryLoadPolymorphicAsMonomorphic(Property* expr,
-                                                HValue* object,
+  HInstruction* TryLoadPolymorphicAsMonomorphic(HValue* object,
                                                 SmallMapList* types,
                                                 Handle<String> name);
   void HandlePolymorphicStoreNamedField(int position,
                                         BailoutId assignment_id,
                                         HValue* object,
                                         HValue* value,
-                                        HValue* result,
                                         SmallMapList* types,
                                         Handle<String> name);
   bool TryStorePolymorphicAsMonomorphic(int position,
                                         BailoutId assignment_id,
                                         HValue* object,
                                         HValue* value,
-                                        HValue* result,
                                         SmallMapList* types,
                                         Handle<String> name);
   void HandlePolymorphicCallNamed(Call* expr,
@@ -2029,19 +2033,31 @@ class HOptimizedGraphBuilder V8_FINAL
                                 Handle<JSObject> holder);
   HInstruction* BuildLoadNamedMonomorphic(HValue* object,
                                           Handle<String> name,
-                                          Property* expr,
                                           Handle<Map> map);
 
   HCheckMaps* AddCheckMap(HValue* object, Handle<Map> map);
 
-  void BuildStoreNamed(Expression* expression,
-                       BailoutId id,
-                       int position,
-                       BailoutId assignment_id,
-                       Property* prop,
-                       HValue* object,
-                       HValue* store_value,
-                       HValue* result_value);
+  void BuildLoad(Property* property,
+                 int position,
+                 BailoutId ast_id);
+  void PushLoad(Property* property,
+                HValue* object,
+                HValue* key,
+                int position);
+
+  void BuildStoreForEffect(Expression* expression,
+                           Property* prop,
+                           BailoutId ast_id,
+                           BailoutId return_id,
+                           HValue* object,
+                           HValue* key,
+                           HValue* value);
+
+  void BuildStore(Expression* expression,
+                  Property* prop,
+                  BailoutId ast_id,
+                  BailoutId return_id,
+                  bool is_uninitialized = false);
 
   HInstruction* BuildStoreNamedField(HValue* object,
                                      Handle<String> name,
@@ -2063,60 +2079,31 @@ class HOptimizedGraphBuilder V8_FINAL
 
   HInstruction* BuildThisFunction();
 
-  HInstruction* BuildFastLiteral(HValue* context,
-                                 Handle<JSObject> boilerplate_object,
-                                 Handle<JSObject> original_boilerplate_object,
+  HInstruction* BuildFastLiteral(Handle<JSObject> boilerplate_object,
                                  Handle<Object> allocation_site,
-                                 int data_size,
-                                 int pointer_size,
                                  AllocationSiteMode mode);
 
-  void BuildEmitDeepCopy(Handle<JSObject> boilerplat_object,
-                         Handle<JSObject> object,
-                         Handle<Object> allocation_site,
-                         HInstruction* target,
-                         int* offset,
-                         HInstruction* data_target,
-                         int* data_offset,
-                         AllocationSiteMode mode);
+  void BuildEmitObjectHeader(Handle<JSObject> boilerplate_object,
+                             HInstruction* object);
 
-  MUST_USE_RESULT HValue* BuildEmitObjectHeader(
-      Handle<JSObject> boilerplat_object,
-      HInstruction* target,
-      HInstruction* data_target,
-      int object_offset,
-      int elements_offset,
-      int elements_size);
+  void BuildInitElementsInObjectHeader(Handle<JSObject> boilerplate_object,
+                                       HInstruction* object,
+                                       HInstruction* object_elements);
 
   void BuildEmitInObjectProperties(Handle<JSObject> boilerplate_object,
-                                   Handle<JSObject> original_boilerplate_object,
-                                   HValue* object_properties,
-                                   HInstruction* target,
-                                   int* offset,
-                                   HInstruction* data_target,
-                                   int* data_offset);
+                                   HInstruction* object);
 
-  void BuildEmitElements(Handle<FixedArrayBase> elements,
-                         Handle<FixedArrayBase> original_elements,
-                         ElementsKind kind,
-                         HValue* object_elements,
-                         HInstruction* target,
-                         int* offset,
-                         HInstruction* data_target,
-                         int* data_offset);
+  void BuildEmitElements(Handle<JSObject> boilerplate_object,
+                         Handle<FixedArrayBase> elements,
+                         HValue* object_elements);
 
   void BuildEmitFixedDoubleArray(Handle<FixedArrayBase> elements,
                                  ElementsKind kind,
                                  HValue* object_elements);
 
   void BuildEmitFixedArray(Handle<FixedArrayBase> elements,
-                           Handle<FixedArrayBase> original_elements,
                            ElementsKind kind,
-                           HValue* object_elements,
-                           HInstruction* target,
-                           int* offset,
-                           HInstruction* data_target,
-                           int* data_offset);
+                           HValue* object_elements);
 
   void AddCheckPrototypeMaps(Handle<JSObject> holder,
                              Handle<Map> receiver_map);
@@ -2165,41 +2152,37 @@ Zone* AstContext::zone() const { return owner_->zone(); }
 class HStatistics V8_FINAL: public Malloced {
  public:
   HStatistics()
-      : timing_(5),
+      : times_(5),
         names_(5),
         sizes_(5),
-        create_graph_(0),
-        optimize_graph_(0),
-        generate_code_(0),
         total_size_(0),
-        full_code_gen_(0),
         source_size_(0) { }
 
   void Initialize(CompilationInfo* info);
   void Print();
-  void SaveTiming(const char* name, int64_t ticks, unsigned size);
+  void SaveTiming(const char* name, TimeDelta time, unsigned size);
 
-  void IncrementFullCodeGen(int64_t full_code_gen) {
+  void IncrementFullCodeGen(TimeDelta full_code_gen) {
     full_code_gen_ += full_code_gen;
   }
 
-  void IncrementSubtotals(int64_t create_graph,
-                          int64_t optimize_graph,
-                          int64_t generate_code) {
+  void IncrementSubtotals(TimeDelta create_graph,
+                          TimeDelta optimize_graph,
+                          TimeDelta generate_code) {
     create_graph_ += create_graph;
     optimize_graph_ += optimize_graph;
     generate_code_ += generate_code;
   }
 
  private:
-  List<int64_t> timing_;
+  List<TimeDelta> times_;
   List<const char*> names_;
   List<unsigned> sizes_;
-  int64_t create_graph_;
-  int64_t optimize_graph_;
-  int64_t generate_code_;
+  TimeDelta create_graph_;
+  TimeDelta optimize_graph_;
+  TimeDelta generate_code_;
   unsigned total_size_;
-  int64_t full_code_gen_;
+  TimeDelta full_code_gen_;
   double source_size_;
 };
 

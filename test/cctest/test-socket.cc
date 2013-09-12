@@ -27,6 +27,7 @@
 
 #include "v8.h"
 #include "platform.h"
+#include "platform/socket.h"
 #include "cctest.h"
 
 
@@ -41,19 +42,18 @@ class SocketListenerThread : public Thread {
         data_size_(data_size),
         server_(NULL),
         client_(NULL),
-        listening_(OS::CreateSemaphore(0)) {
+        listening_(0) {
     data_ = new char[data_size_];
   }
   ~SocketListenerThread() {
     // Close both sockets.
     delete client_;
     delete server_;
-    delete listening_;
     delete[] data_;
   }
 
   void Run();
-  void WaitForListening() { listening_->Wait(); }
+  void WaitForListening() { listening_.Wait(); }
   char* data() { return data_; }
 
  private:
@@ -62,7 +62,7 @@ class SocketListenerThread : public Thread {
   int data_size_;
   Socket* server_;  // Server socket used for bind/accept.
   Socket* client_;  // Single client connection used by the test.
-  Semaphore* listening_;  // Signalled when the server socket is in listen mode.
+  Semaphore listening_;  // Signalled when the server socket is in listen mode.
 };
 
 
@@ -70,7 +70,7 @@ void SocketListenerThread::Run() {
   bool ok;
 
   // Create the server socket and bind it to the requested port.
-  server_ = OS::CreateSocket();
+  server_ = new Socket;
   server_->SetReuseAddress(true);
   CHECK(server_ != NULL);
   ok = server_->Bind(port_);
@@ -79,7 +79,7 @@ void SocketListenerThread::Run() {
   // Listen for new connections.
   ok = server_->Listen(1);
   CHECK(ok);
-  listening_->Signal();
+  listening_.Signal();
 
   // Accept a connection.
   client_ = server_->Accept();
@@ -122,7 +122,7 @@ static void SendAndReceive(int port, char *data, int len) {
   listener->WaitForListening();
 
   // Connect and write some data.
-  Socket* client = OS::CreateSocket();
+  Socket* client = new Socket;
   CHECK(client != NULL);
   ok = client->Connect(kLocalhost, port_str);
   CHECK(ok);
@@ -151,12 +151,6 @@ TEST(Socket) {
   // parallel.
   static const int kPort = 5859 + FlagDependentPortOffset();
 
-  bool ok;
-
-  // Initialize socket support.
-  ok = Socket::SetUp();
-  CHECK(ok);
-
   // Send and receive some data.
   static const int kBufferSizeSmall = 20;
   char small_data[kBufferSizeSmall + 1] = "1234567890abcdefghij";
@@ -179,13 +173,4 @@ TEST(Socket) {
   }
   SendAndReceive(kPort, large_data, kBufferSizeLarge);
   delete[] large_data;
-}
-
-
-TEST(HToNNToH) {
-  uint16_t x = 1234;
-  CHECK_EQ(x, Socket::NToH(Socket::HToN(x)));
-
-  uint32_t y = 12345678;
-  CHECK(y == Socket::NToH(Socket::HToN(y)));
 }

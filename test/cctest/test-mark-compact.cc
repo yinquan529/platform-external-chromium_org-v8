@@ -307,7 +307,7 @@ static void WeakPointerCallback(v8::Isolate* isolate,
                                 void* id) {
   ASSERT(id == reinterpret_cast<void*>(1234));
   NumberOfWeakCalls++;
-  handle->Dispose(isolate);
+  handle->Dispose();
 }
 
 
@@ -572,7 +572,7 @@ intptr_t ShortLivingIsolate() {
   v8::Isolate* isolate = v8::Isolate::New();
   { v8::Isolate::Scope isolate_scope(isolate);
     v8::Locker lock(isolate);
-    v8::HandleScope handle_scope;
+    v8::HandleScope handle_scope(isolate);
     v8::Local<v8::Context> context = v8::Context::New(isolate);
     CHECK(!context.IsEmpty());
   }

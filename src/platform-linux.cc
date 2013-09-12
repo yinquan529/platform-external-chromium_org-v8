@@ -76,9 +76,6 @@ namespace v8 {
 namespace internal {
 
 
-static Mutex* limit_mutex = NULL;
-
-
 #ifdef __arm__
 
 bool OS::ArmUsingHardFloat() {
@@ -140,31 +137,6 @@ double OS::LocalTimeOffset() {
 }
 
 
-// We keep the lowest and highest addresses mapped as a quick way of
-// determining that pointers are outside the heap (used mostly in assertions
-// and verification).  The estimate is conservative, i.e., not all addresses in
-// 'allocated' space are actually allocated to our heap.  The range is
-// [lowest, highest), inclusive on the low and and exclusive on the high end.
-static void* lowest_ever_allocated = reinterpret_cast<void*>(-1);
-static void* highest_ever_allocated = reinterpret_cast<void*>(0);
-
-
-static void UpdateAllocatedSpaceLimits(void* address, int size) {
-  ASSERT(limit_mutex != NULL);
-  ScopedLock lock(limit_mutex);
-
-  lowest_ever_allocated = Min(lowest_ever_allocated, address);
-  highest_ever_allocated =
-      Max(highest_ever_allocated,
-          reinterpret_cast<void*>(reinterpret_cast<char*>(address) + size));
-}
-
-
-bool OS::IsOutsideAllocatedSpace(void* address) {
-  return address < lowest_ever_allocated || address >= highest_ever_allocated;
-}
-
-
 void* OS::Allocate(const size_t requested,
                    size_t* allocated,
                    bool is_executable) {
@@ -178,7 +150,6 @@ void* OS::Allocate(const size_t requested,
     return NULL;
   }
   *allocated = msize;
-  UpdateAllocatedSpaceLimits(mbase, msize);
   return mbase;
 }
 
@@ -260,7 +231,7 @@ void OS::LogSharedLibraryAddresses() {
   const int kLibNameLen = FILENAME_MAX + 1;
   char* lib_name = reinterpret_cast<char*>(malloc(kLibNameLen));
 
-  i::Isolate* isolate = ISOLATE;
+  i::Isolate* isolate = Isolate::Current();
   // This loop will terminate once the scanning hits an EOF.
   while (true) {
     uintptr_t start, end;
@@ -472,7 +443,6 @@ bool VirtualMemory::CommitRegion(void* base, size_t size, bool is_executable) {
     return false;
   }
 
-  UpdateAllocatedSpaceLimits(base, size);
   return true;
 }
 
@@ -495,89 +465,5 @@ bool VirtualMemory::ReleaseRegion(void* base, size_t size) {
 bool VirtualMemory::HasLazyCommits() {
   return true;
 }
-
-
-class LinuxSemaphore : public Semaphore {
- public:
-  explicit LinuxSemaphore(int count) {  sem_init(&sem_, 0, count); }
-  virtual ~LinuxSemaphore() { sem_destroy(&sem_); }
-
-  virtual void Wait();
-  virtual bool Wait(int timeout);
-  virtual void Signal() { sem_post(&sem_); }
- private:
-  sem_t sem_;
-};
-
-
-void LinuxSemaphore::Wait() {
-  while (true) {
-    int result = sem_wait(&sem_);
-    if (result == 0) return;  // Successfully got semaphore.
-    CHECK(result == -1 && errno == EINTR);  // Signal caused spurious wakeup.
-  }
-}
-
-
-#ifndef TIMEVAL_TO_TIMESPEC
-#define TIMEVAL_TO_TIMESPEC(tv, ts) do {                            \
-    (ts)->tv_sec = (tv)->tv_sec;                                    \
-    (ts)->tv_nsec = (tv)->tv_usec * 1000;                           \
-} while (false)
-#endif
-
-
-bool LinuxSemaphore::Wait(int timeout) {
-  const long kOneSecondMicros = 1000000;  // NOLINT
-
-  // Split timeout into second and nanosecond parts.
-  struct timeval delta;
-  delta.tv_usec = timeout % kOneSecondMicros;
-  delta.tv_sec = timeout / kOneSecondMicros;
-
-  struct timeval current_time;
-  // Get the current time.
-  if (gettimeofday(&current_time, NULL) == -1) {
-    return false;
-  }
-
-  // Calculate time for end of timeout.
-  struct timeval end_time;
-  timeradd(&current_time, &delta, &end_time);
-
-  struct timespec ts;
-  TIMEVAL_TO_TIMESPEC(&end_time, &ts);
-  // Wait for semaphore signalled or timeout.
-  while (true) {
-    int result = sem_timedwait(&sem_, &ts);
-    if (result == 0) return true;  // Successfully got semaphore.
-    if (result > 0) {
-      // For glibc prior to 2.3.4 sem_timedwait returns the error instead of -1.
-      errno = result;
-      result = -1;
-    }
-    if (result == -1 && errno == ETIMEDOUT) return false;  // Timeout.
-    CHECK(result == -1 && errno == EINTR);  // Signal caused spurious wakeup.
-  }
-}
-
-
-Semaphore* OS::CreateSemaphore(int count) {
-  return new LinuxSemaphore(count);
-}
-
-
-void OS::SetUp() {
-  // Seed the random number generator. We preserve microsecond resolution.
-  uint64_t seed = Ticks() ^ (getpid() << 16);
-  srandom(static_cast<unsigned int>(seed));
-  limit_mutex = CreateMutex();
-}
-
-
-void OS::TearDown() {
-  delete limit_mutex;
-}
-
 
 } }  // namespace v8::internal

@@ -1316,13 +1316,9 @@ void Genesis::InitializeGlobal(Handle<GlobalObject> inner_global,
   Handle<FixedArray> embedder_data = factory->NewFixedArray(2);
   native_context()->set_embedder_data(*embedder_data);
 
-  {
-    // Initialize the random seed slot.
-    Handle<ByteArray> zeroed_byte_array(
-        factory->NewByteArray(kRandomStateSize));
-    native_context()->set_random_seed(*zeroed_byte_array);
-    memset(zeroed_byte_array->GetDataStartAddress(), 0, kRandomStateSize);
-  }
+  // Allocate the random seed slot.
+  Handle<ByteArray> random_seed = factory->NewByteArray(kRandomStateSize);
+  native_context()->set_random_seed(*random_seed);
 }
 
 
@@ -1552,7 +1548,7 @@ bool Genesis::CompileScriptCached(Isolate* isolate,
                      : top_context->global_object(),
                      isolate);
   bool has_pending_exception;
-  Execution::Call(fun, receiver, 0, NULL, &has_pending_exception);
+  Execution::Call(isolate, fun, receiver, 0, NULL, &has_pending_exception);
   if (has_pending_exception) return false;
   return true;
 }
@@ -2588,8 +2584,8 @@ Genesis::Genesis(Isolate* isolate,
     : isolate_(isolate),
       active_(isolate->bootstrapper()) {
   result_ = Handle<Context>::null();
-  // If V8 isn't running and cannot be initialized, just return.
-  if (!V8::IsRunning() && !V8::Initialize(NULL)) return;
+  // If V8 cannot be initialized, just return.
+  if (!V8::Initialize(NULL)) return;
 
   // Before creating the roots we must save the context and restore it
   // on all function exits.
@@ -2604,7 +2600,7 @@ Genesis::Genesis(Isolate* isolate,
   // We can only de-serialize a context if the isolate was initialized from
   // a snapshot. Otherwise we have to build the context from scratch.
   if (isolate->initialized_from_snapshot()) {
-    native_context_ = Snapshot::NewContextFromSnapshot();
+    native_context_ = Snapshot::NewContextFromSnapshot(isolate);
   } else {
     native_context_ = Handle<Context>();
   }
@@ -2646,6 +2642,14 @@ Genesis::Genesis(Isolate* isolate,
   // Initialize experimental globals and install experimental natives.
   InitializeExperimentalGlobal();
   if (!InstallExperimentalNatives()) return;
+
+  // Initially seed the per-context random number generator
+  // using the per-isolate random number generator.
+  uint32_t* state = reinterpret_cast<uint32_t*>(
+      native_context()->random_seed()->GetDataStartAddress());
+  do {
+    isolate->random_number_generator()->NextBytes(state, kRandomStateSize);
+  } while (state[0] == 0 || state[1] == 0);
 
   result_ = native_context();
 }
