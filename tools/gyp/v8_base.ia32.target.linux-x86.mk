@@ -160,6 +160,7 @@ LOCAL_SRC_FILES := \
 	v8/src/typing.cc \
 	v8/src/unicode.cc \
 	v8/src/utils.cc \
+	v8/src/utils/random-number-generator.cc \
 	v8/src/v8-counters.cc \
 	v8/src/v8.cc \
 	v8/src/v8conversions.cc \
