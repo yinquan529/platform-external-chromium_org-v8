@@ -36,13 +36,10 @@ $(gyp_intermediate_dir)/libraries.cc: $(gyp_shared_intermediate_dir)/libraries.c
 	mkdir -p $(@D); cp $< $@
 $(gyp_intermediate_dir)/experimental-libraries.cc: $(gyp_shared_intermediate_dir)/experimental-libraries.cc
 	mkdir -p $(@D); cp $< $@
-$(gyp_intermediate_dir)/i18n-libraries.cc: $(gyp_shared_intermediate_dir)/i18n-libraries.cc
-	mkdir -p $(@D); cp $< $@
 LOCAL_GENERATED_SOURCES := \
 	$(gyp_intermediate_dir)/libraries.cc \
 	$(gyp_intermediate_dir)/experimental-libraries.cc \
-	$(gyp_intermediate_dir)/snapshot.cc \
-	$(gyp_intermediate_dir)/i18n-libraries.cc
+	$(gyp_intermediate_dir)/snapshot.cc
 
 GYP_COPIED_SOURCE_ORIGIN_DIRS := \
 	$(gyp_shared_intermediate_dir)
