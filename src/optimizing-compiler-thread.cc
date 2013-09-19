@@ -114,11 +114,8 @@ void OptimizingCompilerThread::CompileNext() {
     osr_candidates_.RemoveElement(optimizing_compiler);
     ready_for_osr_.Add(optimizing_compiler);
   } else {
-    LockGuard<Mutex> mark_and_queue(&install_mutex_);
-    Heap::RelocationLock relocation_lock(isolate_->heap());
-    AllowHandleDereference ahd;
-    optimizing_compiler->info()->closure()->MarkForInstallingRecompiledCode();
     output_queue_.Enqueue(optimizing_compiler);
+    isolate_->stack_guard()->RequestInstallCode();
   }
 }
 
@@ -201,10 +198,7 @@ void OptimizingCompilerThread::InstallOptimizedFunctions() {
   HandleScope handle_scope(isolate_);
   OptimizingCompiler* compiler;
   while (true) {
-    { // Memory barrier to ensure marked functions are queued.
-      LockGuard<Mutex> marked_and_queued(&install_mutex_);
-      if (!output_queue_.Dequeue(&compiler)) return;
-    }
+    if (!output_queue_.Dequeue(&compiler)) return;
     Compiler::InstallOptimizedCode(compiler);
   }
 
@@ -234,14 +228,18 @@ void OptimizingCompilerThread::QueueForOptimization(
 OptimizingCompiler* OptimizingCompilerThread::FindReadyOSRCandidate(
     Handle<JSFunction> function, uint32_t osr_pc_offset) {
   ASSERT(!IsOptimizerThread());
-  LockGuard<Mutex> access_osr_lists(&osr_list_mutex_);
-  for (int i = 0; i < ready_for_osr_.length(); i++) {
-    if (ready_for_osr_[i]->info()->HasSameOsrEntry(function, osr_pc_offset)) {
-      osr_hits_++;
-      return ready_for_osr_.Remove(i);
+  OptimizingCompiler* result = NULL;
+  { LockGuard<Mutex> access_osr_lists(&osr_list_mutex_);
+    for (int i = 0; i < ready_for_osr_.length(); i++) {
+      if (ready_for_osr_[i]->info()->HasSameOsrEntry(function, osr_pc_offset)) {
+        osr_hits_++;
+        result = ready_for_osr_.Remove(i);
+        break;
+      }
     }
   }
-  return NULL;
+  RemoveStaleOSRCandidates();
+  return result;
 }
 
 
@@ -251,6 +249,18 @@ bool OptimizingCompilerThread::IsQueuedForOSR(Handle<JSFunction> function,
   LockGuard<Mutex> access_osr_lists(&osr_list_mutex_);
   for (int i = 0; i < osr_candidates_.length(); i++) {
     if (osr_candidates_[i]->info()->HasSameOsrEntry(function, osr_pc_offset)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
+bool OptimizingCompilerThread::IsQueuedForOSR(JSFunction* function) {
+  ASSERT(!IsOptimizerThread());
+  LockGuard<Mutex> access_osr_lists(&osr_list_mutex_);
+  for (int i = 0; i < osr_candidates_.length(); i++) {
+    if (*osr_candidates_[i]->info()->closure() == function) {
       return true;
     }
   }

@@ -392,6 +392,11 @@ static void PushInterceptorArguments(MacroAssembler* masm,
                                      Register holder,
                                      Register name,
                                      Handle<JSObject> holder_obj) {
+  STATIC_ASSERT(StubCache::kInterceptorArgsNameIndex == 0);
+  STATIC_ASSERT(StubCache::kInterceptorArgsInfoIndex == 1);
+  STATIC_ASSERT(StubCache::kInterceptorArgsThisIndex == 2);
+  STATIC_ASSERT(StubCache::kInterceptorArgsHolderIndex == 3);
+  STATIC_ASSERT(StubCache::kInterceptorArgsLength == 4);
   __ push(name);
   Handle<InterceptorInfo> interceptor(holder_obj->GetNamedInterceptor());
   ASSERT(!masm->isolate()->heap()->InNewSpace(*interceptor));
@@ -400,8 +405,6 @@ static void PushInterceptorArguments(MacroAssembler* masm,
   __ push(scratch);
   __ push(receiver);
   __ push(holder);
-  __ push(FieldOperand(scratch, InterceptorInfo::kDataOffset));
-  __ push(Immediate(reinterpret_cast<int>(masm->isolate())));
 }
 
 
@@ -415,7 +418,7 @@ static void CompileCallLoadPropertyWithInterceptor(
   __ CallExternalReference(
       ExternalReference(IC_Utility(IC::kLoadPropertyWithInterceptorOnly),
                         masm->isolate()),
-      6);
+      StubCache::kInterceptorArgsLength);
 }
 
 
@@ -733,7 +736,7 @@ class CallInterceptorCompiler BASE_EMBEDDED {
     __ CallExternalReference(
         ExternalReference(IC_Utility(IC::kLoadPropertyWithInterceptorForCall),
                           masm->isolate()),
-        6);
+        StubCache::kInterceptorArgsLength);
 
     // Restore the name_ register.
     __ pop(name_);
@@ -1401,14 +1404,20 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
   ASSERT(!scratch3().is(reg));
   __ pop(scratch3());  // Get return address to place it below.
 
+  STATIC_ASSERT(PropertyCallbackArguments::kThisIndex == 0);
+  STATIC_ASSERT(PropertyCallbackArguments::kDataIndex == -1);
+  STATIC_ASSERT(PropertyCallbackArguments::kReturnValueOffset == -2);
+  STATIC_ASSERT(PropertyCallbackArguments::kReturnValueDefaultValueIndex == -3);
+  STATIC_ASSERT(PropertyCallbackArguments::kIsolateIndex == -4);
+  STATIC_ASSERT(PropertyCallbackArguments::kHolderIndex == -5);
   __ push(receiver());  // receiver
   __ mov(scratch2(), esp);
   ASSERT(!scratch2().is(reg));
-  __ push(reg);  // holder
   // Push data from ExecutableAccessorInfo.
   if (isolate()->heap()->InNewSpace(callback->data())) {
-    __ mov(scratch1(), Immediate(callback));
-    __ push(FieldOperand(scratch1(), ExecutableAccessorInfo::kDataOffset));
+    Register scratch = reg.is(scratch1()) ? receiver() : scratch1();
+    __ mov(scratch, Immediate(callback));
+    __ push(FieldOperand(scratch, ExecutableAccessorInfo::kDataOffset));
   } else {
     __ push(Immediate(Handle<Object>(callback->data(), isolate())));
   }
@@ -1416,6 +1425,7 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
   // ReturnValue default value
   __ push(Immediate(isolate()->factory()->undefined_value()));
   __ push(Immediate(reinterpret_cast<int>(isolate())));
+  __ push(reg);  // holder
 
   // Save a pointer to where we pushed the arguments pointer.  This will be
   // passed as the const ExecutableAccessorInfo& to the C++ callback.
@@ -1450,7 +1460,7 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
                               thunk_address,
                               ApiParameterOperand(2),
                               kStackSpace,
-                              6);
+                              7);
 }
 
 
@@ -1557,7 +1567,7 @@ void BaseLoadStubCompiler::GenerateLoadInterceptor(
     ExternalReference ref =
         ExternalReference(IC_Utility(IC::kLoadPropertyWithInterceptorForLoad),
                           isolate());
-    __ TailCallExternalReference(ref, 6, 1);
+    __ TailCallExternalReference(ref, StubCache::kInterceptorArgsLength, 1);
   }
 }
 
@@ -3001,48 +3011,6 @@ Handle<Code> StoreStubCompiler::CompileStoreInterceptor(
 
   // Return the generated code.
   return GetCode(kind(), Code::INTERCEPTOR, name);
-}
-
-
-Handle<Code> StoreStubCompiler::CompileStoreGlobal(
-    Handle<GlobalObject> object,
-    Handle<PropertyCell> cell,
-    Handle<Name> name) {
-  Label miss;
-
-  // Check that the map of the global has not changed.
-  __ cmp(FieldOperand(receiver(), HeapObject::kMapOffset),
-         Immediate(Handle<Map>(object->map())));
-  __ j(not_equal, &miss);
-
-  // Compute the cell operand to use.
-  __ mov(scratch1(), Immediate(cell));
-  Operand cell_operand =
-      FieldOperand(scratch1(), PropertyCell::kValueOffset);
-
-  // Check that the value in the cell is not the hole. If it is, this
-  // cell could have been deleted and reintroducing the global needs
-  // to update the property details in the property dictionary of the
-  // global object. We bail out to the runtime system to do that.
-  __ cmp(cell_operand, factory()->the_hole_value());
-  __ j(equal, &miss);
-
-  // Store the value in the cell.
-  __ mov(cell_operand, value());
-  // No write barrier here, because cells are always rescanned.
-
-  // Return the value (register eax).
-  Counters* counters = isolate()->counters();
-  __ IncrementCounter(counters->named_store_global_inline(), 1);
-  __ ret(0);
-
-  // Handle store cache miss.
-  __ bind(&miss);
-  __ IncrementCounter(counters->named_store_global_inline_miss(), 1);
-  TailCallBuiltin(masm(), MissBuiltin(kind()));
-
-  // Return the generated code.
-  return GetICCode(kind(), Code::NORMAL, name);
 }
 
 

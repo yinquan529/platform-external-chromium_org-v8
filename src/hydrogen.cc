@@ -649,7 +649,7 @@ HConstant* HGraph::GetConstant##Name() {                                       \
   if (!constant_##name##_.is_set()) {                                          \
     HConstant* constant = new(zone()) HConstant(                               \
         isolate()->factory()->name##_value(),                                  \
-        UniqueValueId(isolate()->heap()->name##_value()),                      \
+        UniqueValueId::name##_value(isolate()->heap()),                        \
         Representation::Tagged(),                                              \
         htype,                                                                 \
         false,                                                                 \
@@ -1824,7 +1824,8 @@ void HGraphBuilder::BuildCompareNil(
 HValue* HGraphBuilder::BuildCreateAllocationMemento(HValue* previous_object,
                                                     int previous_object_size,
                                                     HValue* alloc_site) {
-  ASSERT(alloc_site != NULL);
+  // TODO(mvstanton): ASSERT altered to CHECK to diagnose chromium bug 284577
+  CHECK(alloc_site != NULL);
   HInnerAllocatedObject* alloc_memento = Add<HInnerAllocatedObject>(
       previous_object, previous_object_size);
   Handle<Map> alloc_memento_map(
@@ -4004,7 +4005,9 @@ void HOptimizedGraphBuilder::VisitRegExpLiteral(RegExpLiteral* expr) {
 
 
 static bool CanInlinePropertyAccess(Map* type) {
-  return !type->is_dictionary_map() && !type->has_named_interceptor();
+  return type->IsJSObjectMap() &&
+      !type->is_dictionary_map() &&
+      !type->has_named_interceptor();
 }
 
 
@@ -5380,6 +5383,7 @@ HInstruction* HOptimizedGraphBuilder::BuildLoadNamedMonomorphic(
   map->LookupDescriptor(NULL, *name, &lookup);
   if (lookup.IsField()) {
     HCheckMaps* checked_object = AddCheckMap(object, map);
+    ASSERT(map->IsJSObjectMap());
     return BuildLoadNamedField(
         checked_object, HObjectAccess::ForField(map, &lookup, name));
   }
@@ -5389,6 +5393,12 @@ HInstruction* HOptimizedGraphBuilder::BuildLoadNamedMonomorphic(
     AddCheckMap(object, map);
     Handle<Object> constant(lookup.GetConstantFromMap(*map), isolate());
     return New<HConstant>(constant);
+  }
+
+  if (lookup.IsFound()) {
+    // Cannot handle the property, do a generic load instead.
+    HValue* context = environment()->context();
+    return new(zone()) HLoadNamedGeneric(context, object, name);
   }
 
   // Handle a load from a known field somewhere in the prototype chain.
@@ -5483,6 +5493,7 @@ HInstruction* HOptimizedGraphBuilder::TryBuildConsolidatedElementLoad(
   Handle<Map> most_general_consolidated_map;
   for (int i = 0; i < maps->length(); ++i) {
     Handle<Map> map = maps->at(i);
+    if (!map->IsJSObjectMap()) return NULL;
     // Don't allow mixing of JSArrays with JSObjects.
     if (map->instance_type() == JS_ARRAY_TYPE) {
       if (has_non_js_array_access) return NULL;
@@ -5535,7 +5546,7 @@ HValue* HOptimizedGraphBuilder::HandlePolymorphicElementAccess(
     HValue* object,
     HValue* key,
     HValue* val,
-    Expression* prop,
+    SmallMapList* maps,
     BailoutId ast_id,
     int position,
     bool is_store,
@@ -5543,7 +5554,6 @@ HValue* HOptimizedGraphBuilder::HandlePolymorphicElementAccess(
     bool* has_side_effects) {
   *has_side_effects = false;
   BuildCheckHeapObject(object);
-  SmallMapList* maps = prop->GetReceiverTypes();
 
   if (!is_store) {
     HInstruction* consolidated_load =
@@ -5599,7 +5609,8 @@ HValue* HOptimizedGraphBuilder::HandlePolymorphicElementAccess(
   if (untransitionable_maps.length() == 1) {
     Handle<Map> untransitionable_map = untransitionable_maps[0];
     HInstruction* instr = NULL;
-    if (untransitionable_map->has_slow_elements_kind()) {
+    if (untransitionable_map->has_slow_elements_kind() ||
+        !untransitionable_map->IsJSObjectMap()) {
       instr = AddInstruction(is_store ? BuildStoreKeyedGeneric(object, key, val)
                                       : BuildLoadKeyedGeneric(object, key));
     } else {
@@ -5616,6 +5627,7 @@ HValue* HOptimizedGraphBuilder::HandlePolymorphicElementAccess(
 
   for (int i = 0; i < untransitionable_maps.length(); ++i) {
     Handle<Map> map = untransitionable_maps[i];
+    if (!map->IsJSObjectMap()) continue;
     ElementsKind elements_kind = map->elements_kind();
     HBasicBlock* this_map = graph()->CreateBasicBlock();
     HBasicBlock* other_map = graph()->CreateBasicBlock();
@@ -5688,10 +5700,9 @@ HValue* HOptimizedGraphBuilder::HandleKeyedElementAccess(
       instr = BuildMonomorphicElementAccess(
           obj, key, val, NULL, map, is_store, expr->GetStoreMode());
     }
-  } else if (expr->GetReceiverTypes() != NULL &&
-             !expr->GetReceiverTypes()->is_empty()) {
+  } else if (types != NULL && !types->is_empty()) {
     return HandlePolymorphicElementAccess(
-        obj, key, val, expr, ast_id, position, is_store,
+        obj, key, val, types, ast_id, position, is_store,
         expr->GetStoreMode(), has_side_effects);
   } else {
     if (is_store) {
@@ -8175,8 +8186,9 @@ HInstruction* HOptimizedGraphBuilder::BuildFastLiteral(
   int object_size = boilerplate_object->map()->instance_size();
   int object_offset = object_size;
 
+  InstanceType instance_type = boilerplate_object->map()->instance_type();
   bool create_allocation_site_info = mode == TRACK_ALLOCATION_SITE &&
-      AllocationSite::CanTrack(boilerplate_object->map()->instance_type());
+      AllocationSite::CanTrack(instance_type);
 
   // If using allocation sites, then the payload on the site should already
   // be filled in as a valid (boilerplate) array.
@@ -8187,9 +8199,12 @@ HInstruction* HOptimizedGraphBuilder::BuildFastLiteral(
     object_size += AllocationMemento::kSize;
   }
 
+  ASSERT(instance_type == JS_ARRAY_TYPE || instance_type == JS_OBJECT_TYPE);
+  HType type = instance_type == JS_ARRAY_TYPE
+      ? HType::JSArray() : HType::JSObject();
   HValue* object_size_constant = Add<HConstant>(object_size);
-  HInstruction* object = Add<HAllocate>(object_size_constant, HType::JSObject(),
-      isolate()->heap()->GetPretenureMode(), JS_OBJECT_TYPE);
+  HInstruction* object = Add<HAllocate>(object_size_constant, type,
+      isolate()->heap()->GetPretenureMode(), instance_type);
 
 
   BuildEmitObjectHeader(boilerplate_object, object);

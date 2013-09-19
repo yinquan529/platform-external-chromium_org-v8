@@ -24,12 +24,9 @@ $(gyp_intermediate_dir)/libraries.cc: $(gyp_shared_intermediate_dir)/libraries.c
 	mkdir -p $(@D); cp $< $@
 $(gyp_intermediate_dir)/experimental-libraries.cc: $(gyp_shared_intermediate_dir)/experimental-libraries.cc
 	mkdir -p $(@D); cp $< $@
-$(gyp_intermediate_dir)/i18n-libraries.cc: $(gyp_shared_intermediate_dir)/i18n-libraries.cc
-	mkdir -p $(@D); cp $< $@
 LOCAL_GENERATED_SOURCES := \
 	$(gyp_intermediate_dir)/libraries.cc \
-	$(gyp_intermediate_dir)/experimental-libraries.cc \
-	$(gyp_intermediate_dir)/i18n-libraries.cc
+	$(gyp_intermediate_dir)/experimental-libraries.cc
 
 GYP_COPIED_SOURCE_ORIGIN_DIRS := \
 	$(gyp_shared_intermediate_dir)
@@ -61,7 +58,7 @@ MY_CFLAGS_Debug := \
 
 MY_DEFS_Debug := \
 	'-DANGLE_DX11' \
-	'-DWTF_VECTOR_INITIAL_SIZE=16' \
+	'-DWTF_VECTOR_INITIAL_SIZE=4' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DNO_TCMALLOC' \
 	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \
@@ -128,7 +125,7 @@ MY_CFLAGS_Release := \
 
 MY_DEFS_Release := \
 	'-DANGLE_DX11' \
-	'-DWTF_VECTOR_INITIAL_SIZE=16' \
+	'-DWTF_VECTOR_INITIAL_SIZE=4' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DNO_TCMALLOC' \
 	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \

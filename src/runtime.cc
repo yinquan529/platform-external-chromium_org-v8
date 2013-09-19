@@ -2276,9 +2276,13 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_InitializeConstGlobal) {
   LookupResult lookup(isolate);
   global->LocalLookup(*name, &lookup);
   if (!lookup.IsFound()) {
-    return global->SetLocalPropertyIgnoreAttributes(*name,
-                                                    *value,
-                                                    attributes);
+    HandleScope handle_scope(isolate);
+    Handle<GlobalObject> global(isolate->context()->global_object());
+    RETURN_IF_EMPTY_HANDLE(
+        isolate,
+        JSObject::SetLocalPropertyIgnoreAttributes(global, name, value,
+                                                   attributes));
+    return *value;
   }
 
   if (!lookup.IsReadOnly()) {
@@ -2495,41 +2499,41 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_RegExpConstructResult) {
 
 
 RUNTIME_FUNCTION(MaybeObject*, Runtime_RegExpInitializeObject) {
-  SealHandleScope shs(isolate);
+  HandleScope scope(isolate);
   DisallowHeapAllocation no_allocation;
   ASSERT(args.length() == 5);
-  CONVERT_ARG_CHECKED(JSRegExp, regexp, 0);
-  CONVERT_ARG_CHECKED(String, source, 1);
+  CONVERT_ARG_HANDLE_CHECKED(JSRegExp, regexp, 0);
+  CONVERT_ARG_HANDLE_CHECKED(String, source, 1);
   // If source is the empty string we set it to "(?:)" instead as
   // suggested by ECMA-262, 5th, section 15.10.4.1.
-  if (source->length() == 0) source = isolate->heap()->query_colon_string();
+  if (source->length() == 0) source = isolate->factory()->query_colon_string();
 
-  Object* global = args[2];
-  if (!global->IsTrue()) global = isolate->heap()->false_value();
+  CONVERT_ARG_HANDLE_CHECKED(Object, global, 2);
+  if (!global->IsTrue()) global = isolate->factory()->false_value();
 
-  Object* ignoreCase = args[3];
-  if (!ignoreCase->IsTrue()) ignoreCase = isolate->heap()->false_value();
+  CONVERT_ARG_HANDLE_CHECKED(Object, ignoreCase, 3);
+  if (!ignoreCase->IsTrue()) ignoreCase = isolate->factory()->false_value();
 
-  Object* multiline = args[4];
-  if (!multiline->IsTrue()) multiline = isolate->heap()->false_value();
+  CONVERT_ARG_HANDLE_CHECKED(Object, multiline, 4);
+  if (!multiline->IsTrue()) multiline = isolate->factory()->false_value();
 
   Map* map = regexp->map();
   Object* constructor = map->constructor();
   if (constructor->IsJSFunction() &&
       JSFunction::cast(constructor)->initial_map() == map) {
     // If we still have the original map, set in-object properties directly.
-    regexp->InObjectPropertyAtPut(JSRegExp::kSourceFieldIndex, source);
+    regexp->InObjectPropertyAtPut(JSRegExp::kSourceFieldIndex, *source);
     // Both true and false are immovable immortal objects so no need for write
     // barrier.
     regexp->InObjectPropertyAtPut(
-        JSRegExp::kGlobalFieldIndex, global, SKIP_WRITE_BARRIER);
+        JSRegExp::kGlobalFieldIndex, *global, SKIP_WRITE_BARRIER);
     regexp->InObjectPropertyAtPut(
-        JSRegExp::kIgnoreCaseFieldIndex, ignoreCase, SKIP_WRITE_BARRIER);
+        JSRegExp::kIgnoreCaseFieldIndex, *ignoreCase, SKIP_WRITE_BARRIER);
     regexp->InObjectPropertyAtPut(
-        JSRegExp::kMultilineFieldIndex, multiline, SKIP_WRITE_BARRIER);
+        JSRegExp::kMultilineFieldIndex, *multiline, SKIP_WRITE_BARRIER);
     regexp->InObjectPropertyAtPut(
         JSRegExp::kLastIndexFieldIndex, Smi::FromInt(0), SKIP_WRITE_BARRIER);
-    return regexp;
+    return *regexp;
   }
 
   // Map has changed, so use generic, but slower, method.
@@ -2537,34 +2541,19 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_RegExpInitializeObject) {
       static_cast<PropertyAttributes>(READ_ONLY | DONT_ENUM | DONT_DELETE);
   PropertyAttributes writable =
       static_cast<PropertyAttributes>(DONT_ENUM | DONT_DELETE);
-  Heap* heap = isolate->heap();
-  MaybeObject* result;
-  result = regexp->SetLocalPropertyIgnoreAttributes(heap->source_string(),
-                                                    source,
-                                                    final);
-  // TODO(jkummerow): Turn these back into ASSERTs when we can be certain
-  // that it never fires in Release mode in the wild.
-  CHECK(!result->IsFailure());
-  result = regexp->SetLocalPropertyIgnoreAttributes(heap->global_string(),
-                                                    global,
-                                                    final);
-  CHECK(!result->IsFailure());
-  result =
-      regexp->SetLocalPropertyIgnoreAttributes(heap->ignore_case_string(),
-                                               ignoreCase,
-                                               final);
-  CHECK(!result->IsFailure());
-  result = regexp->SetLocalPropertyIgnoreAttributes(heap->multiline_string(),
-                                                    multiline,
-                                                    final);
-  CHECK(!result->IsFailure());
-  result =
-      regexp->SetLocalPropertyIgnoreAttributes(heap->last_index_string(),
-                                               Smi::FromInt(0),
-                                               writable);
-  CHECK(!result->IsFailure());
-  USE(result);
-  return regexp;
+  Handle<Object> zero(Smi::FromInt(0), isolate);
+  Factory* factory = isolate->factory();
+  CHECK_NOT_EMPTY_HANDLE(isolate, JSObject::SetLocalPropertyIgnoreAttributes(
+      regexp, factory->source_string(), source, final));
+  CHECK_NOT_EMPTY_HANDLE(isolate, JSObject::SetLocalPropertyIgnoreAttributes(
+      regexp, factory->global_string(), global, final));
+  CHECK_NOT_EMPTY_HANDLE(isolate, JSObject::SetLocalPropertyIgnoreAttributes(
+      regexp, factory->ignore_case_string(), ignoreCase, final));
+  CHECK_NOT_EMPTY_HANDLE(isolate, JSObject::SetLocalPropertyIgnoreAttributes(
+      regexp, factory->multiline_string(), multiline, final));
+  CHECK_NOT_EMPTY_HANDLE(isolate, JSObject::SetLocalPropertyIgnoreAttributes(
+      regexp, factory->last_index_string(), zero, writable));
+  return *regexp;
 }
 
 
@@ -5064,9 +5053,10 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_DefineOrRedefineDataProperty) {
     JSObject::NormalizeProperties(js_object, CLEAR_INOBJECT_PROPERTIES, 0);
     // Use IgnoreAttributes version since a readonly property may be
     // overridden and SetProperty does not allow this.
-    return js_object->SetLocalPropertyIgnoreAttributes(*name,
-                                                       *obj_value,
-                                                       attr);
+    Handle<Object> result = JSObject::SetLocalPropertyIgnoreAttributes(
+        js_object, name, obj_value, attr);
+    RETURN_IF_EMPTY_HANDLE(isolate, result);
+    return *result;
   }
 
   return Runtime::ForceSetObjectProperty(isolate,
@@ -5252,7 +5242,10 @@ MaybeObject* Runtime::ForceSetObjectProperty(Isolate* isolate,
           index, *value, attr, kNonStrictMode, false, DEFINE_PROPERTY);
     } else {
       if (name->IsString()) Handle<String>::cast(name)->TryFlatten();
-      return js_object->SetLocalPropertyIgnoreAttributes(*name, *value, attr);
+      Handle<Object> result = JSObject::SetLocalPropertyIgnoreAttributes(
+          js_object, name, value, attr);
+      RETURN_IF_EMPTY_HANDLE(isolate, result);
+      return *result;
     }
   }
 
@@ -5267,7 +5260,10 @@ MaybeObject* Runtime::ForceSetObjectProperty(Isolate* isolate,
     return js_object->SetElement(
         index, *value, attr, kNonStrictMode, false, DEFINE_PROPERTY);
   } else {
-    return js_object->SetLocalPropertyIgnoreAttributes(*name, *value, attr);
+    Handle<Object> result = JSObject::SetLocalPropertyIgnoreAttributes(
+        js_object, name, value, attr);
+    RETURN_IF_EMPTY_HANDLE(isolate, result);
+    return *result;
   }
 }
 
@@ -5470,10 +5466,11 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_DebugPrepareStepInIfStepping) {
 // Set a local property, even if it is READ_ONLY.  If the property does not
 // exist, it will be added with attributes NONE.
 RUNTIME_FUNCTION(MaybeObject*, Runtime_IgnoreAttributesAndSetProperty) {
-  SealHandleScope shs(isolate);
+  HandleScope scope(isolate);
   RUNTIME_ASSERT(args.length() == 3 || args.length() == 4);
-  CONVERT_ARG_CHECKED(JSObject, object, 0);
-  CONVERT_ARG_CHECKED(Name, name, 1);
+  CONVERT_ARG_HANDLE_CHECKED(JSObject, object, 0);
+  CONVERT_ARG_HANDLE_CHECKED(Name, name, 1);
+  CONVERT_ARG_HANDLE_CHECKED(Object, value, 2);
   // Compute attributes.
   PropertyAttributes attributes = NONE;
   if (args.length() == 4) {
@@ -5483,9 +5480,10 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_IgnoreAttributesAndSetProperty) {
         (unchecked_value & ~(READ_ONLY | DONT_ENUM | DONT_DELETE)) == 0);
     attributes = static_cast<PropertyAttributes>(unchecked_value);
   }
-
-  return object->
-      SetLocalPropertyIgnoreAttributes(name, args[2], attributes);
+  Handle<Object> result = JSObject::SetLocalPropertyIgnoreAttributes(
+      object, name, value, attributes);
+  RETURN_IF_EMPTY_HANDLE(isolate, result);
+  return *result;
 }
 
 
@@ -8346,16 +8344,6 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_ConcurrentRecompile) {
 }
 
 
-RUNTIME_FUNCTION(MaybeObject*, Runtime_InstallRecompiledCode) {
-  HandleScope handle_scope(isolate);
-  ASSERT(args.length() == 1);
-  CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
-  ASSERT(isolate->use_crankshaft() && FLAG_concurrent_recompilation);
-  isolate->optimizing_compiler_thread()->InstallOptimizedFunctions();
-  return function->code();
-}
-
-
 class ActivationsFinder : public ThreadVisitor {
  public:
   Code* code_;
@@ -8553,8 +8541,7 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_GetOptimizationStatus) {
   }
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
   if (FLAG_concurrent_recompilation && sync_with_compiler_thread) {
-    while (function->IsInRecompileQueue() ||
-           function->IsMarkedForInstallingRecompiledCode()) {
+    while (function->IsInRecompileQueue()) {
       isolate->optimizing_compiler_thread()->InstallOptimizedFunctions();
       OS::Sleep(50);
     }
@@ -8581,38 +8568,125 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_GetOptimizationCount) {
 }
 
 
+static bool IsSuitableForOnStackReplacement(Isolate* isolate,
+                                            Handle<JSFunction> function,
+                                            Handle<Code> unoptimized) {
+  // Keep track of whether we've succeeded in optimizing.
+  if (!unoptimized->optimizable()) return false;
+  // If we are trying to do OSR when there are already optimized
+  // activations of the function, it means (a) the function is directly or
+  // indirectly recursive and (b) an optimized invocation has been
+  // deoptimized so that we are currently in an unoptimized activation.
+  // Check for optimized activations of this function.
+  for (JavaScriptFrameIterator it(isolate); !it.done(); it.Advance()) {
+    JavaScriptFrame* frame = it.frame();
+    if (frame->is_optimized() && frame->function() == *function) return false;
+  }
+
+  return true;
+}
+
+
 RUNTIME_FUNCTION(MaybeObject*, Runtime_CompileForOnStackReplacement) {
   HandleScope scope(isolate);
-  ASSERT(args.length() == 1);
+  ASSERT(args.length() == 2);
   CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
+  CONVERT_NUMBER_CHECKED(uint32_t, pc_offset, Uint32, args[1]);
+  Handle<Code> unoptimized(function->shared()->code(), isolate);
+
+#ifdef DEBUG
+  JavaScriptFrameIterator it(isolate);
+  JavaScriptFrame* frame = it.frame();
+  ASSERT_EQ(frame->function(), *function);
+  ASSERT_EQ(frame->LookupCode(), *unoptimized);
+  ASSERT(unoptimized->contains(frame->pc()));
+
+  ASSERT(pc_offset ==
+         static_cast<uint32_t>(frame->pc() - unoptimized->instruction_start()));
+#endif  // DEBUG
 
   // We're not prepared to handle a function with arguments object.
   ASSERT(!function->shared()->uses_arguments());
 
-  // If the optimization attempt succeeds, return the code object which
-  // the unoptimized code can jump into.
-  Handle<Code> code =
-      (FLAG_concurrent_recompilation && FLAG_concurrent_osr)
-          ? Compiler::CompileForConcurrentOSR(function)
-          : Compiler::CompileForOnStackReplacement(function);
-  if (!code.is_null()) {
-#if DEBUG
-    ASSERT(code->kind() == Code::OPTIMIZED_FUNCTION);
-    DeoptimizationInputData* data =
-        DeoptimizationInputData::cast(code->deoptimization_data());
-    ASSERT(!BailoutId(data->OsrAstId()->value()).IsNone());
-#endif
-    // TODO(titzer): this is a massive hack to make the deopt counts
-    // match. Fix heuristics for reenabling optimizations!
-    function->shared()->increment_deopt_count();
-    return *code;
-  } else {
-    if (function->IsMarkedForLazyRecompilation() ||
-        function->IsMarkedForConcurrentRecompilation()) {
-      function->ReplaceCode(function->shared()->code());
+  Handle<Code> result = Handle<Code>::null();
+  BailoutId ast_id = BailoutId::None();
+
+  if (FLAG_concurrent_recompilation && FLAG_concurrent_osr) {
+    if (isolate->optimizing_compiler_thread()->
+            IsQueuedForOSR(function, pc_offset)) {
+      // Still waiting for the optimizing compiler thread to finish.  Carry on.
+      if (FLAG_trace_osr) {
+        PrintF("[COSR - polling recompile tasks for ");
+        function->PrintName();
+        PrintF("]\n");
+      }
+      return NULL;
     }
-    return NULL;
+
+    OptimizingCompiler* compiler = isolate->optimizing_compiler_thread()->
+        FindReadyOSRCandidate(function, pc_offset);
+
+    if (compiler == NULL) {
+      if (IsSuitableForOnStackReplacement(isolate, function, unoptimized) &&
+          Compiler::RecompileConcurrent(function, pc_offset)) {
+        if (function->IsMarkedForLazyRecompilation() ||
+            function->IsMarkedForConcurrentRecompilation()) {
+          // Prevent regular recompilation if we queue this for OSR.
+          // TODO(yangguo): remove this as soon as OSR becomes one-shot.
+          function->ReplaceCode(function->shared()->code());
+        }
+        return NULL;
+      }
+      // Fall through to the end in case of failure.
+    } else {
+      // TODO(titzer): don't install the OSR code into the function.
+      ast_id = compiler->info()->osr_ast_id();
+      result = Compiler::InstallOptimizedCode(compiler);
+    }
+  } else if (IsSuitableForOnStackReplacement(isolate, function, unoptimized)) {
+    ast_id = unoptimized->TranslatePcOffsetToAstId(pc_offset);
+    ASSERT(!ast_id.IsNone());
+    if (FLAG_trace_osr) {
+      PrintF("[OSR - replacing at AST id %d in ", ast_id.ToInt());
+      function->PrintName();
+      PrintF("]\n");
+    }
+    // Attempt OSR compilation.
+    result = JSFunction::CompileOsr(function, ast_id, CLEAR_EXCEPTION);
   }
+
+  // Revert the patched interrupt now, regardless of whether OSR succeeds.
+  Deoptimizer::RevertInterruptCode(isolate, *unoptimized);
+
+  // Check whether we ended up with usable optimized code.
+  if (!result.is_null() && result->kind() == Code::OPTIMIZED_FUNCTION) {
+    DeoptimizationInputData* data =
+        DeoptimizationInputData::cast(result->deoptimization_data());
+
+    if (data->OsrPcOffset()->value() >= 0) {
+      ASSERT(BailoutId(data->OsrAstId()->value()) == ast_id);
+      if (FLAG_trace_osr) {
+        PrintF("[OSR - entry at AST id %d, offset %d in optimized code]\n",
+               ast_id.ToInt(), data->OsrPcOffset()->value());
+      }
+      // TODO(titzer): this is a massive hack to make the deopt counts
+      // match. Fix heuristics for reenabling optimizations!
+      function->shared()->increment_deopt_count();
+      return *result;
+    }
+  }
+
+  if (FLAG_trace_osr) {
+    PrintF("[OSR - optimization failed for ");
+    function->PrintName();
+    PrintF("]\n");
+  }
+
+  if (function->IsMarkedForLazyRecompilation() ||
+      function->IsMarkedForConcurrentRecompilation()) {
+    function->ReplaceCode(function->shared()->code());
+  }
+  return NULL;
 }
 
 
@@ -9295,11 +9369,27 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_StackGuard) {
 
   // First check if this is a real stack overflow.
   if (isolate->stack_guard()->IsStackOverflow()) {
-    SealHandleScope shs(isolate);
     return isolate->StackOverflow();
   }
 
   return Execution::HandleStackGuardInterrupt(isolate);
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_TryInstallRecompiledCode) {
+  HandleScope scope(isolate);
+  ASSERT(args.length() == 1);
+  CONVERT_ARG_HANDLE_CHECKED(JSFunction, function, 0);
+
+  // First check if this is a real stack overflow.
+  if (isolate->stack_guard()->IsStackOverflow()) {
+    SealHandleScope shs(isolate);
+    return isolate->StackOverflow();
+  }
+
+  isolate->optimizing_compiler_thread()->InstallOptimizedFunctions();
+  return (function->IsOptimized()) ? function->code()
+                                   : function->shared()->code();
 }
 
 
@@ -14418,6 +14508,14 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_HaveSameMap) {
 }
 
 
+RUNTIME_FUNCTION(MaybeObject*, Runtime_IsAccessCheckNeeded) {
+  SealHandleScope shs(isolate);
+  ASSERT(args.length() == 1);
+  CONVERT_ARG_CHECKED(HeapObject, obj, 0);
+  return isolate->heap()->ToBoolean(obj->IsAccessCheckNeeded());
+}
+
+
 RUNTIME_FUNCTION(MaybeObject*, Runtime_IsObserved) {
   SealHandleScope shs(isolate);
   ASSERT(args.length() == 1);
@@ -14492,6 +14590,34 @@ RUNTIME_FUNCTION(MaybeObject*, Runtime_UnwrapGlobalProxy) {
     if (object->IsNull()) return isolate->heap()->undefined_value();
   }
   return object;
+}
+
+
+RUNTIME_FUNCTION(MaybeObject*, Runtime_IsAccessAllowedForObserver) {
+  HandleScope scope(isolate);
+  ASSERT(args.length() == 3);
+  CONVERT_ARG_HANDLE_CHECKED(JSFunction, observer, 0);
+  CONVERT_ARG_HANDLE_CHECKED(JSObject, object, 1);
+  ASSERT(object->IsAccessCheckNeeded());
+  Handle<Object> key = args.at<Object>(2);
+  SaveContext save(isolate);
+  isolate->set_context(observer->context());
+  if (!isolate->MayNamedAccess(*object, isolate->heap()->undefined_value(),
+                               v8::ACCESS_KEYS)) {
+    return isolate->heap()->false_value();
+  }
+  bool access_allowed = false;
+  uint32_t index = 0;
+  if (key->ToArrayIndex(&index) ||
+      (key->IsString() && String::cast(*key)->AsArrayIndex(&index))) {
+    access_allowed =
+        isolate->MayIndexedAccess(*object, index, v8::ACCESS_GET) &&
+        isolate->MayIndexedAccess(*object, index, v8::ACCESS_HAS);
+  } else {
+    access_allowed = isolate->MayNamedAccess(*object, *key, v8::ACCESS_GET) &&
+        isolate->MayNamedAccess(*object, *key, v8::ACCESS_HAS);
+  }
+  return isolate->heap()->ToBoolean(access_allowed);
 }
 
 

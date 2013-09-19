@@ -90,13 +90,13 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-infer-types.cc \
 	v8/src/hydrogen-mark-deoptimize.cc \
 	v8/src/hydrogen-minus-zero.cc \
+	v8/src/hydrogen-osr.cc \
 	v8/src/hydrogen-range-analysis.cc \
 	v8/src/hydrogen-redundant-phi.cc \
 	v8/src/hydrogen-removable-simulates.cc \
 	v8/src/hydrogen-representation-changes.cc \
 	v8/src/hydrogen-sce.cc \
 	v8/src/hydrogen-uint32-analysis.cc \
-	v8/src/hydrogen-osr.cc \
 	v8/src/i18n.cc \
 	v8/src/icu_util.cc \
 	v8/src/ic.cc \
@@ -186,7 +186,6 @@ LOCAL_SRC_FILES := \
 	v8/src/ia32/regexp-macro-assembler-ia32.cc \
 	v8/src/ia32/stub-cache-ia32.cc \
 	v8/src/platform-posix.cc \
-	v8/src/extensions/i18n/i18n-extension.cc \
 	v8/src/platform-macos.cc
 
 
@@ -212,7 +211,7 @@ MY_CFLAGS_Debug := \
 
 MY_DEFS_Debug := \
 	'-DANGLE_DX11' \
-	'-DWTF_VECTOR_INITIAL_SIZE=16' \
+	'-DWTF_VECTOR_INITIAL_SIZE=4' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DNO_TCMALLOC' \
 	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \
@@ -283,7 +282,7 @@ MY_CFLAGS_Release := \
 
 MY_DEFS_Release := \
 	'-DANGLE_DX11' \
-	'-DWTF_VECTOR_INITIAL_SIZE=16' \
+	'-DWTF_VECTOR_INITIAL_SIZE=4' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DNO_TCMALLOC' \
 	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \

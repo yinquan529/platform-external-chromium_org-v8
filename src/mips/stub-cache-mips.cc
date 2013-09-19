@@ -777,16 +777,17 @@ static void PushInterceptorArguments(MacroAssembler* masm,
                                      Register holder,
                                      Register name,
                                      Handle<JSObject> holder_obj) {
+  STATIC_ASSERT(StubCache::kInterceptorArgsNameIndex == 0);
+  STATIC_ASSERT(StubCache::kInterceptorArgsInfoIndex == 1);
+  STATIC_ASSERT(StubCache::kInterceptorArgsThisIndex == 2);
+  STATIC_ASSERT(StubCache::kInterceptorArgsHolderIndex == 3);
+  STATIC_ASSERT(StubCache::kInterceptorArgsLength == 4);
   __ push(name);
   Handle<InterceptorInfo> interceptor(holder_obj->GetNamedInterceptor());
   ASSERT(!masm->isolate()->heap()->InNewSpace(*interceptor));
   Register scratch = name;
   __ li(scratch, Operand(interceptor));
   __ Push(scratch, receiver, holder);
-  __ lw(scratch, FieldMemOperand(scratch, InterceptorInfo::kDataOffset));
-  __ push(scratch);
-  __ li(scratch, Operand(ExternalReference::isolate_address(masm->isolate())));
-  __ push(scratch);
 }
 
 
@@ -801,7 +802,7 @@ static void CompileCallLoadPropertyWithInterceptor(
   ExternalReference ref =
       ExternalReference(IC_Utility(IC::kLoadPropertyWithInterceptorOnly),
           masm->isolate());
-  __ PrepareCEntryArgs(6);
+  __ PrepareCEntryArgs(StubCache::kInterceptorArgsLength);
   __ PrepareCEntryFunction(ref);
 
   CEntryStub stub(1);
@@ -1107,7 +1108,7 @@ class CallInterceptorCompiler BASE_EMBEDDED {
           ExternalReference(
               IC_Utility(IC::kLoadPropertyWithInterceptorForCall),
               masm->isolate()),
-          6);
+          StubCache::kInterceptorArgsLength);
     // Restore the name_ register.
     __ pop(name_);
     // Leave the internal frame.
@@ -1415,6 +1416,15 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
     Handle<ExecutableAccessorInfo> callback) {
   // Build AccessorInfo::args_ list on the stack and push property name below
   // the exit frame to make GC aware of them and store pointers to them.
+  STATIC_ASSERT(PropertyCallbackArguments::kThisIndex == 0);
+  STATIC_ASSERT(PropertyCallbackArguments::kDataIndex == -1);
+  STATIC_ASSERT(PropertyCallbackArguments::kReturnValueOffset == -2);
+  STATIC_ASSERT(PropertyCallbackArguments::kReturnValueDefaultValueIndex == -3);
+  STATIC_ASSERT(PropertyCallbackArguments::kIsolateIndex == -4);
+  STATIC_ASSERT(PropertyCallbackArguments::kHolderIndex == -5);
+  ASSERT(!scratch2().is(reg));
+  ASSERT(!scratch3().is(reg));
+  ASSERT(!scratch4().is(reg));
   __ push(receiver());
   __ mov(scratch2(), sp);  // scratch2 = AccessorInfo::args_
   if (heap()->InNewSpace(callback->data())) {
@@ -1425,14 +1435,14 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
     __ li(scratch3(), Handle<Object>(callback->data(), isolate()));
   }
   __ Subu(sp, sp, 6 * kPointerSize);
-  __ sw(reg, MemOperand(sp, 5 * kPointerSize));
-  __ sw(scratch3(), MemOperand(sp, 4 * kPointerSize));
+  __ sw(scratch3(), MemOperand(sp, 5 * kPointerSize));
   __ LoadRoot(scratch3(), Heap::kUndefinedValueRootIndex);
+  __ sw(scratch3(), MemOperand(sp, 4 * kPointerSize));
   __ sw(scratch3(), MemOperand(sp, 3 * kPointerSize));
-  __ sw(scratch3(), MemOperand(sp, 2 * kPointerSize));
   __ li(scratch4(),
         Operand(ExternalReference::isolate_address(isolate())));
-  __ sw(scratch4(), MemOperand(sp, 1 * kPointerSize));
+  __ sw(scratch4(), MemOperand(sp, 2 * kPointerSize));
+  __ sw(reg, MemOperand(sp, 1 * kPointerSize));
   __ sw(name(), MemOperand(sp, 0 * kPointerSize));
 
   __ mov(a2, scratch2());  // Saved in case scratch2 == a1.
@@ -1465,7 +1475,7 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
                               thunk_ref,
                               a2,
                               kStackUnwindSpace,
-                              5);
+                              6);
 }
 
 
@@ -1550,7 +1560,7 @@ void BaseLoadStubCompiler::GenerateLoadInterceptor(
 
     ExternalReference ref = ExternalReference(
         IC_Utility(IC::kLoadPropertyWithInterceptorForLoad), isolate());
-    __ TailCallExternalReference(ref, 6, 1);
+    __ TailCallExternalReference(ref, StubCache::kInterceptorArgsLength, 1);
   }
 }
 
@@ -2932,46 +2942,6 @@ Handle<Code> StoreStubCompiler::CompileStoreInterceptor(
 
   // Return the generated code.
   return GetCode(kind(), Code::INTERCEPTOR, name);
-}
-
-
-Handle<Code> StoreStubCompiler::CompileStoreGlobal(
-    Handle<GlobalObject> object,
-    Handle<PropertyCell> cell,
-    Handle<Name> name) {
-  Label miss;
-
-  // Check that the map of the global has not changed.
-  __ lw(scratch1(), FieldMemOperand(receiver(), HeapObject::kMapOffset));
-  __ Branch(&miss, ne, scratch1(), Operand(Handle<Map>(object->map())));
-
-  // Check that the value in the cell is not the hole. If it is, this
-  // cell could have been deleted and reintroducing the global needs
-  // to update the property details in the property dictionary of the
-  // global object. We bail out to the runtime system to do that.
-  __ li(scratch1(), Operand(cell));
-  __ LoadRoot(scratch2(), Heap::kTheHoleValueRootIndex);
-  __ lw(scratch3(), FieldMemOperand(scratch1(), Cell::kValueOffset));
-  __ Branch(&miss, eq, scratch3(), Operand(scratch2()));
-
-  // Store the value in the cell.
-  __ sw(value(), FieldMemOperand(scratch1(), Cell::kValueOffset));
-  __ mov(v0, a0);  // Stored value must be returned in v0.
-  // Cells are always rescanned, so no write barrier here.
-
-  Counters* counters = isolate()->counters();
-  __ IncrementCounter(
-      counters->named_store_global_inline(), 1, scratch1(), scratch2());
-  __ Ret();
-
-  // Handle store cache miss.
-  __ bind(&miss);
-  __ IncrementCounter(
-      counters->named_store_global_inline_miss(), 1, scratch1(), scratch2());
-  TailCallBuiltin(masm(), MissBuiltin(kind()));
-
-  // Return the generated code.
-  return GetICCode(kind(), Code::NORMAL, name);
 }
 
 
