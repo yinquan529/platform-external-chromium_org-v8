@@ -88,6 +88,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-gvn.cc \
 	v8/src/hydrogen-infer-representation.cc \
 	v8/src/hydrogen-infer-types.cc \
+	v8/src/hydrogen-load-elimination.cc \
 	v8/src/hydrogen-mark-deoptimize.cc \
 	v8/src/hydrogen-minus-zero.cc \
 	v8/src/hydrogen-osr.cc \
