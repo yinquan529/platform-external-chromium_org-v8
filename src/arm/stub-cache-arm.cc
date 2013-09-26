@@ -380,31 +380,27 @@ void StubCompiler::GenerateLoadStringLength(MacroAssembler* masm,
                                             Register receiver,
                                             Register scratch1,
                                             Register scratch2,
-                                            Label* miss,
-                                            bool support_wrappers) {
+                                            Label* miss) {
   Label check_wrapper;
 
   // Check if the object is a string leaving the instance type in the
   // scratch1 register.
-  GenerateStringCheck(masm, receiver, scratch1, scratch2, miss,
-                      support_wrappers ? &check_wrapper : miss);
+  GenerateStringCheck(masm, receiver, scratch1, scratch2, miss, &check_wrapper);
 
   // Load length directly from the string.
   __ ldr(r0, FieldMemOperand(receiver, String::kLengthOffset));
   __ Ret();
 
-  if (support_wrappers) {
-    // Check if the object is a JSValue wrapper.
-    __ bind(&check_wrapper);
-    __ cmp(scratch1, Operand(JS_VALUE_TYPE));
-    __ b(ne, miss);
+  // Check if the object is a JSValue wrapper.
+  __ bind(&check_wrapper);
+  __ cmp(scratch1, Operand(JS_VALUE_TYPE));
+  __ b(ne, miss);
 
-    // Unwrap the value and check if the wrapped value is a string.
-    __ ldr(scratch1, FieldMemOperand(receiver, JSValue::kValueOffset));
-    GenerateStringCheck(masm, scratch1, scratch2, scratch2, miss, miss);
-    __ ldr(r0, FieldMemOperand(scratch1, String::kLengthOffset));
-    __ Ret();
-  }
+  // Unwrap the value and check if the wrapped value is a string.
+  __ ldr(scratch1, FieldMemOperand(receiver, JSValue::kValueOffset));
+  GenerateStringCheck(masm, scratch1, scratch2, scratch2, miss, miss);
+  __ ldr(r0, FieldMemOperand(scratch1, String::kLengthOffset));
+  __ Ret();
 }
 
 
@@ -843,23 +839,28 @@ static void FreeSpaceForFastApiCall(MacroAssembler* masm) {
 
 static void GenerateFastApiDirectCall(MacroAssembler* masm,
                                       const CallOptimization& optimization,
-                                      int argc) {
+                                      int argc,
+                                      bool restore_context) {
   // ----------- S t a t e -------------
-  //  -- sp[0]              : holder (set by CheckPrototypes)
-  //  -- sp[4]              : callee JS function
-  //  -- sp[8]              : call data
-  //  -- sp[12]             : isolate
-  //  -- sp[16]             : ReturnValue default value
-  //  -- sp[20]             : ReturnValue
-  //  -- sp[24]             : last JS argument
+  //  -- sp[0]              : context
+  //  -- sp[4]              : holder (set by CheckPrototypes)
+  //  -- sp[8]              : callee JS function
+  //  -- sp[12]             : call data
+  //  -- sp[16]             : isolate
+  //  -- sp[20]             : ReturnValue default value
+  //  -- sp[24]             : ReturnValue
+  //  -- sp[28]             : last JS argument
   //  -- ...
-  //  -- sp[(argc + 5) * 4] : first JS argument
-  //  -- sp[(argc + 6) * 4] : receiver
+  //  -- sp[(argc + 6) * 4] : first JS argument
+  //  -- sp[(argc + 7) * 4] : receiver
   // -----------------------------------
+  // Save calling context.
+  __ str(cp, MemOperand(sp));
   // Get the function and setup the context.
   Handle<JSFunction> function = optimization.constant_function();
   __ LoadHeapObject(r5, function);
   __ ldr(cp, FieldMemOperand(r5, JSFunction::kContextOffset));
+  __ str(r5, MemOperand(sp, 2 * kPointerSize));
 
   // Pass the additional arguments.
   Handle<CallHandlerInfo> api_call_info = optimization.api_call_info();
@@ -870,15 +871,18 @@ static void GenerateFastApiDirectCall(MacroAssembler* masm,
   } else {
     __ Move(r6, call_data);
   }
-  __ mov(r7, Operand(ExternalReference::isolate_address(masm->isolate())));
-  // Store JS function, call data, isolate ReturnValue default and ReturnValue.
-  __ stm(ib, sp, r5.bit() | r6.bit() | r7.bit());
-  __ LoadRoot(r5, Heap::kUndefinedValueRootIndex);
+  // Store call data.
+  __ str(r6, MemOperand(sp, 3 * kPointerSize));
+  // Store isolate.
+  __ mov(r5, Operand(ExternalReference::isolate_address(masm->isolate())));
   __ str(r5, MemOperand(sp, 4 * kPointerSize));
+  // Store ReturnValue default and ReturnValue.
+  __ LoadRoot(r5, Heap::kUndefinedValueRootIndex);
   __ str(r5, MemOperand(sp, 5 * kPointerSize));
+  __ str(r5, MemOperand(sp, 6 * kPointerSize));
 
   // Prepare arguments.
-  __ add(r2, sp, Operand(5 * kPointerSize));
+  __ add(r2, sp, Operand((kFastApiCallArguments - 1) * kPointerSize));
 
   // Allocate the v8::Arguments structure in the arguments' space since
   // it's not controlled by GC.
@@ -916,12 +920,18 @@ static void GenerateFastApiDirectCall(MacroAssembler* masm,
       masm->isolate());
 
   AllowExternalCallThatCantCauseGC scope(masm);
+  MemOperand context_restore_operand(
+      fp, 2 * kPointerSize);
+  MemOperand return_value_operand(
+      fp, (kFastApiCallArguments + 1) * kPointerSize);
   __ CallApiFunctionAndReturn(ref,
                               function_address,
                               thunk_ref,
                               r1,
                               kStackUnwindSpace,
-                              kFastApiCallArguments + 1);
+                              return_value_operand,
+                              restore_context ?
+                                  &context_restore_operand : NULL);
 }
 
 
@@ -936,10 +946,12 @@ static void GenerateFastApiCall(MacroAssembler* masm,
   ASSERT(!receiver.is(scratch));
 
   const int stack_space = kFastApiCallArguments + argc + 1;
+  const int kHolderIndex = kFastApiCallArguments +
+      FunctionCallbackArguments::kHolderIndex - 1;
   // Assign stack space for the call arguments.
   __ sub(sp, sp, Operand(stack_space * kPointerSize));
   // Write holder to stack frame.
-  __ str(receiver, MemOperand(sp, 0));
+  __ str(receiver, MemOperand(sp, kHolderIndex * kPointerSize));
   // Write receiver to stack frame.
   int index = stack_space - 1;
   __ str(receiver, MemOperand(sp, index * kPointerSize));
@@ -950,7 +962,7 @@ static void GenerateFastApiCall(MacroAssembler* masm,
     __ str(receiver, MemOperand(sp, index-- * kPointerSize));
   }
 
-  GenerateFastApiDirectCall(masm, optimization, argc);
+  GenerateFastApiDirectCall(masm, optimization, argc, true);
 }
 
 
@@ -1064,7 +1076,8 @@ class CallInterceptorCompiler BASE_EMBEDDED {
 
     // Invoke function.
     if (can_do_fast_api_call) {
-      GenerateFastApiDirectCall(masm, optimization, arguments_.immediate());
+      GenerateFastApiDirectCall(
+          masm, optimization, arguments_.immediate(), false);
     } else {
       CallKind call_kind = CallICBase::Contextual::decode(extra_ic_state_)
           ? CALL_AS_FUNCTION
@@ -1188,6 +1201,8 @@ Register StubCompiler::CheckPrototypes(Handle<JSObject> object,
                                        int save_at_depth,
                                        Label* miss,
                                        PrototypeCheckType check) {
+  const int kHolderIndex = kFastApiCallArguments +
+      FunctionCallbackArguments::kHolderIndex - 1;
   // Make sure that the type feedback oracle harvests the receiver map.
   // TODO(svenpanne) Remove this hack when all ICs are reworked.
   __ mov(scratch1, Operand(Handle<Map>(object->map())));
@@ -1203,7 +1218,7 @@ Register StubCompiler::CheckPrototypes(Handle<JSObject> object,
   int depth = 0;
 
   if (save_at_depth == depth) {
-    __ str(reg, MemOperand(sp));
+    __ str(reg, MemOperand(sp, kHolderIndex * kPointerSize));
   }
 
   // Check the maps in the prototype chain.
@@ -1262,7 +1277,7 @@ Register StubCompiler::CheckPrototypes(Handle<JSObject> object,
     }
 
     if (save_at_depth == depth) {
-      __ str(reg, MemOperand(sp));
+      __ str(reg, MemOperand(sp, kHolderIndex * kPointerSize));
     }
 
     // Go to the next object in the prototype chain.
@@ -1457,7 +1472,7 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
   __ str(scratch2(), MemOperand(sp, 1 * kPointerSize));
   __ add(r1, sp, Operand(1 * kPointerSize));  // r1 = AccessorInfo&
 
-  const int kStackUnwindSpace = kFastApiCallArguments + 1;
+  const int kStackUnwindSpace = PropertyCallbackArguments::kArgsLength + 1;
   Address getter_address = v8::ToCData<Address>(callback->getter());
 
   ApiFunction fun(getter_address);
@@ -1475,7 +1490,8 @@ void BaseLoadStubCompiler::GenerateLoadCallback(
                               thunk_ref,
                               r2,
                               kStackUnwindSpace,
-                              6);
+                              MemOperand(fp, 6 * kPointerSize),
+                              NULL);
 }
 
 
@@ -1839,15 +1855,15 @@ Handle<Code> CallStubCompiler::CompileArrayPushCall(
 
       if (FLAG_smi_only_arrays  && !FLAG_trace_elements_transitions) {
         Label fast_object, not_fast_object;
-        __ CheckFastObjectElements(r3, r7, &not_fast_object);
+        __ CheckFastObjectElements(r3, r9, &not_fast_object);
         __ jmp(&fast_object);
         // In case of fast smi-only, convert to fast object, otherwise bail out.
         __ bind(&not_fast_object);
-        __ CheckFastSmiElements(r3, r7, &call_builtin);
+        __ CheckFastSmiElements(r3, r9, &call_builtin);
 
-        __ ldr(r7, FieldMemOperand(r4, HeapObject::kMapOffset));
+        __ ldr(r9, FieldMemOperand(r4, HeapObject::kMapOffset));
         __ LoadRoot(ip, Heap::kHeapNumberMapRootIndex);
-        __ cmp(r7, ip);
+        __ cmp(r9, ip);
         __ b(eq, &call_builtin);
         // edx: receiver
         // r3: map
@@ -1855,7 +1871,7 @@ Handle<Code> CallStubCompiler::CompileArrayPushCall(
         __ LoadTransitionedArrayMapConditional(FAST_SMI_ELEMENTS,
                                                FAST_ELEMENTS,
                                                r3,
-                                               r7,
+                                               r9,
                                                &try_holey_map);
         __ mov(r2, receiver);
         ElementsTransitionGenerator::
@@ -1868,7 +1884,7 @@ Handle<Code> CallStubCompiler::CompileArrayPushCall(
         __ LoadTransitionedArrayMapConditional(FAST_HOLEY_SMI_ELEMENTS,
                                                FAST_HOLEY_ELEMENTS,
                                                r3,
-                                               r7,
+                                               r9,
                                                &call_builtin);
         __ mov(r2, receiver);
         ElementsTransitionGenerator::
@@ -1901,7 +1917,6 @@ Handle<Code> CallStubCompiler::CompileArrayPushCall(
 
       __ bind(&attempt_to_grow_elements);
       // r0: array's length + 1.
-      // r4: elements' length.
 
       if (!FLAG_inline_new) {
         __ b(&call_builtin);
@@ -1912,8 +1927,8 @@ Handle<Code> CallStubCompiler::CompileArrayPushCall(
       // the new element is non-Smi. For now, delegate to the builtin.
       Label no_fast_elements_check;
       __ JumpIfSmi(r2, &no_fast_elements_check);
-      __ ldr(r7, FieldMemOperand(receiver, HeapObject::kMapOffset));
-      __ CheckFastObjectElements(r7, r7, &call_builtin);
+      __ ldr(r9, FieldMemOperand(receiver, HeapObject::kMapOffset));
+      __ CheckFastObjectElements(r9, r9, &call_builtin);
       __ bind(&no_fast_elements_check);
 
       ExternalReference new_space_allocation_top =
@@ -1925,8 +1940,8 @@ Handle<Code> CallStubCompiler::CompileArrayPushCall(
       // Load top and check if it is the end of elements.
       __ add(end_elements, elements, Operand::PointerOffsetFromSmiKey(r0));
       __ add(end_elements, end_elements, Operand(kEndElementsOffset));
-      __ mov(r7, Operand(new_space_allocation_top));
-      __ ldr(r3, MemOperand(r7));
+      __ mov(r4, Operand(new_space_allocation_top));
+      __ ldr(r3, MemOperand(r4));
       __ cmp(end_elements, r3);
       __ b(ne, &call_builtin);
 
@@ -1938,7 +1953,7 @@ Handle<Code> CallStubCompiler::CompileArrayPushCall(
 
       // We fit and could grow elements.
       // Update new_space_allocation_top.
-      __ str(r3, MemOperand(r7));
+      __ str(r3, MemOperand(r4));
       // Push the argument.
       __ str(r2, MemOperand(end_elements));
       // Fill the rest with holes.
@@ -1949,6 +1964,7 @@ Handle<Code> CallStubCompiler::CompileArrayPushCall(
 
       // Update elements' and array's sizes.
       __ str(r0, FieldMemOperand(receiver, JSArray::kLengthOffset));
+      __ ldr(r4, FieldMemOperand(elements, FixedArray::kLengthOffset));
       __ add(r4, r4, Operand(Smi::FromInt(kAllocationDelta)));
       __ str(r4, FieldMemOperand(elements, FixedArray::kLengthOffset));
 
@@ -2539,7 +2555,7 @@ Handle<Code> CallStubCompiler::CompileFastApiCall(
   CheckPrototypes(Handle<JSObject>::cast(object), r1, holder, r0, r3, r4, name,
                   depth, &miss);
 
-  GenerateFastApiDirectCall(masm(), optimization, argc);
+  GenerateFastApiDirectCall(masm(), optimization, argc, false);
 
   __ bind(&miss);
   FreeSpaceForFastApiCall(masm());

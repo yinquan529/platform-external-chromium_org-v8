@@ -89,6 +89,7 @@ class CpuFeatures : public AllStatic {
   static unsigned cache_line_size_;
 
   friend class ExternalReference;
+  friend class PlatformFeatureScope;
   DISALLOW_COPY_AND_ASSIGN(CpuFeatures);
 };
 
@@ -117,7 +118,8 @@ class CpuFeatures : public AllStatic {
 // Core register
 struct Register {
   static const int kNumRegisters = 16;
-  static const int kMaxNumAllocatableRegisters = 8;
+  static const int kMaxNumAllocatableRegisters =
+      FLAG_enable_ool_constant_pool ? 7 : 8;
   static const int kSizeInBytes = 4;
 
   inline static int NumAllocatableRegisters();
@@ -200,6 +202,7 @@ const Register r3  = { kRegister_r3_Code };
 const Register r4  = { kRegister_r4_Code };
 const Register r5  = { kRegister_r5_Code };
 const Register r6  = { kRegister_r6_Code };
+// Used as constant pool pointer register if FLAGS_enable_ool_constant_pool.
 const Register r7  = { kRegister_r7_Code };
 // Used as context register.
 const Register r8  = { kRegister_r8_Code };

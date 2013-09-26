@@ -140,12 +140,11 @@ MaybeObject* Heap::AllocateOneByteInternalizedString(Vector<const uint8_t> str,
   // Compute map and object size.
   Map* map = ascii_internalized_string_map();
   int size = SeqOneByteString::SizeFor(str.length());
+  AllocationSpace space = SelectSpace(size, OLD_DATA_SPACE, TENURED);
 
   // Allocate string.
   Object* result;
-  { MaybeObject* maybe_result = (size > Page::kMaxNonCodeHeapObjectSize)
-                   ? lo_space_->AllocateRaw(size, NOT_EXECUTABLE)
-                   : old_data_space_->AllocateRaw(size);
+  { MaybeObject* maybe_result = AllocateRaw(size, space, OLD_DATA_SPACE);
     if (!maybe_result->ToObject(&result)) return maybe_result;
   }
 
@@ -174,12 +173,11 @@ MaybeObject* Heap::AllocateTwoByteInternalizedString(Vector<const uc16> str,
   // Compute map and object size.
   Map* map = internalized_string_map();
   int size = SeqTwoByteString::SizeFor(str.length());
+  AllocationSpace space = SelectSpace(size, OLD_DATA_SPACE, TENURED);
 
   // Allocate string.
   Object* result;
-  { MaybeObject* maybe_result = (size > Page::kMaxNonCodeHeapObjectSize)
-                   ? lo_space_->AllocateRaw(size, NOT_EXECUTABLE)
-                   : old_data_space_->AllocateRaw(size);
+  { MaybeObject* maybe_result = AllocateRaw(size, space, OLD_DATA_SPACE);
     if (!maybe_result->ToObject(&result)) return maybe_result;
   }
 
@@ -211,7 +209,9 @@ MaybeObject* Heap::CopyFixedDoubleArray(FixedDoubleArray* src) {
 MaybeObject* Heap::AllocateRaw(int size_in_bytes,
                                AllocationSpace space,
                                AllocationSpace retry_space) {
-  ASSERT(AllowHandleAllocation::IsAllowed() && gc_state_ == NOT_IN_GC);
+  ASSERT(AllowHandleAllocation::IsAllowed());
+  ASSERT(AllowHeapAllocation::IsAllowed());
+  ASSERT(gc_state_ == NOT_IN_GC);
   ASSERT(space != NEW_SPACE ||
          retry_space == OLD_POINTER_SPACE ||
          retry_space == OLD_DATA_SPACE ||
@@ -525,18 +525,10 @@ void Heap::ScavengeObject(HeapObject** p, HeapObject* object) {
     return;
   }
 
-  // TODO(hpayer): temporary debugging code for issue 284577.
-  CHECK(object->map() != object->GetHeap()->allocation_memento_map());
+  // AllocationMementos are unrooted and shouldn't survive a scavenge
+  ASSERT(object->map() != object->GetHeap()->allocation_memento_map());
   // Call the slow part of scavenge object.
   return ScavengeObjectSlow(p, object);
-}
-
-
-MaybeObject* Heap::AllocateEmptyJSArrayWithAllocationSite(
-      ElementsKind elements_kind,
-      Handle<AllocationSite> allocation_site) {
-  return AllocateJSArrayAndStorageWithAllocationSite(elements_kind, 0, 0,
-      allocation_site, DONT_INITIALIZE_ARRAY_ELEMENTS);
 }
 
 

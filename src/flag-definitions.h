@@ -90,44 +90,34 @@
 #define DEFINE_implication(whenflag, thenflag)
 #endif
 
+#define COMMA ,
 
 #ifdef FLAG_MODE_DECLARE
 // Structure used to hold a collection of arguments to the JavaScript code.
-#define JSARGUMENTS_INIT {{}}
 struct JSArguments {
 public:
-  inline int argc() const {
-    return static_cast<int>(storage_[0]);
-  }
-  inline const char** argv() const {
-    return reinterpret_cast<const char**>(storage_[1]);
-  }
   inline const char*& operator[] (int idx) const {
-    return argv()[idx];
-  }
-  inline JSArguments& operator=(JSArguments args) {
-    set_argc(args.argc());
-    set_argv(args.argv());
-    return *this;
+    return argv[idx];
   }
   static JSArguments Create(int argc, const char** argv) {
     JSArguments args;
-    args.set_argc(argc);
-    args.set_argv(argv);
+    args.argc = argc;
+    args.argv = argv;
     return args;
   }
-private:
-  void set_argc(int argc) {
-    storage_[0] = argc;
+  int argc;
+  const char** argv;
+};
+
+struct MaybeBoolFlag {
+  static MaybeBoolFlag Create(bool has_value, bool value) {
+    MaybeBoolFlag flag;
+    flag.has_value = has_value;
+    flag.value = value;
+    return flag;
   }
-  void set_argv(const char** argv) {
-    storage_[1] = reinterpret_cast<AtomicWord>(argv);
-  }
-public:
-  // Contains argc and argv. Unfortunately we have to store these two fields
-  // into a single one to avoid making the initialization macro (which would be
-  // "{ 0, NULL }") contain a coma.
-  AtomicWord storage_[2];
+  bool has_value;
+  bool value;
 };
 #endif
 
@@ -148,10 +138,13 @@ public:
 #endif
 
 #define DEFINE_bool(nam, def, cmt)   FLAG(BOOL, bool, nam, def, cmt)
+#define DEFINE_maybe_bool(nam, cmt)  FLAG(MAYBE_BOOL, MaybeBoolFlag, nam,  \
+                                          { false COMMA false }, cmt)
 #define DEFINE_int(nam, def, cmt)    FLAG(INT, int, nam, def, cmt)
 #define DEFINE_float(nam, def, cmt)  FLAG(FLOAT, double, nam, def, cmt)
 #define DEFINE_string(nam, def, cmt) FLAG(STRING, const char*, nam, def, cmt)
-#define DEFINE_args(nam, def, cmt)   FLAG(ARGS, JSArguments, nam, def, cmt)
+#define DEFINE_args(nam, cmt)        FLAG(ARGS, JSArguments, nam, \
+                                          { 0 COMMA NULL }, cmt)
 
 #define DEFINE_ALIAS_bool(alias, nam)  FLAG_ALIAS(BOOL, bool, alias, nam)
 #define DEFINE_ALIAS_int(alias, nam)   FLAG_ALIAS(INT, int, alias, nam)
@@ -183,11 +176,6 @@ DEFINE_bool(harmony_collections, false,
             "enable harmony collections (sets, maps, and weak maps)")
 DEFINE_bool(harmony_observation, false,
             "enable harmony object observation (implies harmony collections")
-DEFINE_bool(harmony_typed_arrays, true,
-            "enable harmony typed arrays")
-DEFINE_bool(harmony_array_buffer, true,
-            "enable harmony array buffer")
-DEFINE_implication(harmony_typed_arrays, harmony_array_buffer)
 DEFINE_bool(harmony_generators, false, "enable harmony generators")
 DEFINE_bool(harmony_iteration, false, "enable harmony iteration (for-of)")
 DEFINE_bool(harmony_numeric_literals, false,
@@ -208,7 +196,6 @@ DEFINE_implication(harmony, harmony_strings)
 DEFINE_implication(harmony, harmony_arrays)
 DEFINE_implication(harmony_modules, harmony_scoping)
 DEFINE_implication(harmony_observation, harmony_collections)
-// TODO[dslomov] add harmony => harmony_typed_arrays
 
 // Flags for experimental implementation features.
 DEFINE_bool(packed_arrays, true, "optimizes arrays that have no holes")
@@ -240,7 +227,7 @@ DEFINE_bool(use_range, true, "use hydrogen range analysis")
 DEFINE_bool(use_gvn, true, "use hydrogen global value numbering")
 DEFINE_bool(use_canonicalizing, true, "use hydrogen instruction canonicalizing")
 DEFINE_bool(use_inlining, true, "use function inlining")
-DEFINE_bool(use_escape_analysis, false, "use hydrogen escape analysis")
+DEFINE_bool(use_escape_analysis, true, "use hydrogen escape analysis")
 DEFINE_bool(use_allocation_folding, true, "use allocation folding")
 DEFINE_int(max_inlining_levels, 5, "maximum number of inlining levels")
 DEFINE_int(max_inlined_source_size, 600,
@@ -261,6 +248,7 @@ DEFINE_bool(trace_hydrogen_stubs, false, "trace generated hydrogen for stubs")
 DEFINE_string(trace_hydrogen_file, NULL, "trace hydrogen to given file name")
 DEFINE_string(trace_phase, "HLZ", "trace generated IR for specified phases")
 DEFINE_bool(trace_inlining, false, "trace inlining decisions")
+DEFINE_bool(trace_load_elimination, false, "trace load elimination")
 DEFINE_bool(trace_alloc, false, "trace register allocator")
 DEFINE_bool(trace_all_uses, false, "trace all use positions")
 DEFINE_bool(trace_range, false, "trace range analysis")
@@ -295,6 +283,7 @@ DEFINE_bool(array_index_dehoisting, true,
             "perform array index dehoisting")
 DEFINE_bool(analyze_environment_liveness, true,
             "analyze liveness of environment slots and zap dead values")
+DEFINE_bool(load_elimination, false, "use load elimination")
 DEFINE_bool(dead_code_elimination, true, "use dead code elimination")
 DEFINE_bool(fold_constants, true, "use constant folding")
 DEFINE_bool(trace_dead_code_elimination, false, "trace dead code elimination")
@@ -544,7 +533,6 @@ DEFINE_bool(use_idle_notification, true,
             "Use idle notification to reduce memory footprint.")
 // ic.cc
 DEFINE_bool(use_ic, true, "use inline caching")
-DEFINE_bool(js_accessor_ics, false, "create ics for js accessors")
 
 // macro-assembler-ia32.cc
 DEFINE_bool(native_code_counters, false,
@@ -600,6 +588,9 @@ DEFINE_int(hash_seed,
            0,
            "Fixed seed to use to hash property keys (0 means random)"
            "(with snapshots this option cannot override the baked-in seed)")
+DEFINE_maybe_bool(force_memory_constrained,
+           "force (if true) or prevent (if false) the runtime from treating "
+           "the device as being memory constrained.")
 
 // v8.cc
 DEFINE_bool(preemption, false,
@@ -610,6 +601,7 @@ DEFINE_bool(regexp_optimization, true, "generate optimized regexp code")
 
 // Testing flags test/cctest/test-{flags,api,serialization}.cc
 DEFINE_bool(testing_bool_flag, true, "testing_bool_flag")
+DEFINE_maybe_bool(testing_maybe_bool_flag, "testing_maybe_bool_flag")
 DEFINE_int(testing_int_flag, 13, "testing_int_flag")
 DEFINE_float(testing_float_flag, 2.5, "float-flag")
 DEFINE_string(testing_string_flag, "Hello, world!", "string-flag")
@@ -642,7 +634,7 @@ DEFINE_int(debugger_port, 5858, "Port to use for remote debugging")
 #endif  // ENABLE_DEBUGGER_SUPPORT
 
 DEFINE_string(map_counters, "", "Map counters to a file")
-DEFINE_args(js_arguments, JSARGUMENTS_INIT,
+DEFINE_args(js_arguments,
             "Pass all remaining arguments to the script. Alias for \"--\".")
 
 #if defined(WEBOS__)
@@ -773,6 +765,7 @@ DEFINE_bool(prof_browser_mode, true,
             "Used with --prof, turns on browser-compatible mode for profiling.")
 DEFINE_bool(log_regexp, false, "Log regular expression execution.")
 DEFINE_string(logfile, "v8.log", "Specify the name of the log file.")
+DEFINE_bool(logfile_per_isolate, true, "Separate log files for each isolate.")
 DEFINE_bool(ll_prof, false, "Enable low-level linux profiler.")
 DEFINE_string(gc_fake_mmap, "/tmp/__v8_gc__",
               "Specify the name of the file for fake gc mmap used in ll_prof")
@@ -827,6 +820,16 @@ DEFINE_implication(print_all_code, trace_codegen)
 #endif
 #endif
 
+//
+// Read-only flags
+//
+#undef FLAG
+#define FLAG FLAG_READONLY
+
+// assembler-arm.h
+DEFINE_bool(enable_ool_constant_pool, false,
+            "enable use of out-of-line constant pools (ARM only)")
+
 // Cleanup...
 #undef FLAG_FULL
 #undef FLAG_READONLY
@@ -834,6 +837,7 @@ DEFINE_implication(print_all_code, trace_codegen)
 #undef FLAG_ALIAS
 
 #undef DEFINE_bool
+#undef DEFINE_maybe_bool
 #undef DEFINE_int
 #undef DEFINE_string
 #undef DEFINE_float
@@ -850,3 +854,5 @@ DEFINE_implication(print_all_code, trace_codegen)
 #undef FLAG_MODE_DEFINE_DEFAULTS
 #undef FLAG_MODE_META
 #undef FLAG_MODE_DEFINE_IMPLICATIONS
+
+#undef COMMA

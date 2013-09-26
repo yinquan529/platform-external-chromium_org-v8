@@ -561,6 +561,7 @@ class CpuFeatures : public AllStatic {
   static uint64_t found_by_runtime_probing_only_;
 
   friend class ExternalReference;
+  friend class PlatformFeatureScope;
   DISALLOW_COPY_AND_ASSIGN(CpuFeatures);
 };
 
@@ -852,7 +853,7 @@ class Assembler : public AssemblerBase {
   void test(Register reg, const Operand& op);
   void test_b(Register reg, const Operand& op);
   void test(const Operand& op, const Immediate& imm);
-  void test_b(Register reg, uint8_t imm8) { test_b(Operand(reg), imm8); }
+  void test_b(Register reg, uint8_t imm8);
   void test_b(const Operand& op, uint8_t imm8);
 
   void xor_(Register dst, int32_t imm32);

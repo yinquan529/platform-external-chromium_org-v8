@@ -63,9 +63,6 @@ enum BuiltinExtraArguments {
                                                                     \
   V(EmptyFunction, NO_EXTRA_ARGUMENTS)                              \
                                                                     \
-  V(InternalArrayCodeGeneric, NO_EXTRA_ARGUMENTS)                   \
-  V(ArrayCodeGeneric, NO_EXTRA_ARGUMENTS)                           \
-                                                                    \
   V(ArrayPush, NO_EXTRA_ARGUMENTS)                                  \
   V(ArrayPop, NO_EXTRA_ARGUMENTS)                                   \
   V(ArrayShift, NO_EXTRA_ARGUMENTS)                                 \
@@ -110,8 +107,6 @@ enum BuiltinExtraArguments {
   V(NotifyLazyDeoptimized,          BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
   V(NotifyStubFailure,              BUILTIN, UNINITIALIZED,             \
-                                    Code::kNoExtraICState)              \
-  V(NotifyOSR,                      BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
                                                                         \
   V(LoadIC_Miss,                    BUILTIN, UNINITIALIZED,             \
@@ -391,7 +386,6 @@ class Builtins {
   static void Generate_NotifyDeoptimized(MacroAssembler* masm);
   static void Generate_NotifySoftDeoptimized(MacroAssembler* masm);
   static void Generate_NotifyLazyDeoptimized(MacroAssembler* masm);
-  static void Generate_NotifyOSR(MacroAssembler* masm);
   static void Generate_NotifyStubFailure(MacroAssembler* masm);
   static void Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm);
 

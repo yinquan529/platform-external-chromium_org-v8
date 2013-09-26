@@ -464,6 +464,25 @@ class ToNumberStub: public HydrogenCodeStub {
 };
 
 
+class NumberToStringStub V8_FINAL : public HydrogenCodeStub {
+ public:
+  NumberToStringStub() {}
+
+  virtual Handle<Code> GenerateCode(Isolate* isolate) V8_OVERRIDE;
+
+  virtual void InitializeInterfaceDescriptor(
+      Isolate* isolate,
+      CodeStubInterfaceDescriptor* descriptor) V8_OVERRIDE;
+
+  // Parameters accessed via CodeStubGraphBuilder::GetParameter()
+  static const int kNumber = 0;
+
+ private:
+  virtual Major MajorKey() V8_OVERRIDE { return NumberToString; }
+  virtual int NotMissMinorKey() V8_OVERRIDE { return 0; }
+};
+
+
 class FastNewClosureStub : public HydrogenCodeStub {
  public:
   explicit FastNewClosureStub(LanguageMode language_mode, bool is_generator)
@@ -830,19 +849,12 @@ class FunctionPrototypeStub: public ICStub {
 
 class StringLengthStub: public ICStub {
  public:
-  StringLengthStub(Code::Kind kind, bool support_wrapper)
-      : ICStub(kind), support_wrapper_(support_wrapper) { }
+  explicit StringLengthStub(Code::Kind kind) : ICStub(kind) { }
   virtual void Generate(MacroAssembler* masm);
 
  private:
   STATIC_ASSERT(KindBits::kSize == 4);
-  class WrapperModeBits: public BitField<bool, 4, 1> {};
-  virtual CodeStub::Major MajorKey() { return StringLength; }
-  virtual int MinorKey() {
-    return KindBits::encode(kind()) | WrapperModeBits::encode(support_wrapper_);
-  }
-
-  bool support_wrapper_;
+    virtual CodeStub::Major MajorKey() { return StringLength; }
 };
 
 

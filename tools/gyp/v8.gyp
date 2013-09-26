@@ -353,6 +353,8 @@
         '../../src/hydrogen-infer-representation.h',
         '../../src/hydrogen-infer-types.cc',
         '../../src/hydrogen-infer-types.h',
+        '../../src/hydrogen-load-elimination.cc',
+        '../../src/hydrogen-load-elimination.h',
         '../../src/hydrogen-mark-deoptimize.cc',
         '../../src/hydrogen-mark-deoptimize.h',
         '../../src/hydrogen-minus-zero.cc',
@@ -430,7 +432,6 @@
         '../../src/platform/elapsed-timer.h',
         '../../src/platform/time.cc',
         '../../src/platform/time.h',
-        '../../src/platform-posix.h',
         '../../src/platform.h',
         '../../src/platform/condition-variable.cc',
         '../../src/platform/condition-variable.h',
@@ -804,6 +805,9 @@
           ]},
         ],
         ['OS=="win"', {
+          'defines': [
+            '_CRT_RAND_S'  # for rand_s()
+          ],
           'variables': {
             'gyp_generators': '<!(echo $GYP_GENERATORS)',
           },
@@ -855,8 +859,8 @@
         }],
         ['v8_enable_i18n_support==1', {
           'dependencies': [
-            '<(DEPTH)/third_party/icu/icu.gyp:icui18n',
-            '<(DEPTH)/third_party/icu/icu.gyp:icuuc',
+            '<(icu_gyp_path):icui18n',
+            '<(icu_gyp_path):icuuc',
           ]
         }, {  # v8_enable_i18n_support==0
           'sources!': [
@@ -866,7 +870,7 @@
         }],
         ['OS=="win" and v8_enable_i18n_support==1', {
           'dependencies': [
-            '<(DEPTH)/third_party/icu/icu.gyp:icudata',
+            '<(icu_gyp_path):icudata',
           ],
         }],
       ],

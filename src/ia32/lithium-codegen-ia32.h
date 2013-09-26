@@ -129,6 +129,7 @@ class LCodeGen V8_FINAL BASE_EMBEDDED {
       X87Register left, X87Register right, X87Register result);
 
   void X87LoadForUsage(X87Register reg);
+  void X87LoadForUsage(X87Register reg1, X87Register reg2);
   void X87PrepareToWrite(X87Register reg) { x87_stack_.PrepareToWrite(reg); }
   void X87CommitWrite(X87Register reg) { x87_stack_.CommitWrite(reg); }
 
@@ -207,6 +208,8 @@ class LCodeGen V8_FINAL BASE_EMBEDDED {
   LPlatformChunk* chunk() const { return chunk_; }
   Scope* scope() const { return scope_; }
   HGraph* graph() const { return chunk()->graph(); }
+
+  XMMRegister double_scratch0() const { return xmm0; }
 
   int GetNextEmittedBlock() const;
 

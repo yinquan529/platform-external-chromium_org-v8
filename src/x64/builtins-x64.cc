@@ -600,6 +600,8 @@ static void GenerateMakeCodeYoungAgainCommon(MacroAssembler* masm) {
   // the stub returns.
   __ subq(Operand(rsp, 0), Immediate(5));
   __ Pushad();
+  __ movq(arg_reg_2,
+          ExternalReference::isolate_address(masm->isolate()));
   __ movq(arg_reg_1, Operand(rsp, kNumSafepointRegisters * kPointerSize));
   {  // NOLINT
     FrameScope scope(masm, StackFrame::MANUAL);
@@ -689,21 +691,6 @@ void Builtins::Generate_NotifySoftDeoptimized(MacroAssembler* masm) {
 
 void Builtins::Generate_NotifyLazyDeoptimized(MacroAssembler* masm) {
   Generate_NotifyDeoptimizedHelper(masm, Deoptimizer::LAZY);
-}
-
-
-void Builtins::Generate_NotifyOSR(MacroAssembler* masm) {
-  // For now, we are relying on the fact that Runtime::NotifyOSR
-  // doesn't do any garbage collection which allows us to save/restore
-  // the registers without worrying about which of them contain
-  // pointers. This seems a bit fragile.
-  __ Pushad();
-  {
-    FrameScope scope(masm, StackFrame::INTERNAL);
-    __ CallRuntime(Runtime::kNotifyOSR, 0);
-  }
-  __ Popad();
-  __ ret(0);
 }
 
 
@@ -1140,13 +1127,11 @@ void Builtins::Generate_StringConstructCode(MacroAssembler* masm) {
 
   // Lookup the argument in the number to string cache.
   Label not_cached, argument_is_string;
-  NumberToStringStub::GenerateLookupNumberStringCache(
-      masm,
-      rax,  // Input.
-      rbx,  // Result.
-      rcx,  // Scratch 1.
-      rdx,  // Scratch 2.
-      &not_cached);
+  __ LookupNumberStringCache(rax,  // Input.
+                             rbx,  // Result.
+                             rcx,  // Scratch 1.
+                             rdx,  // Scratch 2.
+                             &not_cached);
   __ IncrementCounter(counters->string_ctor_cached_number(), 1);
   __ bind(&argument_is_string);
 

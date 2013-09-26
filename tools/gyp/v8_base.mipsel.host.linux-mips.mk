@@ -88,6 +88,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-gvn.cc \
 	v8/src/hydrogen-infer-representation.cc \
 	v8/src/hydrogen-infer-types.cc \
+	v8/src/hydrogen-load-elimination.cc \
 	v8/src/hydrogen-mark-deoptimize.cc \
 	v8/src/hydrogen-minus-zero.cc \
 	v8/src/hydrogen-osr.cc \
@@ -214,7 +215,6 @@ MY_CFLAGS_Debug := \
 
 MY_DEFS_Debug := \
 	'-DANGLE_DX11' \
-	'-DWTF_VECTOR_INITIAL_SIZE=4' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DNO_TCMALLOC' \
 	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \
@@ -287,7 +287,6 @@ MY_CFLAGS_Release := \
 
 MY_DEFS_Release := \
 	'-DANGLE_DX11' \
-	'-DWTF_VECTOR_INITIAL_SIZE=4' \
 	'-D_FILE_OFFSET_BITS=64' \
 	'-DNO_TCMALLOC' \
 	'-DDISCARDABLE_MEMORY_ALWAYS_SUPPORTED_NATIVELY' \
