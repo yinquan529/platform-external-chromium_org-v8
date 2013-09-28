@@ -52,6 +52,7 @@ LOCAL_SRC_FILES := \
 	v8/src/dateparser.cc \
 	v8/src/debug-agent.cc \
 	v8/src/debug.cc \
+	v8/src/defaults.cc \
 	v8/src/deoptimizer.cc \
 	v8/src/disassembler.cc \
 	v8/src/diy-fp.cc \
@@ -78,6 +79,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-bce.cc \
 	v8/src/hydrogen-bch.cc \
 	v8/src/hydrogen-canonicalize.cc \
+	v8/src/hydrogen-check-elimination.cc \
 	v8/src/hydrogen-dce.cc \
 	v8/src/hydrogen-dehoist.cc \
 	v8/src/hydrogen-deoptimizing-mark.cc \
