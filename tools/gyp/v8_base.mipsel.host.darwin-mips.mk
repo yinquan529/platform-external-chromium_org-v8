@@ -82,7 +82,6 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-check-elimination.cc \
 	v8/src/hydrogen-dce.cc \
 	v8/src/hydrogen-dehoist.cc \
-	v8/src/hydrogen-deoptimizing-mark.cc \
 	v8/src/hydrogen-environment-liveness.cc \
 	v8/src/hydrogen-escape-analysis.cc \
 	v8/src/hydrogen-instructions.cc \
@@ -92,6 +91,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-infer-types.cc \
 	v8/src/hydrogen-load-elimination.cc \
 	v8/src/hydrogen-mark-deoptimize.cc \
+	v8/src/hydrogen-mark-unreachable.cc \
 	v8/src/hydrogen-minus-zero.cc \
 	v8/src/hydrogen-osr.cc \
 	v8/src/hydrogen-range-analysis.cc \
@@ -109,6 +109,7 @@ LOCAL_SRC_FILES := \
 	v8/src/isolate.cc \
 	v8/src/jsregexp.cc \
 	v8/src/lithium-allocator.cc \
+	v8/src/lithium-codegen.cc \
 	v8/src/lithium.cc \
 	v8/src/liveedit.cc \
 	v8/src/log-utils.cc \
