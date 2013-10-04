@@ -52,7 +52,6 @@ LOCAL_SRC_FILES := \
 	v8/src/dateparser.cc \
 	v8/src/debug-agent.cc \
 	v8/src/debug.cc \
-	v8/src/defaults.cc \
 	v8/src/deoptimizer.cc \
 	v8/src/disassembler.cc \
 	v8/src/diy-fp.cc \
@@ -191,6 +190,7 @@ LOCAL_SRC_FILES := \
 	v8/src/arm/simulator-arm.cc \
 	v8/src/arm/stub-cache-arm.cc \
 	v8/src/platform-posix.cc \
+	v8/src/defaults.cc \
 	v8/src/platform-macos.cc
 
 
