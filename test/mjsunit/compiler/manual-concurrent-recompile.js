@@ -1,4 +1,4 @@
-// Copyright 2013 the V8 project authors. All rights reserved.
+// Copyright 2012 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,30 +25,43 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --allow-natives-syntax
-// Flags: --concurrent-recompilation --concurrent-recompilation-delay=50
+// Flags: --allow-natives-syntax --expose-gc
+// Flags: --concurrent-recompilation --block-concurrent-recompilation
 
 if (!%IsConcurrentRecompilationSupported()) {
   print("Concurrent recompilation is disabled. Skipping this test.");
   quit();
 }
 
-function f(foo) { return foo.bar(); }
+function f(x) {
+  var xx = x * x;
+  var xxstr = xx.toString();
+  return xxstr.length;
+}
 
-var o = {};
-o.__proto__ = { __proto__: { bar: function() { return 1; } } };
+function g(x) {
+  var xxx = Math.sqrt(x) | 0;
+  var xxxstr = xxx.toString();
+  return xxxstr.length;
+}
 
-assertEquals(1, f(o));
-assertEquals(1, f(o));
+function k(x) {
+  return x * x;
+}
 
-// Mark for concurrent optimization.
+f(g(1));
+assertUnoptimized(f);
+assertUnoptimized(g);
+
 %OptimizeFunctionOnNextCall(f, "concurrent");
-// Trigger optimization in the background thread.
-assertEquals(1, f(o));
-// While concurrent recompilation is running, optimization not yet done.
-assertUnoptimized(f, "no sync");
-// Change the prototype chain during optimization to trigger map invalidation.
-o.__proto__.__proto__ = { bar: function() { return 2; } };
-// Optimization eventually bails out due to map dependency.
-assertUnoptimized(f, "sync");
-assertEquals(2, f(o));
+%OptimizeFunctionOnNextCall(g, "concurrent");
+f(g(2));  // Kick off recompilation.
+
+assertUnoptimized(f, "no sync");  // Not yet optimized since recompilation
+assertUnoptimized(g, "no sync");  // is still blocked.
+
+// Let concurrent recompilation proceed.
+%UnblockConcurrentRecompilation();
+
+assertOptimized(f, "sync");  // Optimized once we sync with the
+assertOptimized(g, "sync");  // background thread.

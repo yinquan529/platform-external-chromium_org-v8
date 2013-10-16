@@ -581,6 +581,14 @@ void ExternalReferenceTable::PopulateTable(Isolate* isolate) {
       UNCLASSIFIED,
       63,
       "Heap::allocation_sites_list_address()");
+  Add(ExternalReference::record_object_allocation_function(isolate).address(),
+      UNCLASSIFIED,
+      64,
+      "HeapProfiler::RecordObjectAllocationFromMasm");
+  Add(ExternalReference::address_of_uint32_bias().address(),
+      UNCLASSIFIED,
+      65,
+      "uint32_bias");
 
   // Add a small set of deopt entry addresses to encoder without generating the
   // deopt table code, which isn't possible at deserialization time.
@@ -591,7 +599,7 @@ void ExternalReferenceTable::PopulateTable(Isolate* isolate) {
         entry,
         Deoptimizer::LAZY,
         Deoptimizer::CALCULATE_ENTRY_ADDRESS);
-    Add(address, LAZY_DEOPTIMIZATION, 64 + entry, "lazy_deopt");
+    Add(address, LAZY_DEOPTIMIZATION, 65 + entry, "lazy_deopt");
   }
 }
 

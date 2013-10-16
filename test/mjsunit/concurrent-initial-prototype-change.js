@@ -25,33 +25,33 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --track-fields --track-double-fields --allow-natives-syntax
-// Flags: --concurrent-recompilation --concurrent-recompilation-delay=100
+// Flags: --allow-natives-syntax
+// Flags: --concurrent-recompilation --block-concurrent-recompilation
 
 if (!%IsConcurrentRecompilationSupported()) {
   print("Concurrent recompilation is disabled. Skipping this test.");
   quit();
 }
 
-function new_object() {
-  var o = {};
-  o.a = 1;
-  o.b = 2;
-  return o;
+function f1(a, i) {
+  return a[i] + 0.5;
 }
 
-function add_field(obj) {
-  obj.c = 3;
-}
+var arr = [0.0,,2.5];
+assertEquals(0.5, f1(arr, 0));
+assertEquals(0.5, f1(arr, 0));
 
-add_field(new_object());
-add_field(new_object());
-%OptimizeFunctionOnNextCall(add_field, "concurrent");
-
-var o = new_object();
-// Trigger optimization in the background thread.
-add_field(o);
-// Invalidate transition map while optimization is underway.
-o.c = 2.2;
-// Sync with background thread to conclude optimization that bailed out.
-assertUnoptimized(add_field, "sync");
+// Optimized code of f1 depends on initial object and array maps.
+%OptimizeFunctionOnNextCall(f1, "concurrent");
+// Kick off recompilation;
+assertEquals(0.5, f1(arr, 0));
+// Invalidate current initial object map after compile graph has been created.
+Object.prototype[1] = 1.5;
+assertEquals(2, f1(arr, 1));
+// Not yet optimized since concurrent recompilation is blocked.
+assertUnoptimized(f1, "no sync");
+// Let concurrent recompilation proceed.
+%UnblockConcurrentRecompilation();
+// Sync with background thread to conclude optimization, which bails out
+// due to map dependency.
+assertUnoptimized(f1, "sync");

@@ -1,4 +1,4 @@
-// Copyright 2012 the V8 project authors. All rights reserved.
+// Copyright 2013 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,36 +25,32 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <stdlib.h>
+// Flags: --allow-natives-syntax
+// Flags: --concurrent-recompilation --block-concurrent-recompilation
 
-#include "v8.h"
-
-#include "ast.h"
-#include "cctest.h"
-
-using namespace v8::internal;
-
-TEST(List) {
-  v8::internal::V8::Initialize(NULL);
-  List<AstNode*>* list = new List<AstNode*>(0);
-  CHECK_EQ(0, list->length());
-
-  Isolate* isolate = CcTest::i_isolate();
-  Zone zone(isolate);
-  AstNodeFactory<AstNullVisitor> factory(isolate, &zone);
-  AstNode* node = factory.NewEmptyStatement(RelocInfo::kNoPosition);
-  list->Add(node);
-  CHECK_EQ(1, list->length());
-  CHECK_EQ(node, list->at(0));
-  CHECK_EQ(node, list->last());
-
-  const int kElements = 100;
-  for (int i = 0; i < kElements; i++) {
-    list->Add(node);
-  }
-  CHECK_EQ(1 + kElements, list->length());
-
-  list->Clear();
-  CHECK_EQ(0, list->length());
-  delete list;
+if (!%IsConcurrentRecompilationSupported()) {
+  print("Concurrent recompilation is disabled. Skipping this test.");
+  quit();
 }
+
+function f(foo) { return foo.bar(); }
+
+var o = {};
+o.__proto__ = { __proto__: { bar: function() { return 1; } } };
+
+assertEquals(1, f(o));
+assertEquals(1, f(o));
+
+// Mark for concurrent optimization.
+%OptimizeFunctionOnNextCall(f, "concurrent");
+// Kick off recompilation.
+assertEquals(1, f(o));
+// Change the prototype chain after compile graph has been created.
+o.__proto__.__proto__ = { bar: function() { return 2; } };
+// At this point, concurrent recompilation thread has not yet done its job.
+assertUnoptimized(f, "no sync");
+// Let the background thread proceed.
+%UnblockConcurrentRecompilation();
+// Optimization eventually bails out due to map dependency.
+assertUnoptimized(f, "sync");
+assertEquals(2, f(o));
