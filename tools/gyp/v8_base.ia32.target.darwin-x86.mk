@@ -27,6 +27,7 @@ GYP_COPIED_SOURCE_ORIGIN_DIRS :=
 LOCAL_SRC_FILES := \
 	v8/src/accessors.cc \
 	v8/src/allocation.cc \
+	v8/src/allocation-site-scopes.cc \
 	v8/src/api.cc \
 	v8/src/arguments.cc \
 	v8/src/assembler.cc \
