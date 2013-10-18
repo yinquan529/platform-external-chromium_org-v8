@@ -232,6 +232,8 @@ const uint32_t kMaxUInt32 = 0xFFFFFFFFu;
 const int kCharSize      = sizeof(char);      // NOLINT
 const int kShortSize     = sizeof(short);     // NOLINT
 const int kIntSize       = sizeof(int);       // NOLINT
+const int kInt32Size     = sizeof(int32_t);   // NOLINT
+const int kInt64Size     = sizeof(int64_t);   // NOLINT
 const int kDoubleSize    = sizeof(double);    // NOLINT
 const int kIntptrSize    = sizeof(intptr_t);  // NOLINT
 const int kPointerSize   = sizeof(void*);     // NOLINT
@@ -248,10 +250,12 @@ const int kRandomStateSize = 2 * kIntSize;
 const int kPointerSizeLog2 = 3;
 const intptr_t kIntptrSignBit = V8_INT64_C(0x8000000000000000);
 const uintptr_t kUintptrAllBitsSet = V8_UINT64_C(0xFFFFFFFFFFFFFFFF);
+const bool kIs64BitArch = true;
 #else
 const int kPointerSizeLog2 = 2;
 const intptr_t kIntptrSignBit = 0x80000000;
 const uintptr_t kUintptrAllBitsSet = 0xFFFFFFFFu;
+const bool kIs64BitArch = false;
 #endif
 
 const int kBitsPerByte = 8;

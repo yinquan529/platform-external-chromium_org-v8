@@ -95,6 +95,9 @@ void HeapObject::HeapObjectVerify() {
     case FIXED_DOUBLE_ARRAY_TYPE:
       FixedDoubleArray::cast(this)->FixedDoubleArrayVerify();
       break;
+    case CONSTANT_POOL_ARRAY_TYPE:
+      ConstantPoolArray::cast(this)->ConstantPoolArrayVerify();
+      break;
     case BYTE_ARRAY_TYPE:
       ByteArray::cast(this)->ByteArrayVerify();
       break;
@@ -439,6 +442,11 @@ void FixedDoubleArray::FixedDoubleArrayVerify() {
 }
 
 
+void ConstantPoolArray::ConstantPoolArrayVerify() {
+  CHECK(IsConstantPoolArray());
+}
+
+
 void JSGeneratorObject::JSGeneratorObjectVerify() {
   // In an expression like "new g()", there can be a point where a generator
   // object is allocated but its fields are all undefined, as it hasn't yet been
@@ -665,15 +673,19 @@ void Code::CodeVerify() {
 }
 
 
-void Code::VerifyEmbeddedMapsDependency() {
+void Code::VerifyEmbeddedObjectsDependency() {
   int mode_mask = RelocInfo::ModeMask(RelocInfo::EMBEDDED_OBJECT);
   for (RelocIterator it(this, mode_mask); !it.done(); it.next()) {
-    RelocInfo::Mode mode = it.rinfo()->rmode();
-    if (mode == RelocInfo::EMBEDDED_OBJECT &&
-      it.rinfo()->target_object()->IsMap()) {
-      Map* map = Map::cast(it.rinfo()->target_object());
-      if (map->CanTransition()) {
+    Object* obj = it.rinfo()->target_object();
+    if (IsWeakEmbeddedObject(kind(), obj)) {
+      if (obj->IsMap()) {
+        Map* map = Map::cast(obj);
         CHECK(map->dependent_code()->Contains(
+            DependentCode::kWeaklyEmbeddedGroup, this));
+      } else if (obj->IsJSObject()) {
+        Object* raw_table = GetIsolate()->heap()->weak_object_to_code_table();
+        WeakHashTable* table = WeakHashTable::cast(raw_table);
+        CHECK(DependentCode::cast(table->Lookup(obj))->Contains(
             DependentCode::kWeaklyEmbeddedGroup, this));
       }
     }

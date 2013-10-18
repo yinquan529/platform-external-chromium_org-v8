@@ -59,6 +59,11 @@ class Factory {
       int size,
       PretenureFlag pretenure = NOT_TENURED);
 
+  Handle<ConstantPoolArray> NewConstantPoolArray(
+      int number_of_int64_entries,
+      int number_of_ptr_entries,
+      int number_of_int32_entries);
+
   Handle<SeededNumberDictionary> NewSeededNumberDictionary(
       int at_least_space_for);
 
@@ -70,6 +75,8 @@ class Factory {
   Handle<ObjectHashSet> NewObjectHashSet(int at_least_space_for);
 
   Handle<ObjectHashTable> NewObjectHashTable(int at_least_space_for);
+
+  Handle<WeakHashTable> NewWeakHashTable(int at_least_space_for);
 
   Handle<DescriptorArray> NewDescriptorArray(int number_of_descriptors,
                                              int slack = 0);
@@ -265,10 +272,14 @@ class Factory {
   Handle<FixedArray> CopyFixedArray(Handle<FixedArray> array);
 
   Handle<FixedArray> CopySizeFixedArray(Handle<FixedArray> array,
-                                        int new_length);
+                                        int new_length,
+                                        PretenureFlag pretenure = NOT_TENURED);
 
   Handle<FixedDoubleArray> CopyFixedDoubleArray(
       Handle<FixedDoubleArray> array);
+
+  Handle<ConstantPoolArray> CopyConstantPoolArray(
+      Handle<ConstantPoolArray> array);
 
   // Numbers (e.g. literals) are pretenured by the parser.
   Handle<Object> NewNumber(double value,

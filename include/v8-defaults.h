@@ -25,12 +25,30 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Utility methods for date testing.
+#ifndef V8_V8_DEFAULTS_H_
+#define V8_V8_DEFAULTS_H_
+
+#include "v8.h"
 
 /**
- * Returns date with timezone info forced into PDT.
+ * Default configuration support for the V8 JavaScript engine.
  */
-function usePDT(dateString) {
-  var removedTZ = dateString.replace(/(\+|-)\d{4}/, '-0007');
-  return removedTZ.replace(/\(.*?\)/, '(PDT)');
-}
+namespace v8 {
+
+/**
+ * Configures the constraints with reasonable default values based on the
+ * capabilities of the current device the VM is running on.
+ */
+bool V8_EXPORT ConfigureResourceConstraintsForCurrentPlatform(
+    ResourceConstraints* constraints);
+
+
+/**
+ * Convience function which performs SetResourceConstraints with the settings
+ * returned by ConfigureResourceConstraintsForCurrentPlatform.
+ */
+bool V8_EXPORT SetDefaultResourceConstraintsForCurrentPlatform();
+
+}  // namespace v8
+
+#endif  // V8_V8_DEFAULTS_H_

@@ -53,6 +53,7 @@ bool CpuFeatures::initialized_ = false;
 #endif
 uint64_t CpuFeatures::supported_ = 0;
 uint64_t CpuFeatures::found_by_runtime_probing_only_ = 0;
+uint64_t CpuFeatures::cross_compile_ = 0;
 
 
 ExternalReference ExternalReference::cpu_features() {
@@ -2346,7 +2347,7 @@ void Assembler::extractps(Register dst, XMMRegister src, byte imm8) {
   EMIT(0x0F);
   EMIT(0x3A);
   EMIT(0x17);
-  emit_sse_operand(dst, src);
+  emit_sse_operand(src, dst);
   EMIT(imm8);
 }
 
@@ -2482,6 +2483,11 @@ void Assembler::emit_sse_operand(XMMRegister dst, XMMRegister src) {
 
 void Assembler::emit_sse_operand(Register dst, XMMRegister src) {
   EMIT(0xC0 | dst.code() << 3 | src.code());
+}
+
+
+void Assembler::emit_sse_operand(XMMRegister dst, Register src) {
+  EMIT(0xC0 | (dst.code() << 3) | src.code());
 }
 
 

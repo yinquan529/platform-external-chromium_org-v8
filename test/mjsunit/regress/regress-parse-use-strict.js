@@ -25,32 +25,18 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef V8_HYDROGEN_DEOPTIMIZING_MARK_H_
-#define V8_HYDROGEN_DEOPTIMIZING_MARK_H_
+// Filler long enough to trigger lazy parsing.
+var filler = "/*" + new Array(1024).join('x') + "*/";
 
-#include "hydrogen.h"
+// Snippet trying to switch to strict mode.
+var strict = '"use strict"; with({}) {}';
 
-namespace v8 {
-namespace internal {
+// Test switching to strict mode after string literal.
+assertThrows('function f() { "use sanity";' + strict + '}');
+assertThrows('function f() { "use sanity";' + strict + filler + '}');
 
-
-// Mark all blocks that are dominated by an unconditional soft deoptimize to
-// prevent code motion across those blocks.
-class HPropagateDeoptimizingMarkPhase : public HPhase {
- public:
-  explicit HPropagateDeoptimizingMarkPhase(HGraph* graph)
-      : HPhase("H_Propagate deoptimizing mark", graph) { }
-
-  void Run();
-
- private:
-  void MarkAsDeoptimizing();
-  void NullifyUnreachableInstructions();
-
-  DISALLOW_COPY_AND_ASSIGN(HPropagateDeoptimizingMarkPhase);
-};
-
-
-} }  // namespace v8::internal
-
-#endif  // V8_HYDROGEN_DEOPTIMIZING_MARK_H_
+// Test switching to strict mode after function declaration.
+// We must use eval instead of assertDoesNotThrow here to make sure that
+// lazy parsing is triggered. Otherwise the bug won't reproduce.
+eval('function f() { function g() {}' + strict + '}');
+eval('function f() { function g() {}' + strict + filler + '}');

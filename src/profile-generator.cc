@@ -141,15 +141,6 @@ CodeEntry::~CodeEntry() {
 }
 
 
-void CodeEntry::CopyData(const CodeEntry& source) {
-  tag_ = source.tag_;
-  name_prefix_ = source.name_prefix_;
-  name_ = source.name_;
-  resource_name_ = source.resource_name_;
-  line_number_ = source.line_number_;
-}
-
-
 uint32_t CodeEntry::GetCallUid() const {
   uint32_t hash = ComputeIntegerHash(tag_, v8::internal::kZeroHashSeed);
   if (shared_id_ != 0) {
@@ -546,12 +537,14 @@ CodeEntry* CpuProfilesCollection::NewCodeEntry(
       const char* name,
       const char* name_prefix,
       const char* resource_name,
-      int line_number) {
+      int line_number,
+      int column_number) {
   CodeEntry* code_entry = new CodeEntry(tag,
                                         name,
                                         name_prefix,
                                         resource_name,
-                                        line_number);
+                                        line_number,
+                                        column_number);
   code_entries_.Add(code_entry);
   return code_entry;
 }
@@ -659,5 +652,23 @@ void ProfileGenerator::RecordTickSample(const TickSample& sample) {
   profiles_->AddPathToCurrentProfiles(entries);
 }
 
+
+CodeEntry* ProfileGenerator::EntryForVMState(StateTag tag) {
+  switch (tag) {
+    case GC:
+      return gc_entry_;
+    case JS:
+    case COMPILER:
+    // DOM events handlers are reported as OTHER / EXTERNAL entries.
+    // To avoid confusing people, let's put all these entries into
+    // one bucket.
+    case OTHER:
+    case EXTERNAL:
+      return program_entry_;
+    case IDLE:
+      return idle_entry_;
+    default: return NULL;
+  }
+}
 
 } }  // namespace v8::internal

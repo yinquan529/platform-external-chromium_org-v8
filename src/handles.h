@@ -177,7 +177,7 @@ class HandleScope {
   // Extend the handle scope making room for more handles.
   static internal::Object** Extend(Isolate* isolate);
 
-#ifdef ENABLE_EXTRA_CHECKS
+#ifdef ENABLE_HANDLE_ZAPPING
   // Zaps the handles in the half-open interval [start, end).
   static void ZapRange(Object** start, Object** end);
 #endif
@@ -299,11 +299,6 @@ Handle<FixedArray> GetEnumPropertyKeys(Handle<JSObject> object,
 Handle<FixedArray> UnionOfKeys(Handle<FixedArray> first,
                                Handle<FixedArray> second);
 
-Handle<String> SubString(Handle<String> str,
-                         int start,
-                         int end,
-                         PretenureFlag pretenure = NOT_TENURED);
-
 // Sets the expected number of properties for the function's instances.
 void SetExpectedNofProperties(Handle<JSFunction> func, int nof);
 
@@ -326,6 +321,9 @@ Handle<ObjectHashTable> PutIntoObjectHashTable(Handle<ObjectHashTable> table,
                                                Handle<Object> key,
                                                Handle<Object> value);
 
+void AddWeakObjectToCodeDependency(Heap* heap,
+                                   Handle<Object> object,
+                                   Handle<Code> code);
 
 // Seal off the current HandleScope so that new handles can only be created
 // if a new HandleScope is entered.

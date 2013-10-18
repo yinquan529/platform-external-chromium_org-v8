@@ -509,6 +509,17 @@ const char* HValue::Mnemonic() const {
 }
 
 
+bool HValue::CanReplaceWithDummyUses() {
+  return FLAG_unreachable_code_elimination &&
+      !(block()->IsReachable() ||
+        IsBlockEntry() ||
+        IsControlInstruction() ||
+        IsSimulate() ||
+        IsEnterInlined() ||
+        IsLeaveInlined());
+}
+
+
 bool HValue::IsInteger32Constant() {
   return IsConstant() && HConstant::cast(this)->HasInteger32Value();
 }
@@ -973,6 +984,9 @@ void HCallNewArray::PrintDataTo(StringStream* stream) {
 
 void HCallRuntime::PrintDataTo(StringStream* stream) {
   stream->Add("%o ", *name());
+  if (save_doubles() == kSaveFPRegs) {
+    stream->Add("[save doubles] ");
+  }
   stream->Add("#%d", argument_count());
 }
 
@@ -1047,6 +1061,21 @@ Representation HBranch::observed_input_representation(int index) {
     return Representation::Smi();
   }
   return Representation::None();
+}
+
+
+bool HBranch::KnownSuccessorBlock(HBasicBlock** block) {
+  HValue* value = this->value();
+  if (value->EmitAtUses()) {
+    ASSERT(value->IsConstant());
+    ASSERT(!value->representation().IsDouble());
+    *block = HConstant::cast(value)->BooleanValue()
+        ? FirstSuccessor()
+        : SecondSuccessor();
+    return true;
+  }
+  *block = NULL;
+  return false;
 }
 
 
@@ -1234,6 +1263,16 @@ HValue* HMul::Canonicalize() {
   if (IsIdentityOperation(left(), right(), 1)) return left();
   if (IsIdentityOperation(right(), left(), 1)) return right();
   return this;
+}
+
+
+bool HMul::MulMinusOne() {
+  if (left()->EqualsInteger32Constant(-1) ||
+      right()->EqualsInteger32Constant(-1)) {
+    return true;
+  }
+
+  return false;
 }
 
 
@@ -1622,10 +1661,13 @@ Range* HMul::InferRange(Zone* zone) {
     Range* a = left()->range();
     Range* b = right()->range();
     Range* res = a->Copy(zone);
-    if (!res->MulAndCheckOverflow(r, b)) {
-      // Clearing the kCanOverflow flag when kAllUsesAreTruncatingToInt32
-      // would be wrong, because truncated integer multiplication is too
-      // precise and therefore not the same as converting to Double and back.
+    if (!res->MulAndCheckOverflow(r, b) ||
+        (((r.IsInteger32() && CheckFlag(kAllUsesTruncatingToInt32)) ||
+         (r.IsSmi() && CheckFlag(kAllUsesTruncatingToSmi))) &&
+         MulMinusOne())) {
+      // Truncated int multiplication is too precise and therefore not the
+      // same as converting to Double and back.
+      // Handle truncated integer multiplication by -1 special.
       ClearFlag(kCanOverflow);
     }
     res->set_can_be_minus_zero(!CheckFlag(kAllUsesTruncatingToSmi) &&
@@ -1647,7 +1689,10 @@ Range* HDiv::InferRange(Zone* zone) {
     result->set_can_be_minus_zero(!CheckFlag(kAllUsesTruncatingToInt32) &&
                                   (a->CanBeMinusZero() ||
                                    (a->CanBeZero() && b->CanBeNegative())));
-    if (!a->Includes(kMinInt) || !b->Includes(-1)) {
+    if (!a->Includes(kMinInt) ||
+        !b->Includes(-1) ||
+        CheckFlag(kAllUsesTruncatingToInt32)) {
+      // It is safe to clear kCanOverflow when kAllUsesTruncatingToInt32.
       ClearFlag(HValue::kCanOverflow);
     }
 
@@ -2325,18 +2370,27 @@ void HSimulate::ReplayEnvironment(HEnvironment* env) {
 }
 
 
+static void ReplayEnvironmentNested(const ZoneList<HValue*>* values,
+                                    HCapturedObject* other) {
+  for (int i = 0; i < values->length(); ++i) {
+    HValue* value = values->at(i);
+    if (value->IsCapturedObject()) {
+      if (HCapturedObject::cast(value)->capture_id() == other->capture_id()) {
+        values->at(i) = other;
+      } else {
+        ReplayEnvironmentNested(HCapturedObject::cast(value)->values(), other);
+      }
+    }
+  }
+}
+
+
 // Replay captured objects by replacing all captured objects with the
 // same capture id in the current and all outer environments.
 void HCapturedObject::ReplayEnvironment(HEnvironment* env) {
   ASSERT(env != NULL);
   while (env != NULL) {
-    for (int i = 0; i < env->length(); ++i) {
-      HValue* value = env->values()->at(i);
-      if (value->IsCapturedObject() &&
-          HCapturedObject::cast(value)->capture_id() == this->capture_id()) {
-        env->SetValueAt(i, this);
-      }
-    }
+    ReplayEnvironmentNested(env->values(), this);
     env = env->outer();
   }
 }
@@ -2596,17 +2650,18 @@ void HBinaryOperation::InferRepresentation(HInferRepresentationPhase* h_infer) {
   ASSERT(CheckFlag(kFlexibleRepresentation));
   Representation new_rep = RepresentationFromInputs();
   UpdateRepresentation(new_rep, h_infer, "inputs");
+
+  if (representation().IsSmi() && HasNonSmiUse()) {
+    UpdateRepresentation(
+        Representation::Integer32(), h_infer, "use requirements");
+  }
+
   if (observed_output_representation_.IsNone()) {
     new_rep = RepresentationFromUses();
     UpdateRepresentation(new_rep, h_infer, "uses");
   } else {
     new_rep = RepresentationFromOutput();
     UpdateRepresentation(new_rep, h_infer, "output");
-  }
-
-  if (representation().IsSmi() && HasNonSmiUse()) {
-    UpdateRepresentation(
-        Representation::Integer32(), h_infer, "use requirements");
   }
 }
 
@@ -2634,7 +2689,7 @@ bool HBinaryOperation::IgnoreObservedOutputRepresentation(
   return ((current_rep.IsInteger32() && CheckUsesForFlag(kTruncatingToInt32)) ||
           (current_rep.IsSmi() && CheckUsesForFlag(kTruncatingToSmi))) &&
          // Mul in Integer32 mode would be too precise.
-         !this->IsMul();
+         (!this->IsMul() || HMul::cast(this)->MulMinusOne());
 }
 
 
@@ -2774,6 +2829,9 @@ Range* HShl::InferRange(Zone* zone) {
 
 
 Range* HLoadNamedField::InferRange(Zone* zone) {
+  if (access().representation().IsByte()) {
+    return new(zone) Range(0, 255);
+  }
   if (access().IsStringLength()) {
     return new(zone) Range(0, String::kMaxLength);
   }
@@ -2828,6 +2886,20 @@ void HCompareObjectEqAndBranch::PrintDataTo(StringStream* stream) {
   stream->Add(" ");
   right()->PrintNameTo(stream);
   HControlInstruction::PrintDataTo(stream);
+}
+
+
+bool HCompareObjectEqAndBranch::KnownSuccessorBlock(HBasicBlock** block) {
+  if (left()->IsConstant() && right()->IsConstant()) {
+    bool comparison_result =
+        HConstant::cast(left())->Equals(HConstant::cast(right()));
+    *block = comparison_result
+        ? FirstSuccessor()
+        : SecondSuccessor();
+    return true;
+  }
+  *block = NULL;
+  return false;
 }
 
 
@@ -3965,7 +4037,7 @@ Representation HValue::RepresentationFromUseRequirements() {
   Representation rep = Representation::None();
   for (HUseIterator it(uses()); !it.Done(); it.Advance()) {
     // Ignore the use requirement from never run code
-    if (it.value()->block()->IsDeoptimizing()) continue;
+    if (it.value()->block()->IsUnreachable()) continue;
 
     // We check for observed_input_representation elsewhere.
     Representation use_rep =

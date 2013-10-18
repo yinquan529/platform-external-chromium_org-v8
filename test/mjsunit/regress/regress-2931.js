@@ -1,4 +1,4 @@
-// Copyright 2013 the V8 project authors. All rights reserved.
+// Copyright 2009 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,33 +25,10 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --track-fields --track-double-fields --allow-natives-syntax
-// Flags: --concurrent-recompilation --concurrent-recompilation-delay=100
+// Typed array constructors should be immune from changes to
+// value of ArrayBuffer on global object.
+// See http://code.google.com/p/v8/issues/detail?id=294
 
-if (!%IsConcurrentRecompilationSupported()) {
-  print("Concurrent recompilation is disabled. Skipping this test.");
-  quit();
-}
-
-function new_object() {
-  var o = {};
-  o.a = 1;
-  o.b = 2;
-  return o;
-}
-
-function add_field(obj) {
-  obj.c = 3;
-}
-
-add_field(new_object());
-add_field(new_object());
-%OptimizeFunctionOnNextCall(add_field, "concurrent");
-
-var o = new_object();
-// Trigger optimization in the background thread.
-add_field(o);
-// Invalidate transition map while optimization is underway.
-o.c = 2.2;
-// Sync with background thread to conclude optimization that bailed out.
-assertUnoptimized(add_field, "sync");
+this.ArrayBuffer = function() { throw Error('BAM'); };
+var u8 = new Uint8Array(100);
+assertSame(100, u8.byteLength);

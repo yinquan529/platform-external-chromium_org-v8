@@ -71,6 +71,7 @@ namespace internal {
   V(Map, scope_info_map, ScopeInfoMap)                                         \
   V(Map, fixed_cow_array_map, FixedCOWArrayMap)                                \
   V(Map, fixed_double_array_map, FixedDoubleArrayMap)                          \
+  V(Map, constant_pool_array_map, ConstantPoolArrayMap)                        \
   V(Object, no_interceptor_result_sentinel, NoInterceptorResultSentinel)       \
   V(Map, hash_table_map, HashTableMap)                                         \
   V(FixedArray, empty_fixed_array, EmptyFixedArray)                            \
@@ -292,7 +293,10 @@ namespace internal {
   V(throw_string, "throw")                                               \
   V(done_string, "done")                                                 \
   V(value_string, "value")                                               \
-  V(next_string, "next")
+  V(next_string, "next")                                                 \
+  V(byte_length_string, "byteLength")                                    \
+  V(byte_offset_string, "byteOffset")                                    \
+  V(buffer_string, "buffer")
 
 // Forward declarations.
 class GCTracer;
@@ -940,6 +944,16 @@ class Heap {
   MUST_USE_RESULT MaybeObject* CopyFixedDoubleArrayWithMap(
       FixedDoubleArray* src, Map* map);
 
+  // Make a copy of src and return it. Returns
+  // Failure::RetryAfterGC(requested_bytes, space) if the allocation failed.
+  MUST_USE_RESULT inline MaybeObject* CopyConstantPoolArray(
+      ConstantPoolArray* src);
+
+  // Make a copy of src, set the map, and return the copy. Returns
+  // Failure::RetryAfterGC(requested_bytes, space) if the allocation failed.
+  MUST_USE_RESULT MaybeObject* CopyConstantPoolArrayWithMap(
+      ConstantPoolArray* src, Map* map);
+
   // Allocates a fixed array initialized with the hole values.
   // Returns Failure::RetryAfterGC(requested_bytes, space) if the allocation
   // failed.
@@ -948,9 +962,10 @@ class Heap {
       int length,
       PretenureFlag pretenure = NOT_TENURED);
 
-  MUST_USE_RESULT MaybeObject* AllocateRawFixedDoubleArray(
-      int length,
-      PretenureFlag pretenure);
+  MUST_USE_RESULT MaybeObject* AllocateConstantPoolArray(
+      int first_int64_index,
+      int first_ptr_index,
+      int first_int32_index);
 
   // Allocates a fixed double array with uninitialized values. Returns
   // Failure::RetryAfterGC(requested_bytes, space) if the allocation failed.
@@ -1309,6 +1324,8 @@ class Heap {
   Object* allocation_sites_list() { return allocation_sites_list_; }
   Object** allocation_sites_list_address() { return &allocation_sites_list_; }
 
+  Object* weak_object_to_code_table() { return weak_object_to_code_table_; }
+
   // Number of mark-sweeps.
   unsigned int ms_count() { return ms_count_; }
 
@@ -1400,8 +1417,8 @@ class Heap {
   void Verify();
 
 
-  bool weak_embedded_maps_verification_enabled() {
-    return no_weak_embedded_maps_verification_scope_depth_ == 0;
+  bool weak_embedded_objects_verification_enabled() {
+    return no_weak_object_verification_scope_depth_ == 0;
   }
 #endif
 
@@ -1501,11 +1518,6 @@ class Heap {
   // Returns the adjusted value.
   inline intptr_t AdjustAmountOfExternalAllocatedMemory(
       intptr_t change_in_bytes);
-
-  // Allocate uninitialized fixed array.
-  MUST_USE_RESULT MaybeObject* AllocateRawFixedArray(int length);
-  MUST_USE_RESULT MaybeObject* AllocateRawFixedArray(int length,
-                                                     PretenureFlag pretenure);
 
   // This is only needed for testing high promotion mode.
   void SetNewSpaceHighPromotionModeActive(bool mode) {
@@ -1662,6 +1674,14 @@ class Heap {
   double total_regexp_code_generated() { return total_regexp_code_generated_; }
   void IncreaseTotalRegexpCodeGenerated(int size) {
     total_regexp_code_generated_ += size;
+  }
+
+  void IncrementCodeGeneratedBytes(bool is_crankshafted, int size) {
+    if (is_crankshafted) {
+      crankshaft_codegen_bytes_generated_ += size;
+    } else {
+      full_codegen_bytes_generated_ += size;
+    }
   }
 
   // Returns maximum GC pause.
@@ -1859,6 +1879,16 @@ class Heap {
     Heap* heap_;
   };
 
+  MaybeObject* AddWeakObjectToCodeDependency(Object* obj, DependentCode* dep);
+
+  DependentCode* LookupWeakObjectToCodeDependency(Object* obj);
+
+  void InitializeWeakObjectToCodeTable() {
+    set_weak_object_to_code_table(undefined_value());
+  }
+
+  void EnsureWeakObjectToCodeTable();
+
  private:
   Heap();
 
@@ -1891,6 +1921,9 @@ class Heap {
   int global_ic_age_;
 
   bool flush_monomorphic_ics_;
+
+  // AllocationMementos found in new space.
+  int allocation_mementos_found_;
 
   int scan_on_scavenge_pages_;
 
@@ -1970,9 +2003,15 @@ class Heap {
   bool old_gen_exhausted_;
 
   // Weak list heads, threaded through the objects.
+  // List heads are initilized lazily and contain the undefined_value at start.
   Object* native_contexts_list_;
   Object* array_buffers_list_;
   Object* allocation_sites_list_;
+
+  // WeakHashTable that maps objects embedded in optimized code to dependent
+  // code list. It is initilized lazily and contains the undefined_value at
+  // start.
+  Object* weak_object_to_code_table_;
 
   StoreBufferRebuilder store_buffer_rebuilder_;
 
@@ -2079,6 +2118,18 @@ class Heap {
 
   // Allocate an uninitialized object in the global property cell space.
   MUST_USE_RESULT inline MaybeObject* AllocateRawPropertyCell();
+
+  // Allocate an uninitialized fixed array.
+  MUST_USE_RESULT MaybeObject* AllocateRawFixedArray(
+      int length, PretenureFlag pretenure);
+
+  // Allocate an uninitialized fixed double array.
+  MUST_USE_RESULT MaybeObject* AllocateRawFixedDoubleArray(
+      int length, PretenureFlag pretenure);
+
+  // Allocate an initialized fixed array with the given filler value.
+  MUST_USE_RESULT MaybeObject* AllocateFixedArrayWithFiller(
+      int length, PretenureFlag pretenure, Object* filler);
 
   // Initializes a JSObject based on its map.
   void InitializeJSObjectFromMap(JSObject* obj,
@@ -2270,6 +2321,15 @@ class Heap {
 
   void ClearObjectStats(bool clear_last_time_stats = false);
 
+  void set_weak_object_to_code_table(Object* value) {
+    ASSERT(!InNewSpace(value));
+    weak_object_to_code_table_ = value;
+  }
+
+  Object** weak_object_to_code_table_address() {
+    return &weak_object_to_code_table_;
+  }
+
   static const int kInitialStringTableSize = 2048;
   static const int kInitialEvalCacheSize = 64;
   static const int kInitialNumberStringCacheSize = 256;
@@ -2319,13 +2379,17 @@ class Heap {
   unsigned int gc_count_at_last_idle_gc_;
   int scavenges_since_last_idle_round_;
 
+  // These two counters are monotomically increasing and never reset.
+  size_t full_codegen_bytes_generated_;
+  size_t crankshaft_codegen_bytes_generated_;
+
   // If the --deopt_every_n_garbage_collections flag is set to a positive value,
   // this variable holds the number of garbage collections since the last
   // deoptimization triggered by garbage collection.
   int gcs_since_last_deopt_;
 
 #ifdef VERIFY_HEAP
-  int no_weak_embedded_maps_verification_scope_depth_;
+  int no_weak_object_verification_scope_depth_;
 #endif
 
   static const int kMaxMarkSweepsInIdleRound = 7;
@@ -2359,7 +2423,7 @@ class Heap {
   friend class MarkCompactMarkingVisitor;
   friend class MapCompact;
 #ifdef VERIFY_HEAP
-  friend class NoWeakEmbeddedMapsVerificationScope;
+  friend class NoWeakObjectVerificationScope;
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(Heap);
@@ -2424,10 +2488,10 @@ class AlwaysAllocateScope {
 };
 
 #ifdef VERIFY_HEAP
-class NoWeakEmbeddedMapsVerificationScope {
+class NoWeakObjectVerificationScope {
  public:
-  inline NoWeakEmbeddedMapsVerificationScope();
-  inline ~NoWeakEmbeddedMapsVerificationScope();
+  inline NoWeakObjectVerificationScope();
+  inline ~NoWeakObjectVerificationScope();
 };
 #endif
 

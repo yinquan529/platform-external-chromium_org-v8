@@ -1056,7 +1056,7 @@ intptr_t PagedSpace::SizeOfFirstPage() {
   int size = 0;
   switch (identity()) {
     case OLD_POINTER_SPACE:
-      size = 64 * kPointerSize * KB;
+      size = 72 * kPointerSize * KB;
       break;
     case OLD_DATA_SPACE:
       size = 192 * KB;
@@ -1077,7 +1077,14 @@ intptr_t PagedSpace::SizeOfFirstPage() {
         // upgraded to handle small pages.
         size = AreaSize();
       } else {
-        size = 384 * KB;
+#if V8_TARGET_ARCH_MIPS
+        // On MIPS, code stubs seem to be quite a bit larger.
+        // TODO(olivf/MIPS folks): Can we do anything about this? Does it
+        // indicate the presence of a bug?
+        size = 464 * KB;
+#else
+        size = 416 * KB;
+#endif
       }
       break;
     default:
@@ -1520,20 +1527,18 @@ void SemiSpace::TearDown() {
 bool SemiSpace::Commit() {
   ASSERT(!is_committed());
   int pages = capacity_ / Page::kPageSize;
-  Address end = start_ + maximum_capacity_;
-  Address start = end - pages * Page::kPageSize;
-  if (!heap()->isolate()->memory_allocator()->CommitBlock(start,
+  if (!heap()->isolate()->memory_allocator()->CommitBlock(start_,
                                                           capacity_,
                                                           executable())) {
     return false;
   }
 
-  NewSpacePage* page = anchor();
-  for (int i = 1; i <= pages; i++) {
+  NewSpacePage* current = anchor();
+  for (int i = 0; i < pages; i++) {
     NewSpacePage* new_page =
-      NewSpacePage::Initialize(heap(), end - i * Page::kPageSize, this);
-    new_page->InsertAfter(page);
-    page = new_page;
+      NewSpacePage::Initialize(heap(), start_ + i * Page::kPageSize, this);
+    new_page->InsertAfter(current);
+    current = new_page;
   }
 
   committed_ = true;
@@ -1577,20 +1582,18 @@ bool SemiSpace::GrowTo(int new_capacity) {
   int pages_before = capacity_ / Page::kPageSize;
   int pages_after = new_capacity / Page::kPageSize;
 
-  Address end = start_ + maximum_capacity_;
-  Address start = end - new_capacity;
   size_t delta = new_capacity - capacity_;
 
   ASSERT(IsAligned(delta, OS::AllocateAlignment()));
   if (!heap()->isolate()->memory_allocator()->CommitBlock(
-      start, delta, executable())) {
+      start_ + capacity_, delta, executable())) {
     return false;
   }
   capacity_ = new_capacity;
   NewSpacePage* last_page = anchor()->prev_page();
   ASSERT(last_page != anchor());
-  for (int i = pages_before + 1; i <= pages_after; i++) {
-    Address page_address = end - i * Page::kPageSize;
+  for (int i = pages_before; i < pages_after; i++) {
+    Address page_address = start_ + i * Page::kPageSize;
     NewSpacePage* new_page = NewSpacePage::Initialize(heap(),
                                                       page_address,
                                                       this);
@@ -1610,25 +1613,20 @@ bool SemiSpace::ShrinkTo(int new_capacity) {
   ASSERT(new_capacity >= initial_capacity_);
   ASSERT(new_capacity < capacity_);
   if (is_committed()) {
-    // Semispaces grow backwards from the end of their allocated capacity,
-    // so we find the before and after start addresses relative to the
-    // end of the space.
-    Address space_end = start_ + maximum_capacity_;
-    Address old_start = space_end - capacity_;
     size_t delta = capacity_ - new_capacity;
     ASSERT(IsAligned(delta, OS::AllocateAlignment()));
 
     MemoryAllocator* allocator = heap()->isolate()->memory_allocator();
-    if (!allocator->UncommitBlock(old_start, delta)) {
+    if (!allocator->UncommitBlock(start_ + new_capacity, delta)) {
       return false;
     }
 
     int pages_after = new_capacity / Page::kPageSize;
     NewSpacePage* new_last_page =
-        NewSpacePage::FromAddress(space_end - pages_after * Page::kPageSize);
+        NewSpacePage::FromAddress(start_ + (pages_after - 1) * Page::kPageSize);
     new_last_page->set_next_page(anchor());
     anchor()->set_prev_page(new_last_page);
-    ASSERT((current_page_ <= first_page()) && (current_page_ >= new_last_page));
+    ASSERT((current_page_ >= first_page()) && (current_page_ <= new_last_page));
   }
 
   capacity_ = new_capacity;
@@ -2685,6 +2683,7 @@ HeapObject* PagedSpace::SlowAllocateRaw(int size_in_bytes) {
 
   // Try to expand the space and allocate in the new next page.
   if (Expand()) {
+    ASSERT(CountTotalPages() > 1 || size_in_bytes <= free_list_.available());
     return free_list_.Allocate(size_in_bytes);
   }
 

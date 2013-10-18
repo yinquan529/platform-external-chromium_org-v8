@@ -34,11 +34,6 @@
   # BUG(382): Weird test. Can't guarantee that it never times out.
   'test-api/ApplyInterruption': [PASS, TIMEOUT],
 
-  # BUG(2907): Allocation while in DisallowHeapAllocation scope.
-  'test-object-observe/NamedAccessCheck': [SKIP],
-  'test-object-observe/DisallowAllForAccessKeys': [SKIP],
-  'test-object-observe/AccessCheckDisallowApiModifications': [SKIP],
-
   # TODO(mstarzinger): Fail gracefully on multiple V8::Dispose calls.
   'test-api/InitializeAndDisposeOnce': [SKIP],
   'test-api/InitializeAndDisposeMultiple': [SKIP],
@@ -60,9 +55,6 @@
 
   # Boot up memory use is bloated in debug mode.
   'test-mark-compact/BootUpMemoryUse': [PASS, PASS, ['mode == debug', FAIL]],
-
-  # Some CPU profiler tests are flaky.
-  'test-cpu-profiler/*': [PASS, FLAKY],
 }],  # ALWAYS
 
 ##############################################################################
@@ -82,9 +74,6 @@
   'test-serialize/DeserializeFromSecondSerializationAndRunScript2': [SKIP],
   'test-serialize/DeserializeAndRunScript2': [SKIP],
   'test-serialize/DeserializeFromSecondSerialization': [SKIP],
-
-  # BUG(2874): Threading problems.
-  'test-api/*': [PASS, FLAKY],
 }],  # 'arch == arm'
 ##############################################################################
 ['arch == mipsel', {

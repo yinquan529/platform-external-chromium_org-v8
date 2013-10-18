@@ -67,29 +67,14 @@ namespace internal {
 
 Heap::Heap()
     : isolate_(NULL),
+      code_range_size_(kIs64BitArch ? 512 * MB : 0),
 // semispace_size_ should be a power of 2 and old_generation_size_ should be
 // a multiple of Page::kPageSize.
-#if V8_TARGET_ARCH_X64
-#define LUMP_OF_MEMORY (2 * MB)
-      code_range_size_(512*MB),
-#else
-#define LUMP_OF_MEMORY MB
-      code_range_size_(0),
-#endif
-#if defined(ANDROID) || V8_TARGET_ARCH_MIPS
-      reserved_semispace_size_(4 * Max(LUMP_OF_MEMORY, Page::kPageSize)),
-      max_semispace_size_(4 * Max(LUMP_OF_MEMORY, Page::kPageSize)),
+      reserved_semispace_size_(8 * (kPointerSize / 4) * MB),
+      max_semispace_size_(8 * (kPointerSize / 4)  * MB),
       initial_semispace_size_(Page::kPageSize),
-      max_old_generation_size_(192*MB),
-      max_executable_size_(max_old_generation_size_),
-#else
-      reserved_semispace_size_(8 * Max(LUMP_OF_MEMORY, Page::kPageSize)),
-      max_semispace_size_(8 * Max(LUMP_OF_MEMORY, Page::kPageSize)),
-      initial_semispace_size_(Page::kPageSize),
-      max_old_generation_size_(700ul * LUMP_OF_MEMORY),
-      max_executable_size_(256l * LUMP_OF_MEMORY),
-#endif
-
+      max_old_generation_size_(700ul * (kPointerSize / 4) * MB),
+      max_executable_size_(256ul * (kPointerSize / 4) * MB),
 // Variables set based on semispace_size_ and old_generation_size_ in
 // ConfigureHeap (survived_since_last_expansion_, external_allocation_limit_)
 // Will be 4 * reserved_semispace_size_ to ensure that young
@@ -101,6 +86,7 @@ Heap::Heap()
       contexts_disposed_(0),
       global_ic_age_(0),
       flush_monomorphic_ics_(false),
+      allocation_mementos_found_(0),
       scan_on_scavenge_pages_(0),
       new_space_(this),
       old_pointer_space_(NULL),
@@ -155,9 +141,11 @@ Heap::Heap()
       mark_sweeps_since_idle_round_started_(0),
       gc_count_at_last_idle_gc_(0),
       scavenges_since_last_idle_round_(kIdleScavengeThreshold),
+      full_codegen_bytes_generated_(0),
+      crankshaft_codegen_bytes_generated_(0),
       gcs_since_last_deopt_(0),
 #ifdef VERIFY_HEAP
-      no_weak_embedded_maps_verification_scope_depth_(0),
+      no_weak_object_verification_scope_depth_(0),
 #endif
       promotion_queue_(this),
       configured_(false),
@@ -169,6 +157,9 @@ Heap::Heap()
 #if defined(V8_MAX_SEMISPACE_SIZE)
   max_semispace_size_ = reserved_semispace_size_ = V8_MAX_SEMISPACE_SIZE;
 #endif
+
+  // Ensure old_generation_size_ is a multiple of kPageSize.
+  ASSERT(MB >= Page::kPageSize);
 
   intptr_t max_virtual = OS::MaxVirtualMemory();
 
@@ -519,10 +510,31 @@ void Heap::GarbageCollectionEpilogue() {
   isolate_->counters()->number_of_symbols()->Set(
       string_table()->NumberOfElements());
 
+  if (full_codegen_bytes_generated_ + crankshaft_codegen_bytes_generated_ > 0) {
+    isolate_->counters()->codegen_fraction_crankshaft()->AddSample(
+        static_cast<int>((crankshaft_codegen_bytes_generated_ * 100.0) /
+            (crankshaft_codegen_bytes_generated_
+            + full_codegen_bytes_generated_)));
+  }
+
   if (CommittedMemory() > 0) {
     isolate_->counters()->external_fragmentation_total()->AddSample(
         static_cast<int>(100 - (SizeOfObjects() * 100.0) / CommittedMemory()));
 
+    isolate_->counters()->heap_fraction_new_space()->
+        AddSample(static_cast<int>(
+            (new_space()->CommittedMemory() * 100.0) / CommittedMemory()));
+    isolate_->counters()->heap_fraction_old_pointer_space()->AddSample(
+        static_cast<int>(
+            (old_pointer_space()->CommittedMemory() * 100.0) /
+            CommittedMemory()));
+    isolate_->counters()->heap_fraction_old_data_space()->AddSample(
+        static_cast<int>(
+            (old_data_space()->CommittedMemory() * 100.0) /
+            CommittedMemory()));
+    isolate_->counters()->heap_fraction_code_space()->
+        AddSample(static_cast<int>(
+            (code_space()->CommittedMemory() * 100.0) / CommittedMemory()));
     isolate_->counters()->heap_fraction_map_space()->AddSample(
         static_cast<int>(
             (map_space()->CommittedMemory() * 100.0) / CommittedMemory()));
@@ -533,6 +545,9 @@ void Heap::GarbageCollectionEpilogue() {
         AddSample(static_cast<int>(
             (property_cell_space()->CommittedMemory() * 100.0) /
             CommittedMemory()));
+    isolate_->counters()->heap_fraction_lo_space()->
+        AddSample(static_cast<int>(
+            (lo_space()->CommittedMemory() * 100.0) / CommittedMemory()));
 
     isolate_->counters()->heap_sample_total_committed()->AddSample(
         static_cast<int>(CommittedMemory() / KB));
@@ -546,6 +561,8 @@ void Heap::GarbageCollectionEpilogue() {
         heap_sample_property_cell_space_committed()->
             AddSample(static_cast<int>(
                 property_cell_space()->CommittedMemory() / KB));
+    isolate_->counters()->heap_sample_code_space_committed()->AddSample(
+        static_cast<int>(code_space()->CommittedMemory() / KB));
   }
 
 #define UPDATE_COUNTERS_FOR_SPACE(space)                                       \
@@ -1340,6 +1357,8 @@ class ScavengeWeakObjectRetainer : public WeakObjectRetainer {
 void Heap::Scavenge() {
   RelocationLock relocation_lock(this);
 
+  allocation_mementos_found_ = 0;
+
 #ifdef VERIFY_HEAP
   if (FLAG_verify_heap) VerifyNonPointerSpacePointers(this);
 #endif
@@ -1487,6 +1506,11 @@ void Heap::Scavenge() {
   gc_state_ = NOT_IN_GC;
 
   scavenges_since_last_idle_round_++;
+
+  if (FLAG_trace_track_allocation_sites && allocation_mementos_found_ > 0) {
+    PrintF("AllocationMementos found during scavenge = %d\n",
+           allocation_mementos_found_);
+  }
 }
 
 
@@ -1961,6 +1985,7 @@ Address Heap::DoScavenge(ObjectVisitor* scavenge_visitor,
 
 
 STATIC_ASSERT((FixedDoubleArray::kHeaderSize & kDoubleAlignmentMask) == 0);
+STATIC_ASSERT((ConstantPoolArray::kHeaderSize & kDoubleAlignmentMask) == 0);
 
 
 INLINE(static HeapObject* EnsureDoubleAligned(Heap* heap,
@@ -2105,7 +2130,8 @@ class ScavengingVisitor : public StaticVisitorBase {
     if (logging_and_profiling_mode == LOGGING_AND_PROFILING_ENABLED) {
       // Update NewSpace stats if necessary.
       RecordCopiedObject(heap, target);
-      HEAP_PROFILE(heap, ObjectMoveEvent(source->address(), target->address()));
+      HEAP_PROFILE(heap,
+                   ObjectMoveEvent(source->address(), target->address(), size));
       Isolate* isolate = heap->isolate();
       if (isolate->logger()->is_logging_code_events() ||
           isolate->cpu_profiler()->is_profiling()) {
@@ -2143,12 +2169,10 @@ class ScavengingVisitor : public StaticVisitorBase {
       MaybeObject* maybe_result;
 
       if (object_contents == DATA_OBJECT) {
-        // TODO(mstarzinger): Turn this check into a regular assert soon!
-        CHECK(heap->AllowedToBeMigrated(object, OLD_DATA_SPACE));
+        ASSERT(heap->AllowedToBeMigrated(object, OLD_DATA_SPACE));
         maybe_result = heap->old_data_space()->AllocateRaw(allocation_size);
       } else {
-        // TODO(mstarzinger): Turn this check into a regular assert soon!
-        CHECK(heap->AllowedToBeMigrated(object, OLD_POINTER_SPACE));
+        ASSERT(heap->AllowedToBeMigrated(object, OLD_POINTER_SPACE));
         maybe_result = heap->old_pointer_space()->AllocateRaw(allocation_size);
       }
 
@@ -2179,8 +2203,7 @@ class ScavengingVisitor : public StaticVisitorBase {
         return;
       }
     }
-    // TODO(mstarzinger): Turn this check into a regular assert soon!
-    CHECK(heap->AllowedToBeMigrated(object, NEW_SPACE));
+    ASSERT(heap->AllowedToBeMigrated(object, NEW_SPACE));
     MaybeObject* allocation = heap->new_space()->AllocateRaw(allocation_size);
     heap->promotion_queue()->SetNewLimit(heap->new_space()->top());
     Object* result = allocation->ToObjectUnchecked();
@@ -2662,6 +2685,12 @@ bool Heap::CreateInitialMaps() {
     if (!maybe_obj->ToObject(&obj)) return false;
   }
   set_fixed_double_array_map(Map::cast(obj));
+
+  { MaybeObject* maybe_obj =
+        AllocateMap(CONSTANT_POOL_ARRAY_TYPE, kVariableSizeSentinel);
+    if (!maybe_obj->ToObject(&obj)) return false;
+  }
+  set_constant_pool_array_map(Map::cast(obj));
 
   { MaybeObject* maybe_obj =
         AllocateMap(BYTE_ARRAY_TYPE, kVariableSizeSentinel);
@@ -4934,6 +4963,13 @@ MaybeObject* Heap::CopyJSObject(JSObject* source, AllocationSite* site) {
       alloc_memento->set_map_no_write_barrier(allocation_memento_map());
       ASSERT(site->map() == allocation_site_map());
       alloc_memento->set_allocation_site(site, SKIP_WRITE_BARRIER);
+      HeapProfiler* profiler = isolate()->heap_profiler();
+      if (profiler->is_tracking_allocations()) {
+        profiler->UpdateObjectSizeEvent(HeapObject::cast(clone)->address(),
+                                        object_size);
+        profiler->NewObjectEvent(alloc_memento->address(),
+                                 AllocationMemento::kSize);
+      }
     }
   }
 
@@ -5340,25 +5376,10 @@ MaybeObject* Heap::AllocateEmptyExternalArray(ExternalArrayType array_type) {
 }
 
 
-MaybeObject* Heap::AllocateRawFixedArray(int length) {
-  if (length < 0 || length > FixedArray::kMaxLength) {
-    return Failure::OutOfMemoryException(0xd);
-  }
-  ASSERT(length > 0);
-  // Use the general function if we're forced to always allocate.
-  if (always_allocate()) return AllocateFixedArray(length, TENURED);
-  // Allocate the raw data for a fixed array.
-  int size = FixedArray::SizeFor(length);
-  return size <= Page::kMaxNonCodeHeapObjectSize
-      ? new_space_.AllocateRaw(size)
-      : lo_space_->AllocateRaw(size, NOT_EXECUTABLE);
-}
-
-
 MaybeObject* Heap::CopyFixedArrayWithMap(FixedArray* src, Map* map) {
   int len = src->length();
   Object* obj;
-  { MaybeObject* maybe_obj = AllocateRawFixedArray(len);
+  { MaybeObject* maybe_obj = AllocateRawFixedArray(len, NOT_TENURED);
     if (!maybe_obj->ToObject(&obj)) return maybe_obj;
   }
   if (InNewSpace(obj)) {
@@ -5398,6 +5419,27 @@ MaybeObject* Heap::CopyFixedDoubleArrayWithMap(FixedDoubleArray* src,
 }
 
 
+MaybeObject* Heap::CopyConstantPoolArrayWithMap(ConstantPoolArray* src,
+                                                Map* map) {
+  int int64_entries = src->count_of_int64_entries();
+  int ptr_entries = src->count_of_ptr_entries();
+  int int32_entries = src->count_of_int32_entries();
+  Object* obj;
+  { MaybeObject* maybe_obj =
+        AllocateConstantPoolArray(int64_entries, ptr_entries, int32_entries);
+    if (!maybe_obj->ToObject(&obj)) return maybe_obj;
+  }
+  HeapObject* dst = HeapObject::cast(obj);
+  dst->set_map_no_write_barrier(map);
+  CopyBlock(
+      dst->address() + ConstantPoolArray::kLengthOffset,
+      src->address() + ConstantPoolArray::kLengthOffset,
+      ConstantPoolArray::SizeFor(int64_entries, ptr_entries, int32_entries)
+          - ConstantPoolArray::kLengthOffset);
+  return obj;
+}
+
+
 MaybeObject* Heap::AllocateRawFixedArray(int length, PretenureFlag pretenure) {
   if (length < 0 || length > FixedArray::kMaxLength) {
     return Failure::OutOfMemoryException(0xe);
@@ -5409,22 +5451,20 @@ MaybeObject* Heap::AllocateRawFixedArray(int length, PretenureFlag pretenure) {
 }
 
 
-MUST_USE_RESULT static MaybeObject* AllocateFixedArrayWithFiller(
-    Heap* heap,
-    int length,
-    PretenureFlag pretenure,
-    Object* filler) {
+MaybeObject* Heap::AllocateFixedArrayWithFiller(int length,
+                                                PretenureFlag pretenure,
+                                                Object* filler) {
   ASSERT(length >= 0);
-  ASSERT(heap->empty_fixed_array()->IsFixedArray());
-  if (length == 0) return heap->empty_fixed_array();
+  ASSERT(empty_fixed_array()->IsFixedArray());
+  if (length == 0) return empty_fixed_array();
 
-  ASSERT(!heap->InNewSpace(filler));
+  ASSERT(!InNewSpace(filler));
   Object* result;
-  { MaybeObject* maybe_result = heap->AllocateRawFixedArray(length, pretenure);
+  { MaybeObject* maybe_result = AllocateRawFixedArray(length, pretenure);
     if (!maybe_result->ToObject(&result)) return maybe_result;
   }
 
-  HeapObject::cast(result)->set_map_no_write_barrier(heap->fixed_array_map());
+  HeapObject::cast(result)->set_map_no_write_barrier(fixed_array_map());
   FixedArray* array = FixedArray::cast(result);
   array->set_length(length);
   MemsetPointer(array->data_start(), filler, length);
@@ -5433,19 +5473,13 @@ MUST_USE_RESULT static MaybeObject* AllocateFixedArrayWithFiller(
 
 
 MaybeObject* Heap::AllocateFixedArray(int length, PretenureFlag pretenure) {
-  return AllocateFixedArrayWithFiller(this,
-                                      length,
-                                      pretenure,
-                                      undefined_value());
+  return AllocateFixedArrayWithFiller(length, pretenure, undefined_value());
 }
 
 
 MaybeObject* Heap::AllocateFixedArrayWithHoles(int length,
                                                PretenureFlag pretenure) {
-  return AllocateFixedArrayWithFiller(this,
-                                      length,
-                                      pretenure,
-                                      the_hole_value());
+  return AllocateFixedArrayWithFiller(length, pretenure, the_hole_value());
 }
 
 
@@ -5453,7 +5487,7 @@ MaybeObject* Heap::AllocateUninitializedFixedArray(int length) {
   if (length == 0) return empty_fixed_array();
 
   Object* obj;
-  { MaybeObject* maybe_obj = AllocateRawFixedArray(length);
+  { MaybeObject* maybe_obj = AllocateRawFixedArray(length, NOT_TENURED);
     if (!maybe_obj->ToObject(&obj)) return maybe_obj;
   }
 
@@ -5534,6 +5568,40 @@ MaybeObject* Heap::AllocateRawFixedDoubleArray(int length,
   }
 
   return EnsureDoubleAligned(this, object, size);
+}
+
+
+MaybeObject* Heap::AllocateConstantPoolArray(int number_of_int64_entries,
+                                             int number_of_ptr_entries,
+                                             int number_of_int32_entries) {
+  ASSERT(number_of_int64_entries > 0 || number_of_ptr_entries > 0 ||
+         number_of_int32_entries > 0);
+  int size = ConstantPoolArray::SizeFor(number_of_int64_entries,
+                                        number_of_ptr_entries,
+                                        number_of_int32_entries);
+#ifndef V8_HOST_ARCH_64_BIT
+  size += kPointerSize;
+#endif
+
+  HeapObject* object;
+  { MaybeObject* maybe_object = old_pointer_space_->AllocateRaw(size);
+    if (!maybe_object->To<HeapObject>(&object)) return maybe_object;
+  }
+  object = EnsureDoubleAligned(this, object, size);
+  HeapObject::cast(object)->set_map_no_write_barrier(constant_pool_array_map());
+
+  ConstantPoolArray* constant_pool =
+      reinterpret_cast<ConstantPoolArray*>(object);
+  constant_pool->SetEntryCounts(number_of_int64_entries,
+                                number_of_ptr_entries,
+                                number_of_int32_entries);
+  MemsetPointer(
+      HeapObject::RawField(
+          constant_pool,
+          constant_pool->OffsetOfElementAt(constant_pool->first_ptr_index())),
+      undefined_value(),
+      number_of_ptr_entries);
+  return constant_pool;
 }
 
 
@@ -6760,6 +6828,7 @@ bool Heap::CreateHeapObjects() {
   native_contexts_list_ = undefined_value();
   array_buffers_list_ = undefined_value();
   allocation_sites_list_ = undefined_value();
+  weak_object_to_code_table_ = undefined_value();
   return true;
 }
 
@@ -6904,6 +6973,37 @@ void Heap::RemoveGCEpilogueCallback(v8::Isolate::GCEpilogueCallback callback) {
     }
   }
   UNREACHABLE();
+}
+
+
+MaybeObject* Heap::AddWeakObjectToCodeDependency(Object* obj,
+                                                 DependentCode* dep) {
+  ASSERT(!InNewSpace(obj));
+  ASSERT(!InNewSpace(dep));
+  MaybeObject* maybe_obj =
+      WeakHashTable::cast(weak_object_to_code_table_)->Put(obj, dep);
+  WeakHashTable* table;
+  if (!maybe_obj->To(&table)) return maybe_obj;
+  if (ShouldZapGarbage() && weak_object_to_code_table_ != table) {
+    WeakHashTable::cast(weak_object_to_code_table_)->Zap(the_hole_value());
+  }
+  set_weak_object_to_code_table(table);
+  ASSERT_EQ(dep, WeakHashTable::cast(weak_object_to_code_table_)->Lookup(obj));
+  return weak_object_to_code_table_;
+}
+
+
+DependentCode* Heap::LookupWeakObjectToCodeDependency(Object* obj) {
+  Object* dep = WeakHashTable::cast(weak_object_to_code_table_)->Lookup(obj);
+  if (dep->IsDependentCode()) return DependentCode::cast(dep);
+  return DependentCode::cast(empty_fixed_array());
+}
+
+
+void Heap::EnsureWeakObjectToCodeTable() {
+  if (!weak_object_to_code_table()->IsHashTable()) {
+    set_weak_object_to_code_table(*isolate()->factory()->NewWeakHashTable(16));
+  }
 }
 
 

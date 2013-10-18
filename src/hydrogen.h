@@ -30,6 +30,7 @@
 
 #include "v8.h"
 
+#include "accessors.h"
 #include "allocation.h"
 #include "ast.h"
 #include "compiler.h"
@@ -169,8 +170,13 @@ class HBasicBlock V8_FINAL : public ZoneObject {
   }
   HBasicBlock* inlined_entry_block() { return inlined_entry_block_; }
 
-  bool IsDeoptimizing() const { return is_deoptimizing_; }
-  void MarkAsDeoptimizing() { is_deoptimizing_ = true; }
+  bool IsDeoptimizing() const {
+    return end() != NULL && end()->IsDeoptimize();
+  }
+
+  void MarkUnreachable();
+  bool IsUnreachable() const { return !is_reachable_; }
+  bool IsReachable() const { return is_reachable_; }
 
   bool IsLoopSuccessorDominator() const {
     return dominates_loop_successors_;
@@ -214,7 +220,7 @@ class HBasicBlock V8_FINAL : public ZoneObject {
   // For blocks marked as inline return target: the block with HEnterInlined.
   HBasicBlock* inlined_entry_block_;
   bool is_inline_return_target_ : 1;
-  bool is_deoptimizing_ : 1;
+  bool is_reachable_ : 1;
   bool dominates_loop_successors_ : 1;
   bool is_osr_entry_ : 1;
 };
@@ -405,14 +411,6 @@ class HGraph V8_FINAL : public ZoneObject {
     use_optimistic_licm_ = value;
   }
 
-  bool has_soft_deoptimize() {
-    return has_soft_deoptimize_;
-  }
-
-  void set_has_soft_deoptimize(bool value) {
-    has_soft_deoptimize_ = value;
-  }
-
   void MarkRecursive() {
     is_recursive_ = true;
   }
@@ -495,7 +493,6 @@ class HGraph V8_FINAL : public ZoneObject {
 
   bool is_recursive_;
   bool use_optimistic_licm_;
-  bool has_soft_deoptimize_;
   bool depends_on_empty_array_proto_elements_;
   int type_change_checksum_;
   int maximum_environment_size_;
@@ -1256,23 +1253,14 @@ class HGraphBuilder {
       LoadKeyedHoleMode load_mode,
       KeyedAccessStoreMode store_mode);
 
-  HInstruction* AddExternalArrayElementAccess(
-      HValue* external_elements,
-      HValue* checked_key,
-      HValue* val,
-      HValue* dependency,
-      ElementsKind elements_kind,
-      bool is_store);
-
-  HInstruction* AddFastElementAccess(
+  HInstruction* AddElementAccess(
       HValue* elements,
       HValue* checked_key,
       HValue* val,
       HValue* dependency,
       ElementsKind elements_kind,
       bool is_store,
-      LoadKeyedHoleMode load_mode,
-      KeyedAccessStoreMode store_mode);
+      LoadKeyedHoleMode load_mode = NEVER_RETURN_HOLE);
 
   HLoadNamedField* BuildLoadNamedField(HValue* object, HObjectAccess access);
   HInstruction* BuildLoadStringLength(HValue* object, HValue* checked_value);
@@ -1290,7 +1278,8 @@ class HGraphBuilder {
                                      Handle<Type> left_type,
                                      Handle<Type> right_type,
                                      Handle<Type> result_type,
-                                     Maybe<int> fixed_right_arg);
+                                     Maybe<int> fixed_right_arg,
+                                     bool binop_stub = false);
 
   HLoadNamedField* AddLoadFixedArrayLength(HValue *object);
 
@@ -1656,13 +1645,14 @@ inline HInstruction* HGraphBuilder::AddUncasted<HDeoptimize>(
     if (FLAG_always_opt) return NULL;
   }
   if (current_block()->IsDeoptimizing()) return NULL;
-  HDeoptimize* instr = New<HDeoptimize>(reason, type);
-  AddInstruction(instr);
+  HBasicBlock* after_deopt_block = CreateBasicBlock(
+      current_block()->last_environment());
+  HDeoptimize* instr = New<HDeoptimize>(reason, type, after_deopt_block);
   if (type == Deoptimizer::SOFT) {
     isolate()->counters()->soft_deopts_inserted()->Increment();
-    graph()->set_has_soft_deoptimize(true);
   }
-  current_block()->MarkAsDeoptimizing();
+  current_block()->Finish(instr);
+  set_current_block(after_deopt_block);
   return instr;
 }
 
@@ -1703,6 +1693,23 @@ inline HInstruction* HGraphBuilder::AddUncasted<HReturn>(HValue* value) {
 template<>
 inline HInstruction* HGraphBuilder::AddUncasted<HReturn>(HConstant* value) {
   return AddUncasted<HReturn>(static_cast<HValue*>(value));
+}
+
+
+template<>
+inline HInstruction* HGraphBuilder::AddUncasted<HCallRuntime>(
+    Handle<String> name,
+    const Runtime::Function* c_function,
+    int argument_count) {
+  HCallRuntime* instr = New<HCallRuntime>(name, c_function, argument_count);
+  if (graph()->info()->IsStub()) {
+    // When compiling code stubs, we don't want to save all double registers
+    // upon entry to the stub, but instead have the call runtime instruction
+    // save the double registers only on-demand (in the fallback case).
+    instr->set_save_doubles(kSaveFPRegs);
+  }
+  AddInstruction(instr);
+  return instr;
 }
 
 
@@ -1779,6 +1786,8 @@ class HOptimizedGraphBuilder V8_FINAL
   bool inline_bailout() { return inline_bailout_; }
 
   HValue* context() { return environment()->context(); }
+
+  HOsrBuilder* osr() const { return osr_; }
 
   void Bailout(BailoutReason reason);
 
@@ -1884,6 +1893,12 @@ class HOptimizedGraphBuilder V8_FINAL
                           HBasicBlock* body_exit,
                           HBasicBlock* loop_successor,
                           HBasicBlock* break_block);
+
+  // Build a loop entry
+  HBasicBlock* BuildLoopEntry();
+
+  // Builds a loop entry respectful of OSR requirements
+  HBasicBlock* BuildLoopEntry(IterationStatement* statement);
 
   HBasicBlock* JoinContinue(IterationStatement* statement,
                             HBasicBlock* exit_block,
@@ -2046,19 +2061,26 @@ class HOptimizedGraphBuilder V8_FINAL
     // PropertyAccessInfo is built for types->first().
     bool CanLoadAsMonomorphic(SmallMapList* types);
 
-    bool IsStringLength() {
-      return map_->instance_type() < FIRST_NONSTRING_TYPE &&
-          name_->Equals(isolate()->heap()->length_string());
+    bool IsJSObjectFieldAccessor() {
+      int offset;  // unused
+      return Accessors::IsJSObjectFieldAccessor(map_, name_, &offset);
     }
 
-    bool IsArrayLength() {
-      return map_->instance_type() == JS_ARRAY_TYPE &&
-          name_->Equals(isolate()->heap()->length_string());
-    }
-
-    bool IsTypedArrayLength() {
-      return map_->instance_type() == JS_TYPED_ARRAY_TYPE &&
-          name_->Equals(isolate()->heap()->length_string());
+    bool GetJSObjectFieldAccess(HObjectAccess* access) {
+      if (IsStringLength()) {
+        *access = HObjectAccess::ForStringLength();
+        return true;
+      } else if (IsArrayLength()) {
+        *access = HObjectAccess::ForArrayLength(map_->elements_kind());
+        return true;
+      } else {
+        int offset;
+        if (Accessors::IsJSObjectFieldAccessor(map_, name_, &offset)) {
+          *access = HObjectAccess::ForJSObjectOffset(offset);
+          return true;
+        }
+        return false;
+      }
     }
 
     bool has_holder() { return !holder_.is_null(); }
@@ -2072,6 +2094,16 @@ class HOptimizedGraphBuilder V8_FINAL
 
    private:
     Isolate* isolate() { return lookup_.isolate(); }
+
+    bool IsStringLength() {
+      return map_->instance_type() < FIRST_NONSTRING_TYPE &&
+          name_->Equals(isolate()->heap()->length_string());
+    }
+
+    bool IsArrayLength() {
+      return map_->instance_type() == JS_ARRAY_TYPE &&
+          name_->Equals(isolate()->heap()->length_string());
+    }
 
     bool LoadResult(Handle<Map> map);
     bool LookupDescriptor();
@@ -2155,7 +2187,6 @@ class HOptimizedGraphBuilder V8_FINAL
                                          HValue* key,
                                          HValue* val,
                                          SmallMapList* maps,
-                                         BailoutId ast_id,
                                          int position,
                                          bool is_store,
                                          KeyedAccessStoreMode store_mode,
@@ -2165,7 +2196,6 @@ class HOptimizedGraphBuilder V8_FINAL
                                    HValue* key,
                                    HValue* val,
                                    Expression* expr,
-                                   BailoutId ast_id,
                                    int position,
                                    bool is_store,
                                    bool* has_side_effects);
@@ -2173,10 +2203,6 @@ class HOptimizedGraphBuilder V8_FINAL
   HInstruction* BuildLoadNamedGeneric(HValue* object,
                                       Handle<String> name,
                                       Property* expr);
-  HInstruction* BuildCallGetter(HValue* object,
-                                Handle<Map> map,
-                                Handle<JSFunction> getter,
-                                Handle<JSObject> holder);
 
   HCheckMaps* AddCheckMap(HValue* object, Handle<Map> map);
 
@@ -2223,8 +2249,7 @@ class HOptimizedGraphBuilder V8_FINAL
   HInstruction* BuildThisFunction();
 
   HInstruction* BuildFastLiteral(Handle<JSObject> boilerplate_object,
-                                 Handle<Object> allocation_site,
-                                 AllocationSiteMode mode);
+                                 AllocationSiteContext* site_context);
 
   void BuildEmitObjectHeader(Handle<JSObject> boilerplate_object,
                              HInstruction* object);
@@ -2234,11 +2259,13 @@ class HOptimizedGraphBuilder V8_FINAL
                                        HInstruction* object_elements);
 
   void BuildEmitInObjectProperties(Handle<JSObject> boilerplate_object,
-                                   HInstruction* object);
+                                   HInstruction* object,
+                                   AllocationSiteContext* site_context);
 
   void BuildEmitElements(Handle<JSObject> boilerplate_object,
                          Handle<FixedArrayBase> elements,
-                         HValue* object_elements);
+                         HValue* object_elements,
+                         AllocationSiteContext* site_context);
 
   void BuildEmitFixedDoubleArray(Handle<FixedArrayBase> elements,
                                  ElementsKind kind,
@@ -2246,7 +2273,8 @@ class HOptimizedGraphBuilder V8_FINAL
 
   void BuildEmitFixedArray(Handle<FixedArrayBase> elements,
                            ElementsKind kind,
-                           HValue* object_elements);
+                           HValue* object_elements,
+                           AllocationSiteContext* site_context);
 
   void AddCheckPrototypeMaps(Handle<JSObject> holder,
                              Handle<Map> receiver_map);

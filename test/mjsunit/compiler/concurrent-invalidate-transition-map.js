@@ -25,65 +25,37 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include "marking-thread.h"
+// Flags: --track-fields --track-double-fields --allow-natives-syntax
+// Flags: --concurrent-recompilation --block-concurrent-recompilation
 
-#include "v8.h"
-
-#include "isolate.h"
-#include "v8threads.h"
-
-namespace v8 {
-namespace internal {
-
-MarkingThread::MarkingThread(Isolate* isolate)
-     : Thread("MarkingThread"),
-       isolate_(isolate),
-       heap_(isolate->heap()),
-       start_marking_semaphore_(0),
-       end_marking_semaphore_(0),
-       stop_semaphore_(0) {
-  NoBarrier_Store(&stop_thread_, static_cast<AtomicWord>(false));
-  id_ = NoBarrier_AtomicIncrement(&id_counter_, 1);
+if (!%IsConcurrentRecompilationSupported()) {
+  print("Concurrent recompilation is disabled. Skipping this test.");
+  quit();
 }
 
-
-Atomic32 MarkingThread::id_counter_ = -1;
-
-
-void MarkingThread::Run() {
-  Isolate::SetIsolateThreadLocals(isolate_, NULL);
-  DisallowHeapAllocation no_allocation;
-  DisallowHandleAllocation no_handles;
-  DisallowHandleDereference no_deref;
-
-  while (true) {
-    start_marking_semaphore_.Wait();
-
-    if (Acquire_Load(&stop_thread_)) {
-      stop_semaphore_.Signal();
-      return;
-    }
-
-    end_marking_semaphore_.Signal();
-  }
+function new_object() {
+  var o = {};
+  o.a = 1;
+  o.b = 2;
+  return o;
 }
 
-
-void MarkingThread::Stop() {
-  Release_Store(&stop_thread_, static_cast<AtomicWord>(true));
-  start_marking_semaphore_.Signal();
-  stop_semaphore_.Wait();
-  Join();
+function add_field(obj) {
+  obj.c = 3;
 }
 
+add_field(new_object());
+add_field(new_object());
+%OptimizeFunctionOnNextCall(add_field, "concurrent");
 
-void MarkingThread::StartMarking() {
-  start_marking_semaphore_.Signal();
-}
-
-
-void MarkingThread::WaitForMarkingThread() {
-  end_marking_semaphore_.Wait();
-}
-
-} }  // namespace v8::internal
+var o = new_object();
+// Kick off recompilation.
+add_field(o);
+// Invalidate transition map after compile graph has been created.
+o.c = 2.2;
+// In the mean time, concurrent recompiling is still blocked.
+assertUnoptimized(add_field, "no sync");
+// Let concurrent recompilation proceed.
+%UnblockConcurrentRecompilation();
+// Sync with background thread to conclude optimization that bailed out.
+assertUnoptimized(add_field, "sync");

@@ -881,9 +881,9 @@ void Builtins::Generate_FunctionApply(MacroAssembler* masm) {
     // rbp[16] : function arguments
     // rbp[24] : receiver
     // rbp[32] : function
-    static const int kArgumentsOffset = 2 * kPointerSize;
-    static const int kReceiverOffset = 3 * kPointerSize;
-    static const int kFunctionOffset = 4 * kPointerSize;
+    static const int kArgumentsOffset = kFPOnStackSize + kPCOnStackSize;
+    static const int kReceiverOffset = kArgumentsOffset + kPointerSize;
+    static const int kFunctionOffset = kReceiverOffset + kPointerSize;
 
     __ push(Operand(rbp, kFunctionOffset));
     __ push(Operand(rbp, kArgumentsOffset));
@@ -1382,6 +1382,23 @@ void Builtins::Generate_OnStackReplacement(MacroAssembler* masm) {
   __ movq(Operand(rsp, 0), rax);
 
   // And "return" to the OSR entry point of the function.
+  __ ret(0);
+}
+
+
+void Builtins::Generate_OsrAfterStackCheck(MacroAssembler* masm) {
+  // We check the stack limit as indicator that recompilation might be done.
+  Label ok;
+  __ CompareRoot(rsp, Heap::kStackLimitRootIndex);
+  __ j(above_equal, &ok);
+  {
+    FrameScope scope(masm, StackFrame::INTERNAL);
+    __ CallRuntime(Runtime::kStackGuard, 0);
+  }
+  __ jmp(masm->isolate()->builtins()->OnStackReplacement(),
+         RelocInfo::CODE_TARGET);
+
+  __ bind(&ok);
   __ ret(0);
 }
 

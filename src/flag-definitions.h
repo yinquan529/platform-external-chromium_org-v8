@@ -207,6 +207,8 @@ DEFINE_bool(pretenuring, true, "allocate objects in old space")
 // TODO(hpayer): We will remove this flag as soon as we have pretenuring
 // support for specific allocation sites.
 DEFINE_bool(pretenuring_call_new, false, "pretenure call new")
+DEFINE_bool(allocation_site_pretenuring, false,
+            "pretenure with allocation sites")
 DEFINE_bool(track_fields, true, "track fields with only smi values")
 DEFINE_bool(track_double_fields, true, "track fields with double values")
 DEFINE_bool(track_heap_object_fields, true, "track fields with heap values")
@@ -215,6 +217,11 @@ DEFINE_implication(track_double_fields, track_fields)
 DEFINE_implication(track_heap_object_fields, track_fields)
 DEFINE_implication(track_computed_fields, track_fields)
 DEFINE_bool(smi_binop, true, "support smi representation in binary operations")
+
+// Flags for optimization types.
+DEFINE_bool(optimize_for_size, false,
+            "Enables optimizations which favor memory size over execution "
+            "speed.")
 
 // Flags for data representation optimizations
 DEFINE_bool(unbox_double_arrays, true, "automatically unbox arrays of doubles")
@@ -227,7 +234,7 @@ DEFINE_bool(use_range, true, "use hydrogen range analysis")
 DEFINE_bool(use_gvn, true, "use hydrogen global value numbering")
 DEFINE_bool(use_canonicalizing, true, "use hydrogen instruction canonicalizing")
 DEFINE_bool(use_inlining, true, "use function inlining")
-DEFINE_bool(use_escape_analysis, true, "use hydrogen escape analysis")
+DEFINE_bool(use_escape_analysis, false, "use hydrogen escape analysis")
 DEFINE_bool(use_allocation_folding, true, "use allocation folding")
 DEFINE_int(max_inlining_levels, 5, "maximum number of inlining levels")
 DEFINE_int(max_inlined_source_size, 600,
@@ -242,6 +249,7 @@ DEFINE_bool(collect_megamorphic_maps_from_stub_cache,
             true,
             "crankshaft harvests type feedback from stub cache")
 DEFINE_bool(hydrogen_stats, false, "print statistics for hydrogen")
+DEFINE_bool(trace_check_elimination, false, "trace check elimination phase")
 DEFINE_bool(trace_hydrogen, false, "trace generated hydrogen to file")
 DEFINE_string(trace_hydrogen_filter, "*", "hydrogen tracing filter")
 DEFINE_bool(trace_hydrogen_stubs, false, "trace generated hydrogen for stubs")
@@ -284,11 +292,11 @@ DEFINE_bool(array_index_dehoisting, true,
 DEFINE_bool(analyze_environment_liveness, true,
             "analyze liveness of environment slots and zap dead values")
 DEFINE_bool(load_elimination, false, "use load elimination")
+DEFINE_bool(check_elimination, false, "use check elimination")
 DEFINE_bool(dead_code_elimination, true, "use dead code elimination")
 DEFINE_bool(fold_constants, true, "use constant folding")
 DEFINE_bool(trace_dead_code_elimination, false, "trace dead code elimination")
-DEFINE_bool(unreachable_code_elimination, false,
-            "eliminate unreachable code (hidden behind soft deopts)")
+DEFINE_bool(unreachable_code_elimination, true, "eliminate unreachable code")
 DEFINE_bool(track_allocation_sites, true,
             "Use allocation site info to reduce transitions")
 DEFINE_bool(trace_osr, false, "trace on-stack replacement")
@@ -320,8 +328,11 @@ DEFINE_int(concurrent_recompilation_queue_length, 8,
            "the length of the concurrent compilation queue")
 DEFINE_int(concurrent_recompilation_delay, 0,
            "artificial compilation delay in ms")
+DEFINE_bool(block_concurrent_recompilation, false,
+            "block queued jobs until released")
 DEFINE_bool(concurrent_osr, false,
             "concurrent on-stack replacement")
+DEFINE_implication(concurrent_osr, concurrent_recompilation)
 
 DEFINE_bool(omit_map_checks_for_leaf_maps, true,
             "do not emit check maps for constant values that have a leaf map, "
@@ -504,6 +515,8 @@ DEFINE_bool(collect_maps, true,
             "garbage collect maps from which no objects can be reached")
 DEFINE_bool(weak_embedded_maps_in_optimized_code, true,
             "make maps embedded in optimized code weak")
+DEFINE_bool(weak_embedded_objects_in_optimized_code, true,
+            "make objects embedded in optimized code weak")
 DEFINE_bool(flush_code, true,
             "flush code that we expect not to use again (during full gc)")
 DEFINE_bool(flush_code_incrementally, true,
@@ -522,8 +535,6 @@ DEFINE_bool(parallel_sweeping, true, "enable parallel sweeping")
 DEFINE_bool(concurrent_sweeping, false, "enable concurrent sweeping")
 DEFINE_int(sweeper_threads, 0,
            "number of parallel and concurrent sweeping threads")
-DEFINE_bool(parallel_marking, false, "enable parallel marking")
-DEFINE_int(marking_threads, 0, "number of parallel marking threads")
 #ifdef VERIFY_HEAP
 DEFINE_bool(verify_heap, false, "verify heap pointers before and after GC")
 #endif
@@ -588,9 +599,11 @@ DEFINE_int(hash_seed,
            0,
            "Fixed seed to use to hash property keys (0 means random)"
            "(with snapshots this option cannot override the baked-in seed)")
-DEFINE_maybe_bool(force_memory_constrained,
-           "force (if true) or prevent (if false) the runtime from treating "
-           "the device as being memory constrained.")
+
+// snapshot-common.cc
+DEFINE_bool(profile_deserialization,
+            false,
+            "Print the time it takes to deserialize the snapshot.")
 
 // v8.cc
 DEFINE_bool(preemption, false,
@@ -617,6 +630,11 @@ DEFINE_string(testing_serialization_file, "/tmp/serdes",
 // mksnapshot.cc
 DEFINE_string(extra_code, NULL, "A filename with extra code to be included in"
                   " the snapshot (mksnapshot only)")
+
+// code-stubs-hydrogen.cc
+DEFINE_bool(profile_hydrogen_code_stub_compilation,
+            false,
+            "Print the time it takes to lazily compile hydrogen code stubs.")
 
 //
 // Dev shell flags
@@ -788,6 +806,9 @@ DEFINE_implication(log_internal_timer_events, prof)
 // elements.cc
 DEFINE_bool(trace_elements_transitions, false, "trace elements transitions")
 
+DEFINE_bool(trace_creation_allocation_sites, false,
+            "trace the creation of allocation sites")
+
 // code-stubs.cc
 DEFINE_bool(print_code_stubs, false, "print code stubs")
 DEFINE_bool(test_secondary_stub_cache,
@@ -797,6 +818,7 @@ DEFINE_bool(test_secondary_stub_cache,
 DEFINE_bool(test_primary_stub_cache,
             false,
             "test primary stub cache by disabling the secondary one")
+
 
 // codegen-ia32.cc / codegen-arm.cc
 DEFINE_bool(print_code, false, "print generated code")

@@ -77,19 +77,12 @@ using ::v8::V8;
 using ::v8::Value;
 
 
-// TODO(bmeurer): Don't run profiled tests when using the simulator.
-// This is a temporary work-around, until the profiler is fixed.
-#if USE_SIMULATOR
-#define THREADED_PROFILED_TEST(Name)                                 \
-  THREADED_TEST(Name)
-#else
 #define THREADED_PROFILED_TEST(Name)                                 \
   static void Test##Name();                                          \
   TEST(Name##WithProfiler) {                                         \
     RunWithProfiler(&Test##Name);                                    \
   }                                                                  \
   THREADED_TEST(Name)
-#endif
 
 
 void RunWithProfiler(void (*test)()) {
@@ -204,7 +197,7 @@ THREADED_TEST(Handles) {
   CHECK(!local_env.IsEmpty());
   local_env->Enter();
 
-  v8::Handle<v8::Primitive> undef = v8::Undefined();
+  v8::Handle<v8::Primitive> undef = v8::Undefined(CcTest::isolate());
   CHECK(!undef.IsEmpty());
   CHECK(undef->IsUndefined());
 
@@ -391,8 +384,9 @@ THREADED_TEST(ArgumentSignature) {
 
 THREADED_TEST(HulIgennem) {
   LocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
-  v8::Handle<v8::Primitive> undef = v8::Undefined();
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
+  v8::Handle<v8::Primitive> undef = v8::Undefined(isolate);
   Local<String> undef_str = undef->ToString();
   char* value = i::NewArray<char>(undef_str->Utf8Length() + 1);
   undef_str->WriteUtf8(value);
@@ -403,7 +397,8 @@ THREADED_TEST(HulIgennem) {
 
 THREADED_TEST(Access) {
   LocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
   Local<v8::Object> obj = v8::Object::New();
   Local<Value> foo_before = obj->Get(v8_str("foo"));
   CHECK(foo_before->IsUndefined());
@@ -1689,12 +1684,13 @@ THREADED_TEST(Number) {
 
 THREADED_TEST(ToNumber) {
   LocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
   Local<String> str = v8_str("3.1415926");
   CHECK_EQ(3.1415926, str->NumberValue());
-  v8::Handle<v8::Boolean> t = v8::True();
+  v8::Handle<v8::Boolean> t = v8::True(isolate);
   CHECK_EQ(1.0, t->NumberValue());
-  v8::Handle<v8::Boolean> f = v8::False();
+  v8::Handle<v8::Boolean> f = v8::False(isolate);
   CHECK_EQ(0.0, f->NumberValue());
 }
 
@@ -1713,13 +1709,13 @@ THREADED_TEST(Date) {
 THREADED_TEST(Boolean) {
   LocalContext env;
   v8::HandleScope scope(env->GetIsolate());
-  v8::Handle<v8::Boolean> t = v8::True();
+  v8::Handle<v8::Boolean> t = v8::True(CcTest::isolate());
   CHECK(t->Value());
-  v8::Handle<v8::Boolean> f = v8::False();
+  v8::Handle<v8::Boolean> f = v8::False(CcTest::isolate());
   CHECK(!f->Value());
-  v8::Handle<v8::Primitive> u = v8::Undefined();
+  v8::Handle<v8::Primitive> u = v8::Undefined(CcTest::isolate());
   CHECK(!u->BooleanValue());
-  v8::Handle<v8::Primitive> n = v8::Null();
+  v8::Handle<v8::Primitive> n = v8::Null(CcTest::isolate());
   CHECK(!n->BooleanValue());
   v8::Handle<String> str1 = v8_str("");
   CHECK(!str1->BooleanValue());
@@ -2451,7 +2447,7 @@ static void ThrowingPropertyHandlerGet(
     Local<String> key,
     const v8::PropertyCallbackInfo<v8::Value>& info) {
   ApiTestFuzzer::Fuzz();
-  info.GetReturnValue().Set(v8::ThrowException(key));
+  info.GetReturnValue().Set(info.GetIsolate()->ThrowException(key));
 }
 
 
@@ -2459,7 +2455,7 @@ static void ThrowingPropertyHandlerSet(
     Local<String> key,
     Local<Value>,
     const v8::PropertyCallbackInfo<v8::Value>& info) {
-  v8::ThrowException(key);
+  info.GetIsolate()->ThrowException(key);
   info.GetReturnValue().SetUndefined();  // not the same as empty handle
 }
 
@@ -3254,7 +3250,7 @@ THREADED_TEST(ClearAndLeakGlobal) {
 THREADED_TEST(GlobalHandleUpcast) {
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope scope(isolate);
-  v8::Local<String> local = v8::Local<String>::New(v8_str("str"));
+  v8::Local<String> local = v8::Local<String>::New(isolate, v8_str("str"));
   v8::Persistent<String> global_string(isolate, local);
   v8::Persistent<Value>& global_value =
       v8::Persistent<Value>::Cast(global_string);
@@ -3304,10 +3300,8 @@ THREADED_TEST(HandleEquality) {
 
 THREADED_TEST(LocalHandle) {
   v8::HandleScope scope(CcTest::isolate());
-  v8::Local<String> local = v8::Local<String>::New(v8_str("str"));
-  CHECK_EQ(local->Length(), 3);
-
-  local = v8::Local<String>::New(CcTest::isolate(), v8_str("str"));
+  v8::Local<String> local =
+      v8::Local<String>::New(CcTest::isolate(), v8_str("str"));
   CHECK_EQ(local->Length(), 3);
 }
 
@@ -3762,15 +3756,16 @@ static void check_message_3(v8::Handle<v8::Message> message,
 
 TEST(MessageHandler3) {
   message_received = false;
-  v8::HandleScope scope(CcTest::isolate());
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
   CHECK(!message_received);
   v8::V8::AddMessageListener(check_message_3);
   LocalContext context;
   v8::ScriptOrigin origin =
       v8::ScriptOrigin(v8_str("6.75"),
-                       v8::Integer::New(1),
-                       v8::Integer::New(2),
-                       v8::True());
+                       v8::Integer::New(1, isolate),
+                       v8::Integer::New(2, isolate),
+                       v8::True(isolate));
   v8::Handle<v8::Script> script = Script::Compile(v8_str("throw 'error'"),
                                                   &origin);
   script->Run();
@@ -3790,15 +3785,16 @@ static void check_message_4(v8::Handle<v8::Message> message,
 
 TEST(MessageHandler4) {
   message_received = false;
-  v8::HandleScope scope(CcTest::isolate());
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
   CHECK(!message_received);
   v8::V8::AddMessageListener(check_message_4);
   LocalContext context;
   v8::ScriptOrigin origin =
       v8::ScriptOrigin(v8_str("6.75"),
-                       v8::Integer::New(1),
-                       v8::Integer::New(2),
-                       v8::False());
+                       v8::Integer::New(1, isolate),
+                       v8::Integer::New(2, isolate),
+                       v8::False(isolate));
   v8::Handle<v8::Script> script = Script::Compile(v8_str("throw 'error'"),
                                                   &origin);
   script->Run();
@@ -3826,15 +3822,16 @@ static void check_message_5b(v8::Handle<v8::Message> message,
 
 TEST(MessageHandler5) {
   message_received = false;
-  v8::HandleScope scope(CcTest::isolate());
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
   CHECK(!message_received);
   v8::V8::AddMessageListener(check_message_5a);
   LocalContext context;
   v8::ScriptOrigin origin =
       v8::ScriptOrigin(v8_str("6.75"),
-                       v8::Integer::New(1),
-                       v8::Integer::New(2),
-                       v8::True());
+                       v8::Integer::New(1, isolate),
+                       v8::Integer::New(2, isolate),
+                       v8::True(isolate));
   v8::Handle<v8::Script> script = Script::Compile(v8_str("throw 'error'"),
                                                   &origin);
   script->Run();
@@ -3846,9 +3843,9 @@ TEST(MessageHandler5) {
   v8::V8::AddMessageListener(check_message_5b);
   origin =
       v8::ScriptOrigin(v8_str("6.75"),
-                       v8::Integer::New(1),
-                       v8::Integer::New(2),
-                       v8::False());
+                       v8::Integer::New(1, isolate),
+                       v8::Integer::New(2, isolate),
+                       v8::False(isolate));
   script = Script::Compile(v8_str("throw 'error'"),
                            &origin);
   script->Run();
@@ -4007,7 +4004,8 @@ THREADED_TEST(Vector) {
 
 THREADED_TEST(FunctionCall) {
   LocalContext context;
-  v8::HandleScope scope(context->GetIsolate());
+  v8::Isolate* isolate = context->GetIsolate();
+  v8::HandleScope scope(isolate);
   CompileRun(
     "function Foo() {"
     "  var result = [];"
@@ -4015,9 +4013,20 @@ THREADED_TEST(FunctionCall) {
     "    result.push(arguments[i]);"
     "  }"
     "  return result;"
+    "}"
+    "function ReturnThisSloppy() {"
+    "  return this;"
+    "}"
+    "function ReturnThisStrict() {"
+    "  'use strict';"
+    "  return this;"
     "}");
   Local<Function> Foo =
       Local<Function>::Cast(context->Global()->Get(v8_str("Foo")));
+  Local<Function> ReturnThisSloppy =
+      Local<Function>::Cast(context->Global()->Get(v8_str("ReturnThisSloppy")));
+  Local<Function> ReturnThisStrict =
+      Local<Function>::Cast(context->Global()->Get(v8_str("ReturnThisStrict")));
 
   v8::Handle<Value>* args0 = NULL;
   Local<v8::Array> a0 = Local<v8::Array>::Cast(Foo->Call(Foo, 0, args0));
@@ -4054,6 +4063,31 @@ THREADED_TEST(FunctionCall) {
   CHECK_EQ(8.8, a4->Get(v8::Integer::New(1))->NumberValue());
   CHECK_EQ(9.9, a4->Get(v8::Integer::New(2))->NumberValue());
   CHECK_EQ(10.11, a4->Get(v8::Integer::New(3))->NumberValue());
+
+  Local<v8::Value> r1 = ReturnThisSloppy->Call(v8::Undefined(isolate), 0, NULL);
+  CHECK(r1->StrictEquals(context->Global()));
+  Local<v8::Value> r2 = ReturnThisSloppy->Call(v8::Null(isolate), 0, NULL);
+  CHECK(r2->StrictEquals(context->Global()));
+  Local<v8::Value> r3 = ReturnThisSloppy->Call(v8_num(42), 0, NULL);
+  CHECK(r3->IsNumberObject());
+  CHECK_EQ(42.0, r3.As<v8::NumberObject>()->ValueOf());
+  Local<v8::Value> r4 = ReturnThisSloppy->Call(v8_str("hello"), 0, NULL);
+  CHECK(r4->IsStringObject());
+  CHECK(r4.As<v8::StringObject>()->ValueOf()->StrictEquals(v8_str("hello")));
+  Local<v8::Value> r5 = ReturnThisSloppy->Call(v8::True(isolate), 0, NULL);
+  CHECK(r5->IsBooleanObject());
+  CHECK(r5.As<v8::BooleanObject>()->ValueOf());
+
+  Local<v8::Value> r6 = ReturnThisStrict->Call(v8::Undefined(isolate), 0, NULL);
+  CHECK(r6->IsUndefined());
+  Local<v8::Value> r7 = ReturnThisStrict->Call(v8::Null(isolate), 0, NULL);
+  CHECK(r7->IsNull());
+  Local<v8::Value> r8 = ReturnThisStrict->Call(v8_num(42), 0, NULL);
+  CHECK(r8->StrictEquals(v8_num(42)));
+  Local<v8::Value> r9 = ReturnThisStrict->Call(v8_str("hello"), 0, NULL);
+  CHECK(r9->StrictEquals(v8_str("hello")));
+  Local<v8::Value> r10 = ReturnThisStrict->Call(v8::True(isolate), 0, NULL);
+  CHECK(r10->StrictEquals(v8::True(isolate)));
 }
 
 
@@ -4321,7 +4355,8 @@ THREADED_TEST(isNumberType) {
 
 THREADED_TEST(ConversionException) {
   LocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
   CompileRun(
     "function TestClass() { };"
     "TestClass.prototype.toString = function () { throw 'uncle?'; };"
@@ -4350,7 +4385,7 @@ THREADED_TEST(ConversionException) {
   CHECK(to_int32_result.IsEmpty());
   CheckUncle(&try_catch);
 
-  Local<Value> to_object_result = v8::Undefined()->ToObject();
+  Local<Value> to_object_result = v8::Undefined(isolate)->ToObject();
   CHECK(to_object_result.IsEmpty());
   CHECK(try_catch.HasCaught());
   try_catch.Reset();
@@ -4375,7 +4410,7 @@ THREADED_TEST(ConversionException) {
 
 void ThrowFromC(const v8::FunctionCallbackInfo<v8::Value>& args) {
   ApiTestFuzzer::Fuzz();
-  v8::ThrowException(v8_str("konto"));
+  args.GetIsolate()->ThrowException(v8_str("konto"));
 }
 
 
@@ -4658,7 +4693,7 @@ void CThrowCountDown(const v8::FunctionCallbackInfo<v8::Value>& args) {
   int count = args[0]->Int32Value();
   int cInterval = args[2]->Int32Value();
   if (count == 0) {
-    v8::ThrowException(v8_str("FromC"));
+    args.GetIsolate()->ThrowException(v8_str("FromC"));
     return;
   } else {
     Local<v8::Object> global =
@@ -4798,7 +4833,7 @@ TEST(ExceptionOrder) {
 void ThrowValue(const v8::FunctionCallbackInfo<v8::Value>& args) {
   ApiTestFuzzer::Fuzz();
   CHECK_EQ(1, args.Length());
-  v8::ThrowException(args[0]);
+  args.GetIsolate()->ThrowException(args[0]);
 }
 
 
@@ -4896,7 +4931,7 @@ static void TryCatchNestedHelper(int depth) {
     CHECK(try_catch.HasCaught());
     try_catch.ReThrow();
   } else {
-    v8::ThrowException(v8_str("back"));
+    CcTest::isolate()->ThrowException(v8_str("back"));
   }
 }
 
@@ -4976,8 +5011,8 @@ THREADED_TEST(Equality) {
   CHECK(v8_num(0.0)->StrictEquals(v8_num(-0.0)));
   Local<Value> not_a_number = v8_num(i::OS::nan_value());
   CHECK(!not_a_number->StrictEquals(not_a_number));
-  CHECK(v8::False()->StrictEquals(v8::False()));
-  CHECK(!v8::False()->StrictEquals(v8::Undefined()));
+  CHECK(v8::False(isolate)->StrictEquals(v8::False(isolate)));
+  CHECK(!v8::False(isolate)->StrictEquals(v8::Undefined(isolate)));
 
   v8::Handle<v8::Object> obj = v8::Object::New();
   v8::Persistent<v8::Object> alias(isolate, obj);
@@ -4991,8 +5026,8 @@ THREADED_TEST(Equality) {
   CHECK(!v8_num(1)->SameValue(v8_num(2)));
   CHECK(!v8_num(0.0)->SameValue(v8_num(-0.0)));
   CHECK(not_a_number->SameValue(not_a_number));
-  CHECK(v8::False()->SameValue(v8::False()));
-  CHECK(!v8::False()->SameValue(v8::Undefined()));
+  CHECK(v8::False(isolate)->SameValue(v8::False(isolate)));
+  CHECK(!v8::False(isolate)->SameValue(v8::Undefined(isolate)));
 }
 
 
@@ -6673,7 +6708,7 @@ TEST(RegexpOutOfMemory) {
 static void MissingScriptInfoMessageListener(v8::Handle<v8::Message> message,
                                              v8::Handle<Value> data) {
   CHECK(message->GetScriptResourceName()->IsUndefined());
-  CHECK_EQ(v8::Undefined(), message->GetScriptResourceName());
+  CHECK_EQ(v8::Undefined(CcTest::isolate()), message->GetScriptResourceName());
   message->GetLineNumber();
   message->GetSourceLine();
 }
@@ -6910,12 +6945,13 @@ v8::Handle<Function> args_fun;
 static void ArgumentsTestCallback(
     const v8::FunctionCallbackInfo<v8::Value>& args) {
   ApiTestFuzzer::Fuzz();
+  v8::Isolate* isolate = args.GetIsolate();
   CHECK_EQ(args_fun, args.Callee());
   CHECK_EQ(3, args.Length());
-  CHECK_EQ(v8::Integer::New(1), args[0]);
-  CHECK_EQ(v8::Integer::New(2), args[1]);
-  CHECK_EQ(v8::Integer::New(3), args[2]);
-  CHECK_EQ(v8::Undefined(), args[3]);
+  CHECK_EQ(v8::Integer::New(1, isolate), args[0]);
+  CHECK_EQ(v8::Integer::New(2, isolate), args[1]);
+  CHECK_EQ(v8::Integer::New(3, isolate), args[2]);
+  CHECK_EQ(v8::Undefined(isolate), args[3]);
   v8::HandleScope scope(args.GetIsolate());
   CcTest::heap()->CollectAllGarbage(i::Heap::kNoGCFlags);
 }
@@ -7163,7 +7199,8 @@ THREADED_TEST(PreInterceptorHolders) {
 
 
 THREADED_TEST(ObjectInstantiation) {
-  v8::HandleScope scope(CcTest::isolate());
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
   v8::Handle<v8::ObjectTemplate> templ = ObjectTemplate::New();
   templ->SetAccessor(v8_str("t"), PGetter2);
   LocalContext context;
@@ -7175,7 +7212,7 @@ THREADED_TEST(ObjectInstantiation) {
     context->Global()->Set(v8_str("o2"), obj);
     v8::Handle<Value> value =
         Script::Compile(v8_str("o.__proto__ === o2.__proto__"))->Run();
-    CHECK_EQ(v8::True(), value);
+    CHECK_EQ(v8::True(isolate), value);
     context->Global()->Set(v8_str("o"), obj);
   }
 }
@@ -9794,7 +9831,8 @@ static void FakeConstructorCallback(
 
 THREADED_TEST(ConstructorForObject) {
   LocalContext context;
-  v8::HandleScope handle_scope(context->GetIsolate());
+  v8::Isolate* isolate = context->GetIsolate();
+  v8::HandleScope handle_scope(isolate);
 
   { Local<ObjectTemplate> instance_template = ObjectTemplate::New();
     instance_template->SetCallAsFunctionHandler(ConstructorCallback);
@@ -9843,7 +9881,7 @@ THREADED_TEST(ConstructorForObject) {
     CHECK(value->IsBoolean());
     CHECK_EQ(true, value->BooleanValue());
 
-    Handle<Value> args3[] = { v8::True() };
+    Handle<Value> args3[] = { v8::True(isolate) };
     Local<Value> value_obj3 = instance->CallAsConstructor(1, args3);
     CHECK(value_obj3->IsObject());
     Local<Object> object3 = Local<Object>::Cast(value_obj3);
@@ -9853,7 +9891,7 @@ THREADED_TEST(ConstructorForObject) {
     CHECK_EQ(true, value->BooleanValue());
 
     // Call the Object's constructor with undefined.
-    Handle<Value> args4[] = { v8::Undefined() };
+    Handle<Value> args4[] = { v8::Undefined(isolate) };
     Local<Value> value_obj4 = instance->CallAsConstructor(1, args4);
     CHECK(value_obj4->IsObject());
     Local<Object> object4 = Local<Object>::Cast(value_obj4);
@@ -9862,7 +9900,7 @@ THREADED_TEST(ConstructorForObject) {
     CHECK(value->IsUndefined());
 
     // Call the Object's constructor with null.
-    Handle<Value> args5[] = { v8::Null() };
+    Handle<Value> args5[] = { v8::Null(isolate) };
     Local<Value> value_obj5 = instance->CallAsConstructor(1, args5);
     CHECK(value_obj5->IsObject());
     Local<Object> object5 = Local<Object>::Cast(value_obj5);
@@ -10169,6 +10207,11 @@ static void call_as_function(const v8::FunctionCallbackInfo<v8::Value>& args) {
 }
 
 
+static void ReturnThis(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  args.GetReturnValue().Set(args.This());
+}
+
+
 // Test that a call handler can be set for objects which will allow
 // non-function objects created through the API to be called as
 // functions.
@@ -10280,6 +10323,81 @@ THREADED_TEST(CallAsFunction) {
     String::Utf8Value exception_value2(try_catch.Exception());
     CHECK_EQ("23", *exception_value2);
     try_catch.Reset();
+  }
+
+  { v8::Isolate* isolate = context->GetIsolate();
+    Local<v8::FunctionTemplate> t = v8::FunctionTemplate::New();
+    Local<ObjectTemplate> instance_template = t->InstanceTemplate();
+    instance_template->SetCallAsFunctionHandler(ReturnThis);
+    Local<v8::Object> instance = t->GetFunction()->NewInstance();
+
+    Local<v8::Value> a1 =
+        instance->CallAsFunction(v8::Undefined(isolate), 0, NULL);
+    CHECK(a1->StrictEquals(instance));
+    Local<v8::Value> a2 =
+        instance->CallAsFunction(v8::Null(isolate), 0, NULL);
+    CHECK(a2->StrictEquals(instance));
+    Local<v8::Value> a3 =
+        instance->CallAsFunction(v8_num(42), 0, NULL);
+    CHECK(a3->StrictEquals(instance));
+    Local<v8::Value> a4 =
+        instance->CallAsFunction(v8_str("hello"), 0, NULL);
+    CHECK(a4->StrictEquals(instance));
+    Local<v8::Value> a5 =
+        instance->CallAsFunction(v8::True(isolate), 0, NULL);
+    CHECK(a5->StrictEquals(instance));
+  }
+
+  { v8::Isolate* isolate = context->GetIsolate();
+    CompileRun(
+      "function ReturnThisSloppy() {"
+      "  return this;"
+      "}"
+      "function ReturnThisStrict() {"
+      "  'use strict';"
+      "  return this;"
+      "}");
+    Local<Function> ReturnThisSloppy =
+        Local<Function>::Cast(
+            context->Global()->Get(v8_str("ReturnThisSloppy")));
+    Local<Function> ReturnThisStrict =
+        Local<Function>::Cast(
+            context->Global()->Get(v8_str("ReturnThisStrict")));
+
+    Local<v8::Value> a1 =
+        ReturnThisSloppy->CallAsFunction(v8::Undefined(isolate), 0, NULL);
+    CHECK(a1->StrictEquals(context->Global()));
+    Local<v8::Value> a2 =
+        ReturnThisSloppy->CallAsFunction(v8::Null(isolate), 0, NULL);
+    CHECK(a2->StrictEquals(context->Global()));
+    Local<v8::Value> a3 =
+        ReturnThisSloppy->CallAsFunction(v8_num(42), 0, NULL);
+    CHECK(a3->IsNumberObject());
+    CHECK_EQ(42.0, a3.As<v8::NumberObject>()->ValueOf());
+    Local<v8::Value> a4 =
+        ReturnThisSloppy->CallAsFunction(v8_str("hello"), 0, NULL);
+    CHECK(a4->IsStringObject());
+    CHECK(a4.As<v8::StringObject>()->ValueOf()->StrictEquals(v8_str("hello")));
+    Local<v8::Value> a5 =
+        ReturnThisSloppy->CallAsFunction(v8::True(isolate), 0, NULL);
+    CHECK(a5->IsBooleanObject());
+    CHECK(a5.As<v8::BooleanObject>()->ValueOf());
+
+    Local<v8::Value> a6 =
+        ReturnThisStrict->CallAsFunction(v8::Undefined(isolate), 0, NULL);
+    CHECK(a6->IsUndefined());
+    Local<v8::Value> a7 =
+        ReturnThisStrict->CallAsFunction(v8::Null(isolate), 0, NULL);
+    CHECK(a7->IsNull());
+    Local<v8::Value> a8 =
+        ReturnThisStrict->CallAsFunction(v8_num(42), 0, NULL);
+    CHECK(a8->StrictEquals(v8_num(42)));
+    Local<v8::Value> a9 =
+        ReturnThisStrict->CallAsFunction(v8_str("hello"), 0, NULL);
+    CHECK(a9->StrictEquals(v8_str("hello")));
+    Local<v8::Value> a10 =
+        ReturnThisStrict->CallAsFunction(v8::True(isolate), 0, NULL);
+    CHECK(a10->StrictEquals(v8::True(isolate)));
   }
 }
 
@@ -11259,7 +11377,7 @@ THREADED_TEST(CallICFastApi_DirectCall_GCMoveStub) {
 
 void ThrowingDirectApiCallback(
     const v8::FunctionCallbackInfo<v8::Value>& args) {
-  v8::ThrowException(v8_str("g"));
+  args.GetIsolate()->ThrowException(v8_str("g"));
 }
 
 
@@ -11327,7 +11445,7 @@ THREADED_PROFILED_TEST(LoadICFastApi_DirectCall_GCMoveStub) {
 void ThrowingDirectGetterCallback(
     Local<String> name,
     const v8::PropertyCallbackInfo<v8::Value>& info) {
-  v8::ThrowException(v8_str("g"));
+  info.GetIsolate()->ThrowException(v8_str("g"));
 }
 
 
@@ -11938,7 +12056,7 @@ static void InterceptorICExceptionGetter(
     info.GetReturnValue().Set(call_ic_function3);
   }
   if (interceptor_ic_exception_get_count == 20) {
-    v8::ThrowException(v8_num(42));
+    info.GetIsolate()->ThrowException(v8_num(42));
     return;
   }
 }
@@ -11983,7 +12101,7 @@ static void InterceptorICExceptionSetter(
       const v8::PropertyCallbackInfo<v8::Value>& info) {
   ApiTestFuzzer::Fuzz();
   if (++interceptor_ic_exception_set_count > 20) {
-    v8::ThrowException(v8_num(42));
+    info.GetIsolate()->ThrowException(v8_num(42));
   }
 }
 
@@ -12055,7 +12173,7 @@ THREADED_TEST(NamedPropertyHandlerGetterAttributes) {
 static void ThrowingGetter(Local<String> name,
                            const v8::PropertyCallbackInfo<v8::Value>& info) {
   ApiTestFuzzer::Fuzz();
-  ThrowException(Handle<Value>());
+  info.GetIsolate()->ThrowException(Handle<Value>());
   info.GetReturnValue().SetUndefined();
 }
 
@@ -12140,7 +12258,7 @@ static void ThrowFromJS(Handle<Message> message, Handle<Value> data) {
 
 
 static void ThrowViaApi(Handle<Message> message, Handle<Value> data) {
-  if (--call_depth) ThrowException(v8_str("ThrowViaApi"));
+  if (--call_depth) CcTest::isolate()->ThrowException(v8_str("ThrowViaApi"));
 }
 
 
@@ -12499,13 +12617,14 @@ void ApiTestFuzzer::CallTest() {
 
 
 static void ThrowInJS(const v8::FunctionCallbackInfo<v8::Value>& args) {
-  CHECK(v8::Locker::IsLocked(CcTest::isolate()));
+  v8::Isolate* isolate = args.GetIsolate();
+  CHECK(v8::Locker::IsLocked(isolate));
   ApiTestFuzzer::Fuzz();
-  v8::Unlocker unlocker(CcTest::isolate());
+  v8::Unlocker unlocker(isolate);
   const char* code = "throw 7;";
   {
-    v8::Locker nested_locker(CcTest::isolate());
-    v8::HandleScope scope(args.GetIsolate());
+    v8::Locker nested_locker(isolate);
+    v8::HandleScope scope(isolate);
     v8::Handle<Value> exception;
     { v8::TryCatch try_catch;
       v8::Handle<Value> value = CompileRun(code);
@@ -12514,9 +12633,9 @@ static void ThrowInJS(const v8::FunctionCallbackInfo<v8::Value>& args) {
       // Make sure to wrap the exception in a new handle because
       // the handle returned from the TryCatch is destroyed
       // when the TryCatch is destroyed.
-      exception = Local<Value>::New(try_catch.Exception());
+      exception = Local<Value>::New(isolate, try_catch.Exception());
     }
-    v8::ThrowException(exception);
+    args.GetIsolate()->ThrowException(exception);
   }
 }
 
@@ -13732,11 +13851,12 @@ static bool IndexedSetAccessBlocker(Local<v8::Object> obj,
 
 THREADED_TEST(DisableAccessChecksWhileConfiguring) {
   LocalContext context;
-  v8::HandleScope scope(context->GetIsolate());
+  v8::Isolate* isolate = context->GetIsolate();
+  v8::HandleScope scope(isolate);
   Local<ObjectTemplate> templ = ObjectTemplate::New();
   templ->SetAccessCheckCallbacks(NamedSetAccessBlocker,
                                  IndexedSetAccessBlocker);
-  templ->Set(v8_str("x"), v8::True());
+  templ->Set(v8_str("x"), v8::True(isolate));
   Local<v8::Object> instance = templ->NewInstance();
   context->Global()->Set(v8_str("obj"), instance);
   Local<Value> value = CompileRun("obj.x");
@@ -13993,9 +14113,10 @@ TEST(PreCompile) {
   // TODO(155): This test would break without the initialization of V8. This is
   // a workaround for now to make this test not fail.
   v8::V8::Initialize();
+  v8::Isolate* isolate = CcTest::isolate();
   const char* script = "function foo(a) { return a+1; }";
   v8::ScriptData* sd =
-      v8::ScriptData::PreCompile(script, i::StrLength(script));
+      v8::ScriptData::PreCompile(isolate, script, i::StrLength(script));
   CHECK_NE(sd->Length(), 0);
   CHECK_NE(sd->Data(), NULL);
   CHECK(!sd->HasError());
@@ -14005,9 +14126,10 @@ TEST(PreCompile) {
 
 TEST(PreCompileWithError) {
   v8::V8::Initialize();
+  v8::Isolate* isolate = CcTest::isolate();
   const char* script = "function foo(a) { return 1 * * 2; }";
   v8::ScriptData* sd =
-      v8::ScriptData::PreCompile(script, i::StrLength(script));
+      v8::ScriptData::PreCompile(isolate, script, i::StrLength(script));
   CHECK(sd->HasError());
   delete sd;
 }
@@ -14015,9 +14137,10 @@ TEST(PreCompileWithError) {
 
 TEST(Regress31661) {
   v8::V8::Initialize();
+  v8::Isolate* isolate = CcTest::isolate();
   const char* script = " The Definintive Guide";
   v8::ScriptData* sd =
-      v8::ScriptData::PreCompile(script, i::StrLength(script));
+      v8::ScriptData::PreCompile(isolate, script, i::StrLength(script));
   CHECK(sd->HasError());
   delete sd;
 }
@@ -14026,9 +14149,10 @@ TEST(Regress31661) {
 // Tests that ScriptData can be serialized and deserialized.
 TEST(PreCompileSerialization) {
   v8::V8::Initialize();
+  v8::Isolate* isolate = CcTest::isolate();
   const char* script = "function foo(a) { return a+1; }";
   v8::ScriptData* sd =
-      v8::ScriptData::PreCompile(script, i::StrLength(script));
+      v8::ScriptData::PreCompile(isolate, script, i::StrLength(script));
 
   // Serialize.
   int serialized_data_length = sd->Length();
@@ -14065,13 +14189,14 @@ TEST(PreCompileDeserializationError) {
 // Attempts to deserialize bad data.
 TEST(PreCompileInvalidPreparseDataError) {
   v8::V8::Initialize();
+  v8::Isolate* isolate = CcTest::isolate();
   LocalContext context;
   v8::HandleScope scope(context->GetIsolate());
 
   const char* script = "function foo(){ return 5;}\n"
       "function bar(){ return 6 + 7;}  foo();";
   v8::ScriptData* sd =
-      v8::ScriptData::PreCompile(script, i::StrLength(script));
+      v8::ScriptData::PreCompile(isolate, script, i::StrLength(script));
   CHECK(!sd->HasError());
   // ScriptDataImpl private implementation details
   const int kHeaderSize = i::PreparseDataConstants::kHeaderSize;
@@ -14097,7 +14222,7 @@ TEST(PreCompileInvalidPreparseDataError) {
   // Overwrite function bar's start position with 200.  The function entry
   // will not be found when searching for it by position and we should fall
   // back on eager compilation.
-  sd = v8::ScriptData::PreCompile(script, i::StrLength(script));
+  sd = v8::ScriptData::PreCompile(isolate, script, i::StrLength(script));
   sd_data = reinterpret_cast<unsigned*>(const_cast<char*>(sd->Data()));
   sd_data[kHeaderSize + 1 * kFunctionEntrySize + kFunctionEntryStartOffset] =
       200;
@@ -14112,12 +14237,13 @@ TEST(PreCompileInvalidPreparseDataError) {
 // the same results (at least for one trivial case).
 TEST(PreCompileAPIVariationsAreSame) {
   v8::V8::Initialize();
-  v8::HandleScope scope(CcTest::isolate());
+  v8::Isolate* isolate = CcTest::isolate();
+  v8::HandleScope scope(isolate);
 
   const char* cstring = "function foo(a) { return a+1; }";
 
   v8::ScriptData* sd_from_cstring =
-      v8::ScriptData::PreCompile(cstring, i::StrLength(cstring));
+      v8::ScriptData::PreCompile(isolate, cstring, i::StrLength(cstring));
 
   TestAsciiResource* resource = new TestAsciiResource(cstring);
   v8::ScriptData* sd_from_external_string = v8::ScriptData::PreCompile(
@@ -14153,14 +14279,14 @@ THREADED_TEST(DictionaryICLoadedFunction) {
   // Test LoadIC.
   for (int i = 0; i < 2; i++) {
     LocalContext context;
-    context->Global()->Set(v8_str("tmp"), v8::True());
+    context->Global()->Set(v8_str("tmp"), v8::True(CcTest::isolate()));
     context->Global()->Delete(v8_str("tmp"));
     CompileRun("for (var j = 0; j < 10; j++) new RegExp('');");
   }
   // Test CallIC.
   for (int i = 0; i < 2; i++) {
     LocalContext context;
-    context->Global()->Set(v8_str("tmp"), v8::True());
+    context->Global()->Set(v8_str("tmp"), v8::True(CcTest::isolate()));
     context->Global()->Delete(v8_str("tmp"));
     CompileRun("for (var j = 0; j < 10; j++) RegExp('')");
   }
@@ -14197,128 +14323,6 @@ THREADED_TEST(CrossContextNew) {
 }
 
 
-class RegExpInterruptTest {
- public:
-  RegExpInterruptTest() : block_(0) {}
-  ~RegExpInterruptTest() {}
-  void RunTest() {
-    gc_count_ = 0;
-    gc_during_regexp_ = 0;
-    regexp_success_ = false;
-    gc_success_ = false;
-    GCThread gc_thread(this);
-    gc_thread.Start();
-    v8::Locker::StartPreemption(1);
-
-    LongRunningRegExp();
-    {
-      v8::Unlocker unlock(CcTest::isolate());
-      gc_thread.Join();
-    }
-    v8::Locker::StopPreemption();
-    CHECK(regexp_success_);
-    CHECK(gc_success_);
-  }
-
- private:
-  // Number of garbage collections required.
-  static const int kRequiredGCs = 5;
-
-  class GCThread : public i::Thread {
-   public:
-    explicit GCThread(RegExpInterruptTest* test)
-        : Thread("GCThread"), test_(test) {}
-    virtual void Run() {
-      test_->CollectGarbage();
-    }
-   private:
-     RegExpInterruptTest* test_;
-  };
-
-  void CollectGarbage() {
-    block_.Wait();
-    while (gc_during_regexp_ < kRequiredGCs) {
-      {
-        v8::Locker lock(CcTest::isolate());
-        v8::Isolate::Scope isolate_scope(CcTest::isolate());
-        // TODO(lrn): Perhaps create some garbage before collecting.
-        CcTest::heap()->CollectAllGarbage(i::Heap::kNoGCFlags);
-        gc_count_++;
-      }
-      i::OS::Sleep(1);
-    }
-    gc_success_ = true;
-  }
-
-  void LongRunningRegExp() {
-    block_.Signal();  // Enable garbage collection thread on next preemption.
-    int rounds = 0;
-    while (gc_during_regexp_ < kRequiredGCs) {
-      int gc_before = gc_count_;
-      {
-        // Match 15-30 "a"'s against 14 and a "b".
-        const char* c_source =
-            "/a?a?a?a?a?a?a?a?a?a?a?a?a?a?aaaaaaaaaaaaaaaa/"
-            ".exec('aaaaaaaaaaaaaaab') === null";
-        Local<String> source = String::New(c_source);
-        Local<Script> script = Script::Compile(source);
-        Local<Value> result = script->Run();
-        if (!result->BooleanValue()) {
-          gc_during_regexp_ = kRequiredGCs;  // Allow gc thread to exit.
-          return;
-        }
-      }
-      {
-        // Match 15-30 "a"'s against 15 and a "b".
-        const char* c_source =
-            "/a?a?a?a?a?a?a?a?a?a?a?a?a?a?aaaaaaaaaaaaaaaa/"
-            ".exec('aaaaaaaaaaaaaaaab')[0] === 'aaaaaaaaaaaaaaaa'";
-        Local<String> source = String::New(c_source);
-        Local<Script> script = Script::Compile(source);
-        Local<Value> result = script->Run();
-        if (!result->BooleanValue()) {
-          gc_during_regexp_ = kRequiredGCs;
-          return;
-        }
-      }
-      int gc_after = gc_count_;
-      gc_during_regexp_ += gc_after - gc_before;
-      rounds++;
-      i::OS::Sleep(1);
-    }
-    regexp_success_ = true;
-  }
-
-  i::Semaphore block_;
-  int gc_count_;
-  int gc_during_regexp_;
-  bool regexp_success_;
-  bool gc_success_;
-};
-
-
-// Test that a regular expression execution can be interrupted and
-// survive a garbage collection.
-TEST(RegExpInterruption) {
-  v8::Locker lock(CcTest::isolate());
-  v8::HandleScope scope(CcTest::isolate());
-  Local<Context> local_env;
-  {
-    LocalContext env;
-    local_env = env.local();
-  }
-
-  // Local context should still be live.
-  CHECK(!local_env.IsEmpty());
-  local_env->Enter();
-
-  // Should complete without problems.
-  RegExpInterruptTest().RunTest();
-
-  local_env->Exit();
-}
-
-
 class ApplyInterruptTest {
  public:
   ApplyInterruptTest() : block_(0) {}
@@ -14330,14 +14334,15 @@ class ApplyInterruptTest {
     gc_success_ = false;
     GCThread gc_thread(this);
     gc_thread.Start();
-    v8::Locker::StartPreemption(1);
+    v8::Isolate* isolate = CcTest::isolate();
+    v8::Locker::StartPreemption(isolate, 1);
 
     LongRunningApply();
     {
-      v8::Unlocker unlock(CcTest::isolate());
+      v8::Unlocker unlock(isolate);
       gc_thread.Join();
     }
-    v8::Locker::StopPreemption();
+    v8::Locker::StopPreemption(isolate);
     CHECK(apply_success_);
     CHECK(gc_success_);
   }
@@ -14607,142 +14612,78 @@ TEST(CompileExternalTwoByteSource) {
 }
 
 
-class RegExpStringModificationTest {
+#ifndef V8_INTERPRETED_REGEXP
+
+struct RegExpInterruptionData {
+  int loop_count;
+  UC16VectorResource* string_resource;
+  v8::Persistent<v8::String> string;
+} regexp_interruption_data;
+
+
+class RegExpInterruptionThread : public i::Thread {
  public:
-  RegExpStringModificationTest()
-      : block_(0),
-        morphs_(0),
-        morphs_during_regexp_(0),
-        ascii_resource_(i::Vector<const char>("aaaaaaaaaaaaaab", 15)),
-        uc16_resource_(i::Vector<const uint16_t>(two_byte_content_, 15)) {}
-  ~RegExpStringModificationTest() {}
-  void RunTest() {
-    i::Factory* factory = CcTest::i_isolate()->factory();
+  explicit RegExpInterruptionThread(v8::Isolate* isolate)
+      : Thread("TimeoutThread"), isolate_(isolate) {}
 
-    regexp_success_ = false;
-    morph_success_ = false;
-
-    // Initialize the contents of two_byte_content_ to be a uc16 representation
-    // of "aaaaaaaaaaaaaab".
-    for (int i = 0; i < 14; i++) {
-      two_byte_content_[i] = 'a';
+  virtual void Run() {
+    for (regexp_interruption_data.loop_count = 0;
+         regexp_interruption_data.loop_count < 7;
+         regexp_interruption_data.loop_count++) {
+      i::OS::Sleep(50);  // Wait a bit before requesting GC.
+      reinterpret_cast<i::Isolate*>(isolate_)->stack_guard()->RequestGC();
     }
-    two_byte_content_[14] = 'b';
-
-    // Create the input string for the regexp - the one we are going to change
-    // properties of.
-    input_ = factory->NewExternalStringFromAscii(&ascii_resource_);
-
-    // Inject the input as a global variable.
-    i::Handle<i::String> input_name =
-        factory->NewStringFromAscii(i::Vector<const char>("input", 5));
-    i::JSReceiver::SetProperty(
-        i::handle(CcTest::i_isolate()->native_context()->global_object()),
-        input_name,
-        input_,
-        NONE,
-        i::kNonStrictMode);
-
-    MorphThread morph_thread(this);
-    morph_thread.Start();
-    v8::Locker::StartPreemption(1);
-    LongRunningRegExp();
-    {
-      v8::Unlocker unlock(CcTest::isolate());
-      morph_thread.Join();
-    }
-    v8::Locker::StopPreemption();
-    CHECK(regexp_success_);
-    CHECK(morph_success_);
+    i::OS::Sleep(50);  // Wait a bit before terminating.
+    v8::V8::TerminateExecution(isolate_);
   }
 
  private:
-  // Number of string modifications required.
-  static const int kRequiredModifications = 5;
-  static const int kMaxModifications = 100;
-
-  class MorphThread : public i::Thread {
-   public:
-    explicit MorphThread(RegExpStringModificationTest* test)
-        : Thread("MorphThread"), test_(test) {}
-    virtual void Run() {
-      test_->MorphString();
-    }
-   private:
-     RegExpStringModificationTest* test_;
-  };
-
-  void MorphString() {
-    block_.Wait();
-    while (morphs_during_regexp_ < kRequiredModifications &&
-           morphs_ < kMaxModifications) {
-      {
-        v8::Locker lock(CcTest::isolate());
-        v8::Isolate::Scope isolate_scope(CcTest::isolate());
-        // Swap string between ascii and two-byte representation.
-        i::String* string = *input_;
-        MorphAString(string, &ascii_resource_, &uc16_resource_);
-        morphs_++;
-      }
-      i::OS::Sleep(1);
-    }
-    morph_success_ = true;
-  }
-
-  void LongRunningRegExp() {
-    block_.Signal();  // Enable morphing thread on next preemption.
-    while (morphs_during_regexp_ < kRequiredModifications &&
-           morphs_ < kMaxModifications) {
-      int morphs_before = morphs_;
-      {
-        v8::HandleScope scope(CcTest::isolate());
-        // Match 15-30 "a"'s against 14 and a "b".
-        const char* c_source =
-            "/a?a?a?a?a?a?a?a?a?a?a?a?a?a?aaaaaaaaaaaaaaaa/"
-            ".exec(input) === null";
-        Local<String> source = String::New(c_source);
-        Local<Script> script = Script::Compile(source);
-        Local<Value> result = script->Run();
-        CHECK(result->IsTrue());
-      }
-      int morphs_after = morphs_;
-      morphs_during_regexp_ += morphs_after - morphs_before;
-    }
-    regexp_success_ = true;
-  }
-
-  i::uc16 two_byte_content_[15];
-  i::Semaphore block_;
-  int morphs_;
-  int morphs_during_regexp_;
-  bool regexp_success_;
-  bool morph_success_;
-  i::Handle<i::String> input_;
-  AsciiVectorResource ascii_resource_;
-  UC16VectorResource uc16_resource_;
+  v8::Isolate* isolate_;
 };
 
 
-// Test that a regular expression execution can be interrupted and
-// the string changed without failing.
-TEST(RegExpStringModification) {
-  v8::Locker lock(CcTest::isolate());
+void RunBeforeGC(v8::GCType type, v8::GCCallbackFlags flags) {
+  if (regexp_interruption_data.loop_count != 2) return;
   v8::HandleScope scope(CcTest::isolate());
-  Local<Context> local_env;
-  {
-    LocalContext env;
-    local_env = env.local();
-  }
-
-  // Local context should still be live.
-  CHECK(!local_env.IsEmpty());
-  local_env->Enter();
-
-  // Should complete without problems.
-  RegExpStringModificationTest().RunTest();
-
-  local_env->Exit();
+  v8::Local<v8::String> string = v8::Local<v8::String>::New(
+      CcTest::isolate(), regexp_interruption_data.string);
+  string->MakeExternal(regexp_interruption_data.string_resource);
 }
+
+
+// Test that RegExp execution can be interrupted.  Specifically, we test
+// * interrupting with GC
+// * turn the subject string from one-byte internal to two-byte external string
+// * force termination
+TEST(RegExpInterruption) {
+  v8::HandleScope scope(CcTest::isolate());
+  LocalContext env;
+
+  RegExpInterruptionThread timeout_thread(CcTest::isolate());
+
+  v8::V8::AddGCPrologueCallback(RunBeforeGC);
+  static const char* ascii_content = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  i::uc16* uc16_content = AsciiToTwoByteString(ascii_content);
+  v8::Local<v8::String> string = v8_str(ascii_content);
+
+  CcTest::global()->Set(v8_str("a"), string);
+  regexp_interruption_data.string.Reset(CcTest::isolate(), string);
+  regexp_interruption_data.string_resource = new UC16VectorResource(
+      i::Vector<const i::uc16>(uc16_content, i::StrLength(ascii_content)));
+
+  v8::TryCatch try_catch;
+  timeout_thread.Start();
+
+  CompileRun("/((a*)*)*b/.exec(a)");
+  CHECK(try_catch.HasTerminated());
+
+  timeout_thread.Join();
+
+  delete regexp_interruption_data.string_resource;
+  regexp_interruption_data.string.Dispose();
+}
+
+#endif  // V8_INTERPRETED_REGEXP
 
 
 // Test that we cannot set a property on the global object if there
@@ -19394,20 +19335,20 @@ THREADED_TEST(Regress93759) {
   CHECK(result1->Equals(simple_object->GetPrototype()));
 
   Local<Value> result2 = CompileRun("Object.getPrototypeOf(protected)");
-  CHECK(result2->Equals(Undefined()));
+  CHECK(result2->Equals(Undefined(isolate)));
 
   Local<Value> result3 = CompileRun("Object.getPrototypeOf(global)");
   CHECK(result3->Equals(global_object->GetPrototype()));
 
   Local<Value> result4 = CompileRun("Object.getPrototypeOf(proxy)");
-  CHECK(result4->Equals(Undefined()));
+  CHECK(result4->Equals(Undefined(isolate)));
 
   Local<Value> result5 = CompileRun("Object.getPrototypeOf(hidden)");
   CHECK(result5->Equals(
       object_with_hidden->GetPrototype()->ToObject()->GetPrototype()));
 
   Local<Value> result6 = CompileRun("Object.getPrototypeOf(phidden)");
-  CHECK(result6->Equals(Undefined()));
+  CHECK(result6->Equals(Undefined(isolate)));
 }
 
 
@@ -19706,16 +19647,12 @@ TEST(StaticGetters) {
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope scope(isolate);
   i::Handle<i::Object> undefined_value = factory->undefined_value();
-  CHECK(*v8::Utils::OpenHandle(*v8::Undefined()) == *undefined_value);
   CHECK(*v8::Utils::OpenHandle(*v8::Undefined(isolate)) == *undefined_value);
   i::Handle<i::Object> null_value = factory->null_value();
-  CHECK(*v8::Utils::OpenHandle(*v8::Null()) == *null_value);
   CHECK(*v8::Utils::OpenHandle(*v8::Null(isolate)) == *null_value);
   i::Handle<i::Object> true_value = factory->true_value();
-  CHECK(*v8::Utils::OpenHandle(*v8::True()) == *true_value);
   CHECK(*v8::Utils::OpenHandle(*v8::True(isolate)) == *true_value);
   i::Handle<i::Object> false_value = factory->false_value();
-  CHECK(*v8::Utils::OpenHandle(*v8::False()) == *false_value);
   CHECK(*v8::Utils::OpenHandle(*v8::False(isolate)) == *false_value);
 }
 
@@ -20158,10 +20095,11 @@ THREADED_TEST(Regress2535) {
 
 THREADED_TEST(Regress2746) {
   LocalContext context;
-  v8::HandleScope scope(context->GetIsolate());
+  v8::Isolate* isolate = context->GetIsolate();
+  v8::HandleScope scope(isolate);
   Local<Object> obj = Object::New();
   Local<String> key = String::New("key");
-  obj->SetHiddenValue(key, v8::Undefined());
+  obj->SetHiddenValue(key, v8::Undefined(isolate));
   Local<Value> value = obj->GetHiddenValue(key);
   CHECK(!value.IsEmpty());
   CHECK(value->IsUndefined());
@@ -20341,7 +20279,8 @@ void FailedAccessCheckThrows(Local<v8::Object> target,
                              Local<v8::Value> data) {
   access_check_fail_thrown = true;
   i::PrintF("Access check failed. Error thrown.\n");
-  v8::ThrowException(v8::Exception::Error(v8_str("cross context")));
+  CcTest::isolate()->ThrowException(
+      v8::Exception::Error(v8_str("cross context")));
 }
 
 
@@ -20584,3 +20523,24 @@ THREADED_TEST(FunctionNew) {
   CHECK_EQ(v8::Integer::New(17, isolate), result2);
 }
 
+
+TEST(EscapeableHandleScope) {
+  HandleScope outer_scope(CcTest::isolate());
+  LocalContext context;
+  const int runs = 10;
+  Local<String> values[runs];
+  for (int i = 0; i < runs; i++) {
+    v8::EscapableHandleScope inner_scope(CcTest::isolate());
+    Local<String> value;
+    if (i != 0) value = v8_str("escape value");
+    values[i] = inner_scope.Escape(value);
+  }
+  for (int i = 0; i < runs; i++) {
+    Local<String> expected;
+    if (i != 0) {
+      CHECK_EQ(v8_str("escape value"), values[i]);
+    } else {
+      CHECK(values[i].IsEmpty());
+    }
+  }
+}

@@ -1,4 +1,4 @@
-// Copyright 2012 the V8 project authors. All rights reserved.
+// Copyright 2013 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,40 +25,29 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --allow-natives-syntax --expose-gc
-// Flags: --concurrent-recompilation --concurrent-recompilation-delay=50
+// Tests time zone names.
 
-if (!%IsConcurrentRecompilationSupported()) {
-  print("Concurrent recompilation is disabled. Skipping this test.");
-  quit();
-}
+// Winter date (PST).
+var winter = new Date(2013, 1, 12, 14, 42, 53, 0);
 
-function f(x) {
-  var xx = x * x;
-  var xxstr = xx.toString();
-  return xxstr.length;
-}
+// Summer date (PDT).
+var summer = new Date(2013, 7, 12, 14, 42, 53, 0);
 
-function g(x) {
-  var xxx = Math.sqrt(x) | 0;
-  var xxxstr = xxx.toString();
-  return xxxstr.length;
-}
+// Common flags for both formatters.
+var flags = {
+  year: 'numeric', month: 'long', day: 'numeric',
+  hour : '2-digit', minute : '2-digit', second : '2-digit',
+  timeZone: 'America/Los_Angeles'
+};
 
-function k(x) {
-  return x * x;
-}
+flags.timeZoneName = "short";
+var dfs = new Intl.DateTimeFormat('en-US', flags);
 
-f(g(1));
-assertUnoptimized(f);
-assertUnoptimized(g);
+assertTrue(dfs.format(winter).indexOf('PST') !== -1);
+assertTrue(dfs.format(summer).indexOf('PDT') !== -1);
 
-%OptimizeFunctionOnNextCall(f, "concurrent");
-%OptimizeFunctionOnNextCall(g, "concurrent");
-f(g(2));  // Trigger optimization.
+flags.timeZoneName = "long";
+var dfl = new Intl.DateTimeFormat('en-US', flags);
 
-assertUnoptimized(f, "no sync");  // Not yet optimized while background thread
-assertUnoptimized(g, "no sync");  // is running.
-
-assertOptimized(f, "sync");  // Optimized once we sync with the
-assertOptimized(g, "sync");  // background thread.
+assertTrue(dfl.format(winter).indexOf('Pacific Standard Time') !== -1);
+assertTrue(dfl.format(summer).indexOf('Pacific Daylight Time') !== -1);

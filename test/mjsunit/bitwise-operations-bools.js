@@ -25,30 +25,70 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --allow-natives-syntax
-// Flags: --concurrent-recompilation --concurrent-recompilation-delay=100
+// Test bitwise operations with booleans.
 
-if (!%IsConcurrentRecompilationSupported()) {
-  print("Concurrent recompilation is disabled. Skipping this test.");
-  quit();
+var t = 1;
+
+function testFalseLeftHandSide() {
+  var b;
+  if (t) b = false;
+  assertEquals(b | 1, 1);
+  assertEquals(b & 1, 0);
+  assertEquals(b ^ 1, 1);
+  assertEquals(b << 1, 0);
+  assertEquals(b >> 1, 0);
+  assertEquals(b >>> 1, 0);
 }
 
-function f1(a, i) {
-  return a[i] + 0.5;
+function testFalseRightHandSide() {
+  if (t) b = false;
+  assertEquals(1 |   b, 1);
+  assertEquals(1 &   b, 0);
+  assertEquals(1 ^   b, 1);
+  assertEquals(1 <<  b, 1);
+  assertEquals(1 >>  b, 1);
+  assertEquals(1 >>> b, 1);
 }
 
-var arr = [0.0,,2.5];
-assertEquals(0.5, f1(arr, 0));
-assertEquals(0.5, f1(arr, 0));
+function testTrueLeftHandSide() {
+  if (t) b = true;
+  assertEquals(b | 1, 1);
+  assertEquals(b & 1, 1);
+  assertEquals(b ^ 1, 0);
+  assertEquals(b << 1, 2);
+  assertEquals(b >> 1, 0);
+  assertEquals(b >>> 1, 0);
+}
 
-// Optimized code of f1 depends on initial object and array maps.
-%OptimizeFunctionOnNextCall(f1, "concurrent");
-// Trigger optimization in the background thread
-assertEquals(0.5, f1(arr, 0));
-Object.prototype[1] = 1.5;  // Invalidate current initial object map.
-assertEquals(2, f1(arr, 1));
-// Not yet optimized while background thread is running.
-assertUnoptimized(f1, "no sync");
-// Sync with background thread to conclude optimization, which bails out
-// due to map dependency.
-assertUnoptimized(f1, "sync");
+function testTrueRightHandSide() {
+  if (t) b = true;
+  assertEquals(1 |   b, 1);
+  assertEquals(1 &   b, 1);
+  assertEquals(1 ^   b, 0);
+  assertEquals(1 <<  b, 2);
+  assertEquals(1 >>  b, 0);
+  assertEquals(1 >>> b, 0);
+}
+
+function testBothSides() {
+  if (t) a = true;
+  if (t) b = false;
+  assertEquals(a |   b, 1);
+  assertEquals(a &   b, 0);
+  assertEquals(a ^   b, 1);
+  assertEquals(a <<  b, 1);
+  assertEquals(a >>  b, 1);
+  assertEquals(a >>> b, 1);
+}
+
+
+testFalseLeftHandSide();
+testFalseRightHandSide();
+testTrueLeftHandSide();
+testTrueRightHandSide();
+testFalseLeftHandSide();
+testFalseRightHandSide();
+testTrueLeftHandSide();
+testTrueRightHandSide();
+testBothSides();
+testBothSides();

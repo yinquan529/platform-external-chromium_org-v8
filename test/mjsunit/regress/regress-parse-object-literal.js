@@ -25,30 +25,5 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --allow-natives-syntax
-// Flags: --concurrent-recompilation --concurrent-recompilation-delay=50
-
-if (!%IsConcurrentRecompilationSupported()) {
-  print("Concurrent recompilation is disabled. Skipping this test.");
-  quit();
-}
-
-function f(foo) { return foo.bar(); }
-
-var o = {};
-o.__proto__ = { __proto__: { bar: function() { return 1; } } };
-
-assertEquals(1, f(o));
-assertEquals(1, f(o));
-
-// Mark for concurrent optimization.
-%OptimizeFunctionOnNextCall(f, "concurrent");
-// Trigger optimization in the background thread.
-assertEquals(1, f(o));
-// While concurrent recompilation is running, optimization not yet done.
-assertUnoptimized(f, "no sync");
-// Change the prototype chain during optimization to trigger map invalidation.
-o.__proto__.__proto__ = { bar: function() { return 2; } };
-// Optimization eventually bails out due to map dependency.
-assertUnoptimized(f, "sync");
-assertEquals(2, f(o));
+// Should throw, not crash.
+assertThrows("var o = { get /*space*/ () {} }");

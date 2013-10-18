@@ -29,7 +29,6 @@
 
 #include <stdlib.h>
 
-#define V8_DISABLE_DEPRECATIONS 1
 #include "v8.h"
 
 #include "api.h"
@@ -43,7 +42,6 @@
 #include "platform/socket.h"
 #include "stub-cache.h"
 #include "utils.h"
-#undef V8_DISABLE_DEPRECATIONS
 
 
 using ::v8::internal::Mutex;
@@ -2400,7 +2398,8 @@ TEST(DebuggerStatementBreakpoint) {
 // the correct results.
 TEST(DebugEvaluate) {
   DebugLocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
   env.ExposeDebug();
 
   // Create a function for checking the evaluation when hitting a break point.
@@ -2413,13 +2412,13 @@ TEST(DebugEvaluate) {
   // Different expected vaules of x and a when in a break point (u = undefined,
   // d = Hello, world!).
   struct EvaluateCheck checks_uu[] = {
-    {"x", v8::Undefined()},
-    {"a", v8::Undefined()},
+    {"x", v8::Undefined(isolate)},
+    {"a", v8::Undefined(isolate)},
     {NULL, v8::Handle<v8::Value>()}
   };
   struct EvaluateCheck checks_hu[] = {
     {"x", v8::String::New("Hello, world!")},
-    {"a", v8::Undefined()},
+    {"a", v8::Undefined(isolate)},
     {NULL, v8::Handle<v8::Value>()}
   };
   struct EvaluateCheck checks_hh[] = {
@@ -2485,7 +2484,7 @@ TEST(DebugEvaluate) {
   // parameter.
   checks = checks_uu;
   v8::Handle<v8::Value> argv_bar_1[2] = {
-    v8::Undefined(),
+    v8::Undefined(isolate),
     v8::Number::New(barbar_break_position)
   };
   bar->Call(env->Global(), 2, argv_bar_1);
@@ -2851,7 +2850,7 @@ TEST(DebugStepKeyedLoadLoop) {
   foo->Call(env->Global(), kArgc, args);
 
   // With stepping all break locations are hit.
-  CHECK_EQ(34, break_point_hit_count);
+  CHECK_EQ(35, break_point_hit_count);
 
   v8::Debug::SetDebugEventListener2(NULL);
   CheckDebuggerUnloaded();
@@ -2898,7 +2897,7 @@ TEST(DebugStepKeyedStoreLoop) {
   foo->Call(env->Global(), kArgc, args);
 
   // With stepping all break locations are hit.
-  CHECK_EQ(33, break_point_hit_count);
+  CHECK_EQ(34, break_point_hit_count);
 
   v8::Debug::SetDebugEventListener2(NULL);
   CheckDebuggerUnloaded();
@@ -2942,7 +2941,7 @@ TEST(DebugStepNamedLoadLoop) {
   foo->Call(env->Global(), 0, NULL);
 
   // With stepping all break locations are hit.
-  CHECK_EQ(54, break_point_hit_count);
+  CHECK_EQ(55, break_point_hit_count);
 
   v8::Debug::SetDebugEventListener2(NULL);
   CheckDebuggerUnloaded();
@@ -2986,7 +2985,7 @@ static void DoDebugStepNamedStoreLoop(int expected) {
 
 // Test of the stepping mechanism for named load in a loop.
 TEST(DebugStepNamedStoreLoop) {
-  DoDebugStepNamedStoreLoop(23);
+  DoDebugStepNamedStoreLoop(24);
 }
 
 
@@ -3105,7 +3104,8 @@ TEST(DebugStepLocals) {
 
 TEST(DebugStepIf) {
   DebugLocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
 
   // Register a debug event listener which steps and counts.
   v8::Debug::SetDebugEventListener2(DebugEventStep);
@@ -3129,14 +3129,14 @@ TEST(DebugStepIf) {
   // Stepping through the true part.
   step_action = StepIn;
   break_point_hit_count = 0;
-  v8::Handle<v8::Value> argv_true[argc] = { v8::True() };
+  v8::Handle<v8::Value> argv_true[argc] = { v8::True(isolate) };
   foo->Call(env->Global(), argc, argv_true);
   CHECK_EQ(4, break_point_hit_count);
 
   // Stepping through the false part.
   step_action = StepIn;
   break_point_hit_count = 0;
-  v8::Handle<v8::Value> argv_false[argc] = { v8::False() };
+  v8::Handle<v8::Value> argv_false[argc] = { v8::False(isolate) };
   foo->Call(env->Global(), argc, argv_false);
   CHECK_EQ(5, break_point_hit_count);
 
@@ -3358,7 +3358,7 @@ TEST(DebugStepForContinue) {
   v8::Handle<v8::Value> argv_10[argc] = { v8::Number::New(10) };
   result = foo->Call(env->Global(), argc, argv_10);
   CHECK_EQ(5, result->Int32Value());
-  CHECK_EQ(51, break_point_hit_count);
+  CHECK_EQ(52, break_point_hit_count);
 
   // Looping 100 times.
   step_action = StepIn;
@@ -3366,7 +3366,7 @@ TEST(DebugStepForContinue) {
   v8::Handle<v8::Value> argv_100[argc] = { v8::Number::New(100) };
   result = foo->Call(env->Global(), argc, argv_100);
   CHECK_EQ(50, result->Int32Value());
-  CHECK_EQ(456, break_point_hit_count);
+  CHECK_EQ(457, break_point_hit_count);
 
   // Get rid of the debug event listener.
   v8::Debug::SetDebugEventListener2(NULL);
@@ -3410,7 +3410,7 @@ TEST(DebugStepForBreak) {
   v8::Handle<v8::Value> argv_10[argc] = { v8::Number::New(10) };
   result = foo->Call(env->Global(), argc, argv_10);
   CHECK_EQ(9, result->Int32Value());
-  CHECK_EQ(54, break_point_hit_count);
+  CHECK_EQ(55, break_point_hit_count);
 
   // Looping 100 times.
   step_action = StepIn;
@@ -3418,7 +3418,7 @@ TEST(DebugStepForBreak) {
   v8::Handle<v8::Value> argv_100[argc] = { v8::Number::New(100) };
   result = foo->Call(env->Global(), argc, argv_100);
   CHECK_EQ(99, result->Int32Value());
-  CHECK_EQ(504, break_point_hit_count);
+  CHECK_EQ(505, break_point_hit_count);
 
   // Get rid of the debug event listener.
   v8::Debug::SetDebugEventListener2(NULL);
@@ -3507,7 +3507,8 @@ TEST(DebugStepWith) {
 
 TEST(DebugConditional) {
   DebugLocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
 
   // Register a debug event listener which steps and counts.
   v8::Debug::SetDebugEventListener2(DebugEventStep);
@@ -3531,7 +3532,7 @@ TEST(DebugConditional) {
   step_action = StepIn;
   break_point_hit_count = 0;
   const int argc = 1;
-  v8::Handle<v8::Value> argv_true[argc] = { v8::True() };
+  v8::Handle<v8::Value> argv_true[argc] = { v8::True(isolate) };
   foo->Call(env->Global(), argc, argv_true);
   CHECK_EQ(5, break_point_hit_count);
 
@@ -3759,7 +3760,8 @@ TEST(DebugStepFunctionApply) {
 // Test that step in works with function.call.
 TEST(DebugStepFunctionCall) {
   DebugLocalContext env;
-  v8::HandleScope scope(env->GetIsolate());
+  v8::Isolate* isolate = env->GetIsolate();
+  v8::HandleScope scope(isolate);
 
   // Create a function for testing stepping.
   v8::Local<v8::Function> foo = CompileFunction(
@@ -3786,7 +3788,7 @@ TEST(DebugStepFunctionCall) {
   // Check stepping where the if condition in bar is true.
   break_point_hit_count = 0;
   const int argc = 1;
-  v8::Handle<v8::Value> argv[argc] = { v8::True() };
+  v8::Handle<v8::Value> argv[argc] = { v8::True(isolate) };
   foo->Call(env->Global(), argc, argv);
   CHECK_EQ(8, break_point_hit_count);
 

@@ -1,4 +1,4 @@
-// Copyright 2010 the V8 project authors. All rights reserved.
+// Copyright 2012 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,15 +25,41 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#include <windows.h>
+// Flags: --allow-natives-syntax
 
-#include "../include/v8-preparser.h"
+// Test CompareIC stubs for normal and strict equality comparison of known
+// objects in slow mode. These objects share the same map even though they
+// might have completely different properties.
 
-extern "C" {
-BOOL WINAPI DllMain(HANDLE hinstDLL,
-                    DWORD dwReason,
-                    LPVOID lpvReserved) {
-  // Do nothing.
-  return TRUE;
+function eq(a, b) {
+  return a == b;
 }
+
+function eq_strict(a, b) {
+  return a === b;
 }
+
+function test(a, b) {
+  // Check CompareIC for equality of known objects.
+  assertTrue(eq(a, a));
+  assertTrue(eq(b, b));
+  assertFalse(eq(a, b));
+  // Check CompareIC for strict equality of known objects.
+  assertTrue(eq_strict(a, a));
+  assertTrue(eq_strict(b, b));
+  assertFalse(eq_strict(a, b));
+}
+
+function O(){};
+O.prototype.t = function() {}
+
+var obj1 = new O;
+var obj2 = new O;
+
+// Test original objects.
+assertTrue(%HaveSameMap(obj1, obj2));
+test(obj1, obj2);
+
+// Test after adding property to first object.
+obj1.x = 1;
+test(obj1, obj2);

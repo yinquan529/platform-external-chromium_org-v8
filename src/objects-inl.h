@@ -133,7 +133,7 @@ PropertyDetails PropertyDetails::AsDeleted() {
 
 
 bool Object::IsFixedArrayBase() {
-  return IsFixedArray() || IsFixedDoubleArray();
+  return IsFixedArray() || IsFixedDoubleArray() || IsConstantPoolArray();
 }
 
 
@@ -571,6 +571,7 @@ TYPE_CHECKER(JSContextExtensionObject, JS_CONTEXT_EXTENSION_OBJECT_TYPE)
 TYPE_CHECKER(Map, MAP_TYPE)
 TYPE_CHECKER(FixedArray, FIXED_ARRAY_TYPE)
 TYPE_CHECKER(FixedDoubleArray, FIXED_DOUBLE_ARRAY_TYPE)
+TYPE_CHECKER(ConstantPoolArray, CONSTANT_POOL_ARRAY_TYPE)
 
 
 bool Object::IsJSWeakCollection() {
@@ -1026,6 +1027,12 @@ MaybeObject* Object::GetProperty(Name* key, PropertyAttributes* attributes) {
 
 #define WRITE_UINT32_FIELD(p, offset, value) \
   (*reinterpret_cast<uint32_t*>(FIELD_ADDR(p, offset)) = value)
+
+#define READ_INT32_FIELD(p, offset) \
+  (*reinterpret_cast<int32_t*>(FIELD_ADDR(p, offset)))
+
+#define WRITE_INT32_FIELD(p, offset, value) \
+  (*reinterpret_cast<int32_t*>(FIELD_ADDR(p, offset)) = value)
 
 #define READ_INT64_FIELD(p, offset) \
   (*reinterpret_cast<int64_t*>(FIELD_ADDR(p, offset)))
@@ -1577,13 +1584,6 @@ Handle<Map> JSObject::FindTransitionToField(Handle<Map> map, Handle<Name> key) {
 }
 
 
-int JSObject::LastAddedFieldIndex() {
-  Map* map = this->map();
-  int last_added = map->LastAdded();
-  return map->instance_descriptors()->GetFieldIndex(last_added);
-}
-
-
 ACCESSORS(Oddball, to_string, String, kToStringOffset)
 ACCESSORS(Oddball, to_number, Object, kToNumberOffset)
 
@@ -1894,7 +1894,8 @@ void Object::VerifyApiCallResultType() {
 
 
 FixedArrayBase* FixedArrayBase::cast(Object* object) {
-  ASSERT(object->IsFixedArray() || object->IsFixedDoubleArray());
+  ASSERT(object->IsFixedArray() || object->IsFixedDoubleArray() ||
+         object->IsConstantPoolArray());
   return reinterpret_cast<FixedArrayBase*>(object);
 }
 
@@ -1990,6 +1991,98 @@ void FixedDoubleArray::set_the_hole(int index) {
 bool FixedDoubleArray::is_the_hole(int index) {
   int offset = kHeaderSize + index * kDoubleSize;
   return is_the_hole_nan(READ_DOUBLE_FIELD(this, offset));
+}
+
+
+SMI_ACCESSORS(ConstantPoolArray, first_ptr_index, kFirstPointerIndexOffset)
+SMI_ACCESSORS(ConstantPoolArray, first_int32_index, kFirstInt32IndexOffset)
+
+
+int ConstantPoolArray::first_int64_index() {
+  return 0;
+}
+
+
+int ConstantPoolArray::count_of_int64_entries() {
+  return first_ptr_index();
+}
+
+
+int ConstantPoolArray::count_of_ptr_entries() {
+  return first_int32_index() - first_ptr_index();
+}
+
+
+int ConstantPoolArray::count_of_int32_entries() {
+  return length() - first_int32_index();
+}
+
+
+void ConstantPoolArray::SetEntryCounts(int number_of_int64_entries,
+                                       int number_of_ptr_entries,
+                                       int number_of_int32_entries) {
+  set_first_ptr_index(number_of_int64_entries);
+  set_first_int32_index(number_of_int64_entries + number_of_ptr_entries);
+  set_length(number_of_int64_entries + number_of_ptr_entries +
+             number_of_int32_entries);
+}
+
+
+int64_t ConstantPoolArray::get_int64_entry(int index) {
+  ASSERT(map() == GetHeap()->constant_pool_array_map());
+  ASSERT(index >= 0 && index < first_ptr_index());
+  return READ_INT64_FIELD(this, OffsetOfElementAt(index));
+}
+
+double ConstantPoolArray::get_int64_entry_as_double(int index) {
+  STATIC_ASSERT(kDoubleSize == kInt64Size);
+  ASSERT(map() == GetHeap()->constant_pool_array_map());
+  ASSERT(index >= 0 && index < first_ptr_index());
+  return READ_DOUBLE_FIELD(this, OffsetOfElementAt(index));
+}
+
+
+Object* ConstantPoolArray::get_ptr_entry(int index) {
+  ASSERT(map() == GetHeap()->constant_pool_array_map());
+  ASSERT(index >= first_ptr_index() && index < first_int32_index());
+  return READ_FIELD(this, OffsetOfElementAt(index));
+}
+
+
+int32_t ConstantPoolArray::get_int32_entry(int index) {
+  ASSERT(map() == GetHeap()->constant_pool_array_map());
+  ASSERT(index >= first_int32_index() && index < length());
+  return READ_INT32_FIELD(this, OffsetOfElementAt(index));
+}
+
+
+void ConstantPoolArray::set(int index, Object* value) {
+  ASSERT(map() == GetHeap()->constant_pool_array_map());
+  ASSERT(index >= first_ptr_index() && index < first_int32_index());
+  WRITE_FIELD(this, OffsetOfElementAt(index), value);
+  WRITE_BARRIER(GetHeap(), this, OffsetOfElementAt(index), value);
+}
+
+
+void ConstantPoolArray::set(int index, int64_t value) {
+  ASSERT(map() == GetHeap()->constant_pool_array_map());
+  ASSERT(index >= first_int64_index() && index < first_ptr_index());
+  WRITE_INT64_FIELD(this, OffsetOfElementAt(index), value);
+}
+
+
+void ConstantPoolArray::set(int index, double value) {
+  STATIC_ASSERT(kDoubleSize == kInt64Size);
+  ASSERT(map() == GetHeap()->constant_pool_array_map());
+  ASSERT(index >= first_int64_index() && index < first_ptr_index());
+  WRITE_DOUBLE_FIELD(this, OffsetOfElementAt(index), value);
+}
+
+
+void ConstantPoolArray::set(int index, int32_t value) {
+  ASSERT(map() == GetHeap()->constant_pool_array_map());
+  ASSERT(index >= this->first_int32_index() && index < length());
+  WRITE_INT32_FIELD(this, OffsetOfElementAt(index), value);
 }
 
 
@@ -2485,6 +2578,7 @@ void SeededNumberDictionary::set_requires_slow_elements() {
 
 CAST_ACCESSOR(FixedArray)
 CAST_ACCESSOR(FixedDoubleArray)
+CAST_ACCESSOR(ConstantPoolArray)
 CAST_ACCESSOR(DescriptorArray)
 CAST_ACCESSOR(DeoptimizationInputData)
 CAST_ACCESSOR(DeoptimizationOutputData)
@@ -3380,6 +3474,12 @@ int HeapObject::SizeFromMap(Map* map) {
     return FixedDoubleArray::SizeFor(
         reinterpret_cast<FixedDoubleArray*>(this)->length());
   }
+  if (instance_type == CONSTANT_POOL_ARRAY_TYPE) {
+    return ConstantPoolArray::SizeFor(
+        reinterpret_cast<ConstantPoolArray*>(this)->count_of_int64_entries(),
+        reinterpret_cast<ConstantPoolArray*>(this)->count_of_ptr_entries(),
+        reinterpret_cast<ConstantPoolArray*>(this)->count_of_int32_entries());
+  }
   ASSERT(instance_type == CODE_TYPE);
   return reinterpret_cast<Code*>(this)->CodeSize();
 }
@@ -3756,7 +3856,8 @@ Code::StubType Code::type() {
 
 
 int Code::arguments_count() {
-  ASSERT(is_call_stub() || is_keyed_call_stub() || kind() == STUB);
+  ASSERT(is_call_stub() || is_keyed_call_stub() ||
+         kind() == STUB || is_handler());
   return ExtractArgumentsCountFromFlags(flags());
 }
 
@@ -3776,6 +3877,7 @@ inline void Code::set_is_crankshafted(bool value) {
 
 int Code::major_key() {
   ASSERT(kind() == STUB ||
+         kind() == HANDLER ||
          kind() == BINARY_OP_IC ||
          kind() == COMPARE_IC ||
          kind() == COMPARE_NIL_IC ||
@@ -3790,6 +3892,7 @@ int Code::major_key() {
 
 void Code::set_major_key(int major) {
   ASSERT(kind() == STUB ||
+         kind() == HANDLER ||
          kind() == BINARY_OP_IC ||
          kind() == COMPARE_IC ||
          kind() == COMPARE_NIL_IC ||
@@ -4022,6 +4125,11 @@ bool Code::is_inline_cache_stub() {
 #undef CASE
     default: return false;
   }
+}
+
+
+bool Code::is_keyed_stub() {
+  return is_keyed_load_stub() || is_keyed_store_stub() || is_keyed_call_stub();
 }
 
 
@@ -5921,6 +6029,7 @@ uint32_t NameDictionaryShape::HashForObject(Name* key, Object* other) {
 
 
 MaybeObject* NameDictionaryShape::AsObject(Heap* heap, Name* key) {
+  ASSERT(key->IsUniqueName());
   return key;
 }
 
@@ -5949,6 +6058,34 @@ uint32_t ObjectHashTableShape<entrysize>::HashForObject(Object* key,
 template <int entrysize>
 MaybeObject* ObjectHashTableShape<entrysize>::AsObject(Heap* heap,
                                                        Object* key) {
+  return key;
+}
+
+
+template <int entrysize>
+bool WeakHashTableShape<entrysize>::IsMatch(Object* key, Object* other) {
+  return key->SameValue(other);
+}
+
+
+template <int entrysize>
+uint32_t WeakHashTableShape<entrysize>::Hash(Object* key) {
+  intptr_t hash = reinterpret_cast<intptr_t>(key);
+  return (uint32_t)(hash & 0xFFFFFFFF);
+}
+
+
+template <int entrysize>
+uint32_t WeakHashTableShape<entrysize>::HashForObject(Object* key,
+                                                      Object* other) {
+  intptr_t hash = reinterpret_cast<intptr_t>(other);
+  return (uint32_t)(hash & 0xFFFFFFFF);
+}
+
+
+template <int entrysize>
+MaybeObject* WeakHashTableShape<entrysize>::AsObject(Heap* heap,
+                                                    Object* key) {
   return key;
 }
 
@@ -6019,6 +6156,12 @@ MaybeObject* FixedArray::Copy() {
 MaybeObject* FixedDoubleArray::Copy() {
   if (length() == 0) return this;
   return GetHeap()->CopyFixedDoubleArray(this);
+}
+
+
+MaybeObject* ConstantPoolArray::Copy() {
+  if (length() == 0) return this;
+  return GetHeap()->CopyConstantPoolArray(this);
 }
 
 

@@ -27,6 +27,7 @@ GYP_COPIED_SOURCE_ORIGIN_DIRS :=
 LOCAL_SRC_FILES := \
 	v8/src/accessors.cc \
 	v8/src/allocation.cc \
+	v8/src/allocation-site-scopes.cc \
 	v8/src/api.cc \
 	v8/src/arguments.cc \
 	v8/src/assembler.cc \
@@ -79,9 +80,9 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-bce.cc \
 	v8/src/hydrogen-bch.cc \
 	v8/src/hydrogen-canonicalize.cc \
+	v8/src/hydrogen-check-elimination.cc \
 	v8/src/hydrogen-dce.cc \
 	v8/src/hydrogen-dehoist.cc \
-	v8/src/hydrogen-deoptimizing-mark.cc \
 	v8/src/hydrogen-environment-liveness.cc \
 	v8/src/hydrogen-escape-analysis.cc \
 	v8/src/hydrogen-instructions.cc \
@@ -91,6 +92,7 @@ LOCAL_SRC_FILES := \
 	v8/src/hydrogen-infer-types.cc \
 	v8/src/hydrogen-load-elimination.cc \
 	v8/src/hydrogen-mark-deoptimize.cc \
+	v8/src/hydrogen-mark-unreachable.cc \
 	v8/src/hydrogen-minus-zero.cc \
 	v8/src/hydrogen-osr.cc \
 	v8/src/hydrogen-range-analysis.cc \
@@ -108,12 +110,12 @@ LOCAL_SRC_FILES := \
 	v8/src/isolate.cc \
 	v8/src/jsregexp.cc \
 	v8/src/lithium-allocator.cc \
+	v8/src/lithium-codegen.cc \
 	v8/src/lithium.cc \
 	v8/src/liveedit.cc \
 	v8/src/log-utils.cc \
 	v8/src/log.cc \
 	v8/src/mark-compact.cc \
-	v8/src/marking-thread.cc \
 	v8/src/messages.cc \
 	v8/src/objects-debug.cc \
 	v8/src/objects-printer.cc \
@@ -190,6 +192,7 @@ LOCAL_SRC_FILES := \
 	v8/src/arm/simulator-arm.cc \
 	v8/src/arm/stub-cache-arm.cc \
 	v8/src/platform-posix.cc \
+	v8/src/defaults.cc \
 	v8/src/platform-linux.cc
 
 
@@ -240,7 +243,6 @@ MY_DEFS_Debug := \
 	'-DUSE_LIBJPEG_TURBO=1' \
 	'-DUSE_PROPRIETARY_CODECS' \
 	'-DENABLE_CONFIGURATION_POLICY' \
-	'-DENABLE_GPU=1' \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DCLD_VERSION=1' \
@@ -263,7 +265,8 @@ MY_DEFS_Debug := \
 	'-DV8_ENABLE_CHECKS' \
 	'-DOBJECT_PRINT' \
 	'-DVERIFY_HEAP' \
-	'-DENABLE_EXTRA_CHECKS'
+	'-DENABLE_EXTRA_CHECKS' \
+	'-DENABLE_HANDLE_ZAPPING'
 
 
 # Include paths placed before CFLAGS/CPPFLAGS
@@ -340,7 +343,6 @@ MY_DEFS_Release := \
 	'-DUSE_LIBJPEG_TURBO=1' \
 	'-DUSE_PROPRIETARY_CODECS' \
 	'-DENABLE_CONFIGURATION_POLICY' \
-	'-DENABLE_GPU=1' \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DCLD_VERSION=1' \

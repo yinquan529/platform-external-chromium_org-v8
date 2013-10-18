@@ -142,8 +142,7 @@ class PlatformFeatureScope BASE_EMBEDDED {
   ~PlatformFeatureScope();
 
  private:
-  uint64_t old_supported_;
-  uint64_t old_found_by_runtime_probing_only_;
+  uint64_t old_cross_compile_;
 };
 
 
@@ -729,6 +728,9 @@ class ExternalReference BASE_EMBEDDED {
 
   static ExternalReference get_make_code_young_function(Isolate* isolate);
 
+  // New heap objects tracking support.
+  static ExternalReference record_object_allocation_function(Isolate* isolate);
+
   // Deoptimization support.
   static ExternalReference new_deoptimizer_function(Isolate* isolate);
   static ExternalReference compute_output_frames_function(Isolate* isolate);
@@ -811,6 +813,7 @@ class ExternalReference BASE_EMBEDDED {
   static ExternalReference address_of_negative_infinity();
   static ExternalReference address_of_canonical_non_hole_nan();
   static ExternalReference address_of_the_hole_nan();
+  static ExternalReference address_of_uint32_bias();
 
   static ExternalReference math_sin_double_function(Isolate* isolate);
   static ExternalReference math_cos_double_function(Isolate* isolate);

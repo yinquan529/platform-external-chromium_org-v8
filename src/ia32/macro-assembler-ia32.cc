@@ -253,8 +253,8 @@ void MacroAssembler::X87TOSToI(Register result_reg,
                                Label::Distance dst) {
   Label done;
   sub(esp, Immediate(kPointerSize));
-  fist_s(MemOperand(esp, 0));
   fld(0);
+  fist_s(MemOperand(esp, 0));
   fild_s(MemOperand(esp, 0));
   pop(result_reg);
   FCmp();
@@ -445,22 +445,33 @@ void MacroAssembler::TaggedToI(Register result_reg,
 }
 
 
-
-static double kUint32Bias =
-    static_cast<double>(static_cast<uint32_t>(0xFFFFFFFF)) + 1;
-
-
 void MacroAssembler::LoadUint32(XMMRegister dst,
                                 Register src,
                                 XMMRegister scratch) {
   Label done;
   cmp(src, Immediate(0));
-  movdbl(scratch,
-         Operand(reinterpret_cast<int32_t>(&kUint32Bias), RelocInfo::NONE32));
+  ExternalReference uint32_bias =
+        ExternalReference::address_of_uint32_bias();
+  movdbl(scratch, Operand::StaticVariable(uint32_bias));
   Cvtsi2sd(dst, src);
   j(not_sign, &done, Label::kNear);
   addsd(dst, scratch);
   bind(&done);
+}
+
+
+void MacroAssembler::LoadUint32NoSSE2(Register src) {
+  Label done;
+  push(src);
+  fild_s(Operand(esp, 0));
+  cmp(src, Immediate(0));
+  j(not_sign, &done, Label::kNear);
+  ExternalReference uint32_bias =
+        ExternalReference::address_of_uint32_bias();
+  fld_d(Operand::StaticVariable(uint32_bias));
+  faddp(1);
+  bind(&done);
+  add(esp, Immediate(kPointerSize));
 }
 
 
@@ -2149,23 +2160,9 @@ void MacroAssembler::IndexFromHash(Register hash, Register index) {
 }
 
 
-void MacroAssembler::CallRuntime(Runtime::FunctionId id, int num_arguments) {
-  CallRuntime(Runtime::FunctionForId(id), num_arguments);
-}
-
-
-void MacroAssembler::CallRuntimeSaveDoubles(Runtime::FunctionId id) {
-  const Runtime::Function* function = Runtime::FunctionForId(id);
-  Set(eax, Immediate(function->nargs));
-  mov(ebx, Immediate(ExternalReference(function, isolate())));
-  CEntryStub ces(1, CpuFeatures::IsSupported(SSE2) ? kSaveFPRegs
-                                                   : kDontSaveFPRegs);
-  CallStub(&ces);
-}
-
-
 void MacroAssembler::CallRuntime(const Runtime::Function* f,
-                                 int num_arguments) {
+                                 int num_arguments,
+                                 SaveFPRegsMode save_doubles) {
   // If the expected number of arguments of the runtime function is
   // constant, we check that the actual number of arguments match the
   // expectation.
@@ -2180,7 +2177,8 @@ void MacroAssembler::CallRuntime(const Runtime::Function* f,
   // smarter.
   Set(eax, Immediate(num_arguments));
   mov(ebx, Immediate(ExternalReference(f, isolate())));
-  CEntryStub ces(1);
+  CEntryStub ces(1, CpuFeatures::IsSupported(SSE2) ? save_doubles
+                                                   : kDontSaveFPRegs);
   CallStub(&ces);
 }
 
@@ -3510,9 +3508,8 @@ void MacroAssembler::CheckEnumCache(Label* call_runtime) {
 
 void MacroAssembler::TestJSArrayForAllocationMemento(
     Register receiver_reg,
-    Register scratch_reg) {
-  Label no_memento_available;
-
+    Register scratch_reg,
+    Label* no_memento_found) {
   ExternalReference new_space_start =
       ExternalReference::new_space_start(isolate());
   ExternalReference new_space_allocation_top =
@@ -3521,12 +3518,11 @@ void MacroAssembler::TestJSArrayForAllocationMemento(
   lea(scratch_reg, Operand(receiver_reg,
       JSArray::kSize + AllocationMemento::kSize - kHeapObjectTag));
   cmp(scratch_reg, Immediate(new_space_start));
-  j(less, &no_memento_available);
+  j(less, no_memento_found);
   cmp(scratch_reg, Operand::StaticVariable(new_space_allocation_top));
-  j(greater, &no_memento_available);
+  j(greater, no_memento_found);
   cmp(MemOperand(scratch_reg, -AllocationMemento::kSize),
       Immediate(isolate()->factory()->allocation_memento_map()));
-  bind(&no_memento_available);
 }
 
 
