@@ -182,6 +182,7 @@ DEFINE_bool(harmony_numeric_literals, false,
             "enable harmony numeric literals (0o77, 0b11)")
 DEFINE_bool(harmony_strings, false, "enable harmony string")
 DEFINE_bool(harmony_arrays, false, "enable harmony arrays")
+DEFINE_bool(harmony_maths, false, "enable harmony math functions")
 DEFINE_bool(harmony, false, "enable all harmony features (except typeof)")
 DEFINE_implication(harmony, harmony_scoping)
 DEFINE_implication(harmony, harmony_modules)
@@ -194,6 +195,7 @@ DEFINE_implication(harmony, harmony_iteration)
 DEFINE_implication(harmony, harmony_numeric_literals)
 DEFINE_implication(harmony, harmony_strings)
 DEFINE_implication(harmony, harmony_arrays)
+DEFINE_implication(harmony, harmony_maths)
 DEFINE_implication(harmony_modules, harmony_scoping)
 DEFINE_implication(harmony_observation, harmony_collections)
 
@@ -313,6 +315,8 @@ DEFINE_bool(inline_construct, true, "inline constructor calls")
 DEFINE_bool(inline_arguments, true, "inline functions with arguments object")
 DEFINE_bool(inline_accessors, true, "inline JavaScript accessors")
 DEFINE_int(loop_weight, 1, "loop weight for representation inference")
+DEFINE_int(escape_analysis_iterations, 1,
+           "maximum number of escape analysis fix-point iterations")
 
 DEFINE_bool(optimize_for_in, true,
             "optimize functions containing for-in loops")
@@ -538,6 +542,12 @@ DEFINE_int(sweeper_threads, 0,
 #ifdef VERIFY_HEAP
 DEFINE_bool(verify_heap, false, "verify heap pointers before and after GC")
 #endif
+
+
+// heap-snapshot-generator.cc
+DEFINE_bool(heap_profiler_trace_objects, false,
+            "Dump heap object allocations/movements/size_updates")
+
 
 // v8.cc
 DEFINE_bool(use_idle_notification, true,
@@ -827,8 +837,19 @@ DEFINE_bool(print_unopt_code, false, "print unoptimized code before "
             "printing optimized code based on it")
 DEFINE_bool(print_code_verbose, false, "print more information for code")
 DEFINE_bool(print_builtin_code, false, "print generated code for builtins")
+DEFINE_bool(emit_opt_code_positions,
+            false, "annotate optimize code with source code positions")
 
 #ifdef ENABLE_DISASSEMBLER
+DEFINE_bool(sodium, false, "print generated code output suitable for use with "
+            "the Sodium code viewer")
+
+DEFINE_implication(sodium, print_code_stubs)
+DEFINE_implication(sodium, print_code)
+DEFINE_implication(sodium, print_opt_code)
+DEFINE_implication(sodium, emit_opt_code_positions)
+DEFINE_implication(sodium, code_comments)
+
 DEFINE_bool(print_all_code, false, "enable all flags related to printing code")
 DEFINE_implication(print_all_code, print_code)
 DEFINE_implication(print_all_code, print_opt_code)

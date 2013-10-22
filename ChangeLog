@@ -1,3 +1,39 @@
+2013-10-22: Version 3.22.18
+
+        Add tool to visualize machine code/lithium.
+
+        Handle misaligned loads and stores in load elimination. Do not track
+        misaligned loads and be conservative about invalidating misaligned
+        stores. (issue 2934)
+
+        Performance and stability improvements on all platforms.
+
+
+2013-10-21: Version 3.22.17
+
+        Harmony: Implement Math.trunc and Math.sign. (issue 2938)
+
+        Performance and stability improvements on all platforms.
+
+
+2013-10-21: Version 3.22.16
+
+        Performance and stability improvements on all platforms.
+
+
+2013-10-18: Version 3.22.15
+
+        Enabled calling the SetReference* & SetObjectGroupId functions with a
+        Persistent<SubclassOfValue>.
+
+        Performance and stability improvements on all platforms.
+
+
+2013-10-17: Version 3.22.14
+
+        Performance and stability improvements on all platforms.
+
+
 2013-10-16: Version 3.22.13
 
         Do not look up ArrayBuffer on global object in typed array constructor.

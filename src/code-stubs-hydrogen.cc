@@ -146,13 +146,9 @@ bool CodeStubGraphBuilderBase::BuildGraph() {
   int param_count = descriptor_->register_param_count_;
   HEnvironment* start_environment = graph()->start_environment();
   HBasicBlock* next_block = CreateBasicBlock(start_environment);
-  current_block()->Goto(next_block);
+  Goto(next_block);
   next_block->SetJoinId(BailoutId::StubEntry());
   set_current_block(next_block);
-
-  HConstant* undefined_constant =
-      Add<HConstant>(isolate()->factory()->undefined_value());
-  graph()->set_undefined_constant(undefined_constant);
 
   for (int i = 0; i < param_count; ++i) {
     HParameter* param =
@@ -162,7 +158,7 @@ bool CodeStubGraphBuilderBase::BuildGraph() {
   }
 
   HInstruction* stack_parameter_count;
-  if (descriptor_->stack_parameter_count_ != NULL) {
+  if (descriptor_->stack_parameter_count_.is_valid()) {
     ASSERT(descriptor_->environment_length() == (param_count + 1));
     stack_parameter_count = New<HParameter>(param_count,
                                             HParameter::REGISTER_PARAMETER,
@@ -207,8 +203,7 @@ bool CodeStubGraphBuilderBase::BuildGraph() {
   if (current_block() != NULL) {
     HReturn* hreturn_instruction = New<HReturn>(return_value,
                                                 stack_pop_count);
-    current_block()->Finish(hreturn_instruction);
-    set_current_block(NULL);
+    FinishCurrentBlock(hreturn_instruction);
   }
   return true;
 }
@@ -298,7 +293,7 @@ static Handle<Code> DoGenerateCode(Isolate* isolate, Stub* stub) {
   // the runtime that is significantly faster than using the standard
   // stub-failure deopt mechanism.
   if (stub->IsUninitialized() && descriptor->has_miss_handler()) {
-    ASSERT(descriptor->stack_parameter_count_ == NULL);
+    ASSERT(!descriptor->stack_parameter_count_.is_valid());
     return stub->GenerateLightweightMissCode(isolate);
   }
   ElapsedTimer timer;
@@ -351,7 +346,7 @@ template <>
 HValue* CodeStubGraphBuilder<NumberToStringStub>::BuildCodeStub() {
   info()->MarkAsSavesCallerDoubles();
   HValue* number = GetParameter(NumberToStringStub::kNumber);
-  return BuildNumberToString(number);
+  return BuildNumberToString(number, handle(Type::Number(), isolate()));
 }
 
 
@@ -845,7 +840,7 @@ HValue* CodeStubGraphBuilder<CompareNilICStub>::BuildCodeInitializedStub() {
   HIfContinuation continuation;
   Handle<Map> sentinel_map(isolate->heap()->meta_map());
   Handle<Type> type = stub->GetType(isolate, sentinel_map);
-  BuildCompareNil(GetParameter(0), type, RelocInfo::kNoPosition, &continuation);
+  BuildCompareNil(GetParameter(0), type, &continuation);
   IfBuilder if_nil(this, &continuation);
   if_nil.Then();
   if (continuation.IsFalseReachable()) {
@@ -881,35 +876,52 @@ HValue* CodeStubGraphBuilder<BinaryOpStub>::BuildCodeInitializedStub() {
   if (stub->operation() == Token::ADD &&
       (left_type->Maybe(Type::String()) || right_type->Maybe(Type::String())) &&
       !left_type->Is(Type::String()) && !right_type->Is(Type::String())) {
-    // For the generic add stub a fast case for String add is performance
+    // For the generic add stub a fast case for string addition is performance
     // critical.
     if (left_type->Maybe(Type::String())) {
-      IfBuilder left_string(this);
-      left_string.If<HIsStringAndBranch>(left);
-      left_string.Then();
-      Push(Add<HStringAdd>(left, right, STRING_ADD_CHECK_RIGHT));
-      left_string.Else();
-      Push(AddInstruction(BuildBinaryOperation(stub->operation(),
-          left, right, left_type, right_type, result_type,
-          stub->fixed_right_arg(), true)));
-      left_string.End();
+      IfBuilder if_leftisstring(this);
+      if_leftisstring.If<HIsStringAndBranch>(left);
+      if_leftisstring.Then();
+      {
+        Push(AddInstruction(BuildBinaryOperation(
+                    stub->operation(), left, right,
+                    handle(Type::String(), isolate()), right_type,
+                    result_type, stub->fixed_right_arg(), true)));
+      }
+      if_leftisstring.Else();
+      {
+        Push(AddInstruction(BuildBinaryOperation(
+                    stub->operation(), left, right,
+                    left_type, right_type, result_type,
+                    stub->fixed_right_arg(), true)));
+      }
+      if_leftisstring.End();
       result = Pop();
     } else {
-      IfBuilder right_string(this);
-      right_string.If<HIsStringAndBranch>(right);
-      right_string.Then();
-      Push(Add<HStringAdd>(left, right, STRING_ADD_CHECK_LEFT));
-      right_string.Else();
-      Push(AddInstruction(BuildBinaryOperation(stub->operation(),
-          left, right, left_type, right_type, result_type,
-          stub->fixed_right_arg(), true)));
-      right_string.End();
+      IfBuilder if_rightisstring(this);
+      if_rightisstring.If<HIsStringAndBranch>(right);
+      if_rightisstring.Then();
+      {
+        Push(AddInstruction(BuildBinaryOperation(
+                    stub->operation(), left, right,
+                    left_type, handle(Type::String(), isolate()),
+                    result_type, stub->fixed_right_arg(), true)));
+      }
+      if_rightisstring.Else();
+      {
+        Push(AddInstruction(BuildBinaryOperation(
+                    stub->operation(), left, right,
+                    left_type, right_type, result_type,
+                    stub->fixed_right_arg(), true)));
+      }
+      if_rightisstring.End();
       result = Pop();
     }
   } else {
-    result = AddInstruction(BuildBinaryOperation(stub->operation(),
-        left, right, left_type, right_type, result_type,
-        stub->fixed_right_arg(), true));
+    result = AddInstruction(BuildBinaryOperation(
+            stub->operation(), left, right,
+            left_type, right_type, result_type,
+            stub->fixed_right_arg(), true));
   }
 
   // If we encounter a generic argument, the number conversion is

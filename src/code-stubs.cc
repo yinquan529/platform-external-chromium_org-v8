@@ -41,7 +41,7 @@ namespace internal {
 
 CodeStubInterfaceDescriptor::CodeStubInterfaceDescriptor()
     : register_param_count_(-1),
-      stack_parameter_count_(NULL),
+      stack_parameter_count_(no_reg),
       hint_stack_parameter_count_(-1),
       function_mode_(NOT_JS_FUNCTION_STUB_MODE),
       register_params_(NULL),
@@ -570,14 +570,8 @@ void BinaryOpStub::UpdateStatus(Handle<Object> left,
 
   State max_input = Max(left_state_, right_state_);
 
-  // TODO(olivf) Instead of doing this normalization we should have a Hydrogen
-  // version of the LookupNumberStringCache to avoid a converting StringAddStub.
-  if (left_state_ == STRING && right_state_ < STRING) {
-    right_state_ = GENERIC;
-  } else if (right_state_ == STRING && left_state_ < STRING) {
-    left_state_ = GENERIC;
-  } else if (!has_int_result() && op_ != Token::SHR &&
-             max_input <= NUMBER && max_input > result_state_) {
+  if (!has_int_result() && op_ != Token::SHR &&
+      max_input <= NUMBER && max_input > result_state_) {
     result_state_ = max_input;
   }
 
@@ -1124,6 +1118,12 @@ void ArrayConstructorStubBase::InstallDescriptors(Isolate* isolate) {
   InstallDescriptor(isolate, &stub2);
   ArrayNArgumentsConstructorStub stub3(GetInitialFastElementsKind());
   InstallDescriptor(isolate, &stub3);
+}
+
+
+void NumberToStringStub::InstallDescriptors(Isolate* isolate) {
+  NumberToStringStub stub;
+  InstallDescriptor(isolate, &stub);
 }
 
 

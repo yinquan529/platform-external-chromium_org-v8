@@ -3526,9 +3526,8 @@ bool v8::Object::HasRealNamedProperty(Handle<String> key) {
   i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
   ON_BAILOUT(isolate, "v8::Object::HasRealNamedProperty()",
              return false);
-  return Utils::OpenHandle(this)->HasRealNamedProperty(
-      isolate,
-      *Utils::OpenHandle(*key));
+  return i::JSObject::HasRealNamedProperty(Utils::OpenHandle(this),
+                                           Utils::OpenHandle(*key));
 }
 
 
@@ -3536,7 +3535,7 @@ bool v8::Object::HasRealIndexedProperty(uint32_t index) {
   i::Isolate* isolate = Utils::OpenHandle(this)->GetIsolate();
   ON_BAILOUT(isolate, "v8::Object::HasRealIndexedProperty()",
              return false);
-  return Utils::OpenHandle(this)->HasRealElementProperty(isolate, index);
+  return i::JSObject::HasRealElementProperty(Utils::OpenHandle(this), index);
 }
 
 
@@ -3546,9 +3545,8 @@ bool v8::Object::HasRealNamedCallbackProperty(Handle<String> key) {
              "v8::Object::HasRealNamedCallbackProperty()",
              return false);
   ENTER_V8(isolate);
-  return Utils::OpenHandle(this)->HasRealNamedCallbackProperty(
-      isolate,
-      *Utils::OpenHandle(*key));
+  return i::JSObject::HasRealNamedCallbackProperty(Utils::OpenHandle(this),
+                                                   Utils::OpenHandle(*key));
 }
 
 
@@ -6350,31 +6348,32 @@ v8::Local<Value> Isolate::ThrowException(v8::Local<v8::Value> value) {
 }
 
 
-void Isolate::SetObjectGroupId(const Persistent<Value>& object,
-                               UniqueId id) {
+void Isolate::SetObjectGroupId(internal::Object** object, UniqueId id) {
   i::Isolate* internal_isolate = reinterpret_cast<i::Isolate*>(this);
   internal_isolate->global_handles()->SetObjectGroupId(
-      Utils::OpenPersistent(object).location(),
+      v8::internal::Handle<v8::internal::Object>(object).location(),
       id);
+  internal_isolate->global_handles()->SetObjectGroupId(object, id);
 }
 
 
-void Isolate::SetReferenceFromGroup(UniqueId id,
-                                    const Persistent<Value>& object) {
+void Isolate::SetReferenceFromGroup(UniqueId id, internal::Object** object) {
   i::Isolate* internal_isolate = reinterpret_cast<i::Isolate*>(this);
   internal_isolate->global_handles()->SetReferenceFromGroup(
       id,
-      Utils::OpenPersistent(object).location());
+      v8::internal::Handle<v8::internal::Object>(object).location());
+  internal_isolate->global_handles()->SetReferenceFromGroup(id, object);
 }
 
 
-void Isolate::SetReference(const Persistent<Object>& parent,
-                           const Persistent<Value>& child) {
+void Isolate::SetReference(internal::Object** parent,
+                           internal::Object** child) {
   i::Isolate* internal_isolate = reinterpret_cast<i::Isolate*>(this);
-  i::Object** parent_location = Utils::OpenPersistent(parent).location();
+  i::Object** parent_location =
+      v8::internal::Handle<v8::internal::Object>(parent).location();
   internal_isolate->global_handles()->SetReference(
       reinterpret_cast<i::HeapObject**>(parent_location),
-      Utils::OpenPersistent(child).location());
+      v8::internal::Handle<v8::internal::Object>(child).location());
 }
 
 
