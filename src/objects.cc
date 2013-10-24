@@ -2434,6 +2434,16 @@ void JSObject::MigrateToMap(Handle<JSObject> object, Handle<Map> new_map) {
 }
 
 
+Handle<TransitionArray> Map::AddTransition(Handle<Map> map,
+                                           Handle<Name> key,
+                                           Handle<Map> target,
+                                           SimpleTransitionFlag flag) {
+  CALL_HEAP_FUNCTION(map->GetIsolate(),
+                     map->AddTransition(*key, *target, flag),
+                     TransitionArray);
+}
+
+
 void JSObject::GeneralizeFieldRepresentation(Handle<JSObject> object,
                                              int modify_index,
                                              Representation new_representation,
@@ -2731,6 +2741,21 @@ Handle<Map> Map::GeneralizeRepresentation(Handle<Map> old_map,
 
   new_map->set_owns_descriptors(true);
   return new_map;
+}
+
+
+// Generalize the representation of all FIELD descriptors.
+Handle<Map> Map::GeneralizeAllFieldRepresentations(
+    Handle<Map> map,
+    Representation new_representation) {
+  Handle<DescriptorArray> descriptors(map->instance_descriptors());
+  for (int i = 0; i < map->NumberOfOwnDescriptors(); i++) {
+    PropertyDetails details = descriptors->GetDetails(i);
+    if (details.type() == FIELD) {
+      map = GeneralizeRepresentation(map, i, new_representation, FORCE_FIELD);
+    }
+  }
+  return map;
 }
 
 
@@ -4448,14 +4473,14 @@ PropertyAttributes JSObject::GetElementAttributeWithoutInterceptor(
 Handle<Map> NormalizedMapCache::Get(Handle<NormalizedMapCache> cache,
                                     Handle<JSObject> obj,
                                     PropertyNormalizationMode mode) {
-  Map* fast = obj->map();
-  int index = fast->Hash() % kEntries;
-  Object* result = cache->get(index);
+  int index = obj->map()->Hash() % kEntries;
+  Handle<Object> result = handle(cache->get(index), cache->GetIsolate());
   if (result->IsMap() &&
-      Map::cast(result)->EquivalentToForNormalization(fast, mode)) {
+      Handle<Map>::cast(result)->EquivalentToForNormalization(obj->map(),
+                                                              mode)) {
 #ifdef VERIFY_HEAP
     if (FLAG_verify_heap) {
-      Map::cast(result)->SharedMapVerify();
+      Handle<Map>::cast(result)->SharedMapVerify();
     }
 #endif
 #ifdef DEBUG
@@ -4463,27 +4488,25 @@ Handle<Map> NormalizedMapCache::Get(Handle<NormalizedMapCache> cache,
       // The cached map should match newly created normalized map bit-by-bit,
       // except for the code cache, which can contain some ics which can be
       // applied to the shared map.
-      Object* fresh;
-      MaybeObject* maybe_fresh =
-          fast->CopyNormalized(mode, SHARED_NORMALIZED_MAP);
-      if (maybe_fresh->ToObject(&fresh)) {
-        ASSERT(memcmp(Map::cast(fresh)->address(),
-                      Map::cast(result)->address(),
-                      Map::kCodeCacheOffset) == 0);
-        STATIC_ASSERT(Map::kDependentCodeOffset ==
-                      Map::kCodeCacheOffset + kPointerSize);
-        int offset = Map::kDependentCodeOffset + kPointerSize;
-        ASSERT(memcmp(Map::cast(fresh)->address() + offset,
-                      Map::cast(result)->address() + offset,
-                      Map::kSize - offset) == 0);
-      }
+      Handle<Map> fresh = Map::CopyNormalized(handle(obj->map()), mode,
+                                              SHARED_NORMALIZED_MAP);
+
+      ASSERT(memcmp(fresh->address(),
+                    Handle<Map>::cast(result)->address(),
+                    Map::kCodeCacheOffset) == 0);
+      STATIC_ASSERT(Map::kDependentCodeOffset ==
+                    Map::kCodeCacheOffset + kPointerSize);
+      int offset = Map::kDependentCodeOffset + kPointerSize;
+      ASSERT(memcmp(fresh->address() + offset,
+                    Handle<Map>::cast(result)->address() + offset,
+                    Map::kSize - offset) == 0);
     }
 #endif
-    return handle(Map::cast(result));
+    return Handle<Map>::cast(result);
   }
 
   Isolate* isolate = cache->GetIsolate();
-  Handle<Map> map = Map::CopyNormalized(handle(fast), mode,
+  Handle<Map> map = Map::CopyNormalized(handle(obj->map()), mode,
                                         SHARED_NORMALIZED_MAP);
   ASSERT(map->is_dictionary_map());
   cache->set(index, *map);
@@ -6624,6 +6647,14 @@ Object* JSObject::SlowReverseLookup(Object* value) {
 }
 
 
+Handle<Map> Map::RawCopy(Handle<Map> map,
+                         int instance_size) {
+  CALL_HEAP_FUNCTION(map->GetIsolate(),
+                     map->RawCopy(instance_size),
+                     Map);
+}
+
+
 MaybeObject* Map::RawCopy(int instance_size) {
   Map* result;
   MaybeObject* maybe_result =
@@ -6648,25 +6679,15 @@ MaybeObject* Map::RawCopy(int instance_size) {
 Handle<Map> Map::CopyNormalized(Handle<Map> map,
                                 PropertyNormalizationMode mode,
                                 NormalizedMapSharingMode sharing) {
-  CALL_HEAP_FUNCTION(map->GetIsolate(),
-                     map->CopyNormalized(mode, sharing),
-                     Map);
-}
-
-
-MaybeObject* Map::CopyNormalized(PropertyNormalizationMode mode,
-                                 NormalizedMapSharingMode sharing) {
-  int new_instance_size = instance_size();
+  int new_instance_size = map->instance_size();
   if (mode == CLEAR_INOBJECT_PROPERTIES) {
-    new_instance_size -= inobject_properties() * kPointerSize;
+    new_instance_size -= map->inobject_properties() * kPointerSize;
   }
 
-  Map* result;
-  MaybeObject* maybe_result = RawCopy(new_instance_size);
-  if (!maybe_result->To(&result)) return maybe_result;
+  Handle<Map> result = Map::RawCopy(map, new_instance_size);
 
   if (mode != CLEAR_INOBJECT_PROPERTIES) {
-    result->set_inobject_properties(inobject_properties());
+    result->set_inobject_properties(map->inobject_properties());
   }
 
   result->set_is_shared(sharing == SHARED_NORMALIZED_MAP);
@@ -6816,31 +6837,21 @@ MaybeObject* Map::CopyReplaceDescriptors(DescriptorArray* descriptors,
 }
 
 
+// Since this method is used to rewrite an existing transition tree, it can
+// always insert transitions without checking.
 Handle<Map> Map::CopyInstallDescriptors(Handle<Map> map,
                                         int new_descriptor,
                                         Handle<DescriptorArray> descriptors) {
-  CALL_HEAP_FUNCTION(map->GetIsolate(),
-                     map->CopyInstallDescriptors(new_descriptor, *descriptors),
-                     Map);
-}
-
-
-// Since this method is used to rewrite an existing transition tree, it can
-// always insert transitions without checking.
-MaybeObject* Map::CopyInstallDescriptors(int new_descriptor,
-                                         DescriptorArray* descriptors) {
   ASSERT(descriptors->IsSortedNoDuplicates());
 
-  Map* result;
-  MaybeObject* maybe_result = CopyDropDescriptors();
-  if (!maybe_result->To(&result)) return maybe_result;
+  Handle<Map> result = Map::CopyDropDescriptors(map);
 
-  result->InitializeDescriptors(descriptors);
+  result->InitializeDescriptors(*descriptors);
   result->SetNumberOfOwnDescriptors(new_descriptor + 1);
 
-  int unused_property_fields = this->unused_property_fields();
+  int unused_property_fields = map->unused_property_fields();
   if (descriptors->GetDetails(new_descriptor).type() == FIELD) {
-    unused_property_fields = this->unused_property_fields() - 1;
+    unused_property_fields = map->unused_property_fields() - 1;
     if (unused_property_fields < 0) {
       unused_property_fields += JSObject::kFieldsAdded;
     }
@@ -6849,14 +6860,12 @@ MaybeObject* Map::CopyInstallDescriptors(int new_descriptor,
   result->set_unused_property_fields(unused_property_fields);
   result->set_owns_descriptors(false);
 
-  Name* name = descriptors->GetKey(new_descriptor);
-  TransitionArray* transitions;
-  MaybeObject* maybe_transitions =
-      AddTransition(name, result, SIMPLE_TRANSITION);
-  if (!maybe_transitions->To(&transitions)) return maybe_transitions;
+  Handle<Name> name = handle(descriptors->GetKey(new_descriptor));
+  Handle<TransitionArray> transitions = Map::AddTransition(map, name, result,
+                                                           SIMPLE_TRANSITION);
 
-  set_transitions(transitions);
-  result->SetBackPointer(this);
+  map->set_transitions(*transitions);
+  result->SetBackPointer(*map);
 
   return result;
 }
@@ -6915,41 +6924,33 @@ MaybeObject* Map::CopyAsElementsKind(ElementsKind kind, TransitionFlag flag) {
 
 
 Handle<Map> Map::CopyForObserved(Handle<Map> map) {
-  CALL_HEAP_FUNCTION(map->GetIsolate(),
-                     map->CopyForObserved(),
-                     Map);
-}
+  ASSERT(!map->is_observed());
 
-
-MaybeObject* Map::CopyForObserved() {
-  ASSERT(!is_observed());
+  Isolate* isolate = map->GetIsolate();
 
   // In case the map owned its own descriptors, share the descriptors and
   // transfer ownership to the new map.
-  Map* new_map;
-  MaybeObject* maybe_new_map;
-  if (owns_descriptors()) {
-    maybe_new_map = CopyDropDescriptors();
+  Handle<Map> new_map;
+  if (map->owns_descriptors()) {
+    new_map = Map::CopyDropDescriptors(map);
   } else {
-    maybe_new_map = Copy();
+    new_map = Map::Copy(map);
   }
-  if (!maybe_new_map->To(&new_map)) return maybe_new_map;
 
-  TransitionArray* transitions;
-  MaybeObject* maybe_transitions = AddTransition(GetHeap()->observed_symbol(),
-                                                 new_map,
-                                                 FULL_TRANSITION);
-  if (!maybe_transitions->To(&transitions)) return maybe_transitions;
-  set_transitions(transitions);
+  Handle<TransitionArray> transitions =
+      Map::AddTransition(map, isolate->factory()->observed_symbol(), new_map,
+                         FULL_TRANSITION);
+
+  map->set_transitions(*transitions);
 
   new_map->set_is_observed(true);
 
-  if (owns_descriptors()) {
-    new_map->InitializeDescriptors(instance_descriptors());
-    set_owns_descriptors(false);
+  if (map->owns_descriptors()) {
+    new_map->InitializeDescriptors(map->instance_descriptors());
+    map->set_owns_descriptors(false);
   }
 
-  new_map->SetBackPointer(this);
+  new_map->SetBackPointer(*map);
   return new_map;
 }
 
@@ -10310,7 +10311,7 @@ void ObjectVisitor::VisitEmbeddedPointer(RelocInfo* rinfo) {
 
 void ObjectVisitor::VisitExternalReference(RelocInfo* rinfo) {
   Address* p = rinfo->target_reference_address();
-  VisitExternalReferences(p, p + 1);
+  VisitExternalReference(p);
 }
 
 
@@ -10367,6 +10368,10 @@ void Code::CopyFrom(const CodeDesc& desc) {
     } else if (RelocInfo::IsRuntimeEntry(mode)) {
       Address p = it.rinfo()->target_runtime_entry(origin);
       it.rinfo()->set_target_runtime_entry(p, SKIP_WRITE_BARRIER);
+    } else if (mode == RelocInfo::CODE_AGE_SEQUENCE) {
+      Handle<Object> p = it.rinfo()->code_age_stub_handle(origin);
+      Code* code = Code::cast(*p);
+      it.rinfo()->set_code_age_stub(code);
     } else {
       it.rinfo()->apply(delta);
     }
@@ -10608,6 +10613,12 @@ void Code::MakeCodeAgeSequenceYoung(byte* sequence, Isolate* isolate) {
 }
 
 
+void Code::MarkCodeAsExecuted(byte* sequence, Isolate* isolate) {
+  PatchPlatformCodeAge(isolate, sequence, kExecutedOnceCodeAge,
+      NO_MARKING_PARITY);
+}
+
+
 void Code::MakeOlder(MarkingParity current_parity) {
   byte* sequence = FindCodeAgeSequence();
   if (sequence != NULL) {
@@ -10625,18 +10636,14 @@ void Code::MakeOlder(MarkingParity current_parity) {
 
 
 bool Code::IsOld() {
-  byte* sequence = FindCodeAgeSequence();
-  if (sequence == NULL) return false;
-  Age age;
-  MarkingParity parity;
-  GetCodeAgeAndParity(sequence, &age, &parity);
-  return age >= kSexagenarianCodeAge;
+  Age age = GetAge();
+  return age >= kIsOldCodeAge;
 }
 
 
 byte* Code::FindCodeAgeSequence() {
   return FLAG_age_code &&
-      prologue_offset() != kPrologueOffsetNotSet &&
+      prologue_offset() != Code::kPrologueOffsetNotSet &&
       (kind() == OPTIMIZED_FUNCTION ||
        (kind() == FUNCTION && !has_debug_break_slots()))
       ? instruction_start() + prologue_offset()
@@ -10644,7 +10651,7 @@ byte* Code::FindCodeAgeSequence() {
 }
 
 
-int Code::GetAge() {
+Code::Age Code::GetAge() {
   byte* sequence = FindCodeAgeSequence();
   if (sequence == NULL) {
     return Code::kNoAge;
@@ -10676,6 +10683,20 @@ void Code::GetCodeAgeAndParity(Code* code, Age* age,
   }
   CODE_AGE_LIST(HANDLE_CODE_AGE)
 #undef HANDLE_CODE_AGE
+  stub = *builtins->MarkCodeAsExecutedOnce();
+  if (code == stub) {
+    // Treat that's never been executed as old immediatly.
+    *age = kIsOldCodeAge;
+    *parity = NO_MARKING_PARITY;
+    return;
+  }
+  stub = *builtins->MarkCodeAsExecutedTwice();
+  if (code == stub) {
+    // Pre-age code that has only been executed once.
+    *age = kPreAgedCodeAge;
+    *parity = NO_MARKING_PARITY;
+    return;
+  }
   UNREACHABLE();
 }
 
@@ -10692,6 +10713,14 @@ Code* Code::GetCodeAgeStub(Isolate* isolate, Age age, MarkingParity parity) {
     }
     CODE_AGE_LIST(HANDLE_CODE_AGE)
 #undef HANDLE_CODE_AGE
+    case kNotExecutedCodeAge: {
+      ASSERT(parity == NO_MARKING_PARITY);
+      return *builtins->MarkCodeAsExecutedOnce();
+    }
+    case kExecutedOnceCodeAge: {
+      ASSERT(parity == NO_MARKING_PARITY);
+      return *builtins->MarkCodeAsExecutedTwice();
+    }
     default:
       UNREACHABLE();
       break;
@@ -16310,8 +16339,8 @@ void PropertyCell::set_type(Type* type, WriteBarrierMode ignored) {
 }
 
 
-Type* PropertyCell::UpdatedType(Handle<PropertyCell> cell,
-                                Handle<Object> value) {
+Handle<Type> PropertyCell::UpdatedType(Handle<PropertyCell> cell,
+                                       Handle<Object> value) {
   Isolate* isolate = cell->GetIsolate();
   Handle<Type> old_type(cell->type(), isolate);
   // TODO(2803): Do not track ConsString as constant because they cannot be
@@ -16321,17 +16350,17 @@ Type* PropertyCell::UpdatedType(Handle<PropertyCell> cell,
                         : Type::Constant(value, isolate), isolate);
 
   if (new_type->Is(old_type)) {
-    return *old_type;
+    return old_type;
   }
 
   cell->dependent_code()->DeoptimizeDependentCodeGroup(
       isolate, DependentCode::kPropertyCellChangedGroup);
 
   if (old_type->Is(Type::None()) || old_type->Is(Type::Undefined())) {
-    return *new_type;
+    return new_type;
   }
 
-  return Type::Any();
+  return handle(Type::Any(), isolate);
 }
 
 
@@ -16339,8 +16368,8 @@ void PropertyCell::SetValueInferType(Handle<PropertyCell> cell,
                                      Handle<Object> value) {
   cell->set_value(*value);
   if (!Type::Any()->Is(cell->type())) {
-    Type* new_type = UpdatedType(cell, value);
-    cell->set_type(new_type);
+    Handle<Type> new_type = UpdatedType(cell, value);
+    cell->set_type(*new_type);
   }
 }
 

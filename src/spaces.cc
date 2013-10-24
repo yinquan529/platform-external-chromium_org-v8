@@ -29,6 +29,7 @@
 
 #include "macro-assembler.h"
 #include "mark-compact.h"
+#include "msan.h"
 #include "platform.h"
 
 namespace v8 {
@@ -717,6 +718,7 @@ MemoryChunk* MemoryAllocator::AllocateChunk(intptr_t reserve_area_size,
                                                 executable,
                                                 owner);
   result->set_reserved_memory(&reservation);
+  MSAN_MEMORY_IS_INITIALIZED(base, chunk_size);
   return result;
 }
 
@@ -1078,10 +1080,8 @@ intptr_t PagedSpace::SizeOfFirstPage() {
         size = AreaSize();
       } else {
 #if V8_TARGET_ARCH_MIPS
-        // On MIPS, code stubs seem to be quite a bit larger.
-        // TODO(olivf/MIPS folks): Can we do anything about this? Does it
-        // indicate the presence of a bug?
-        size = 464 * KB;
+        // TODO(plind): Investigate larger code stubs size on MIPS.
+        size = 480 * KB;
 #else
         size = 416 * KB;
 #endif
