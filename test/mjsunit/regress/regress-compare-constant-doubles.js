@@ -25,46 +25,34 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// The GYP based build ends up defining USING_V8_SHARED when compiling this
-// file.
-#undef USING_V8_SHARED
-#include "../include/v8-defaults.h"
+// Flags: --allow-natives-syntax
 
-#include "platform.h"
-#include "globals.h"
-#include "v8.h"
+var left = 1.5;
+var right;
 
-namespace v8 {
+var keepalive;
 
+function foo() {
+  // Fill XMM registers with cruft.
+  var a1 = Math.sin(1) + 10;
+  var a2 = a1 + 1;
+  var a3 = a2 + 1;
+  var a4 = a3 + 1;
+  var a5 = a4 + 1;
+  var a6 = a5 + 1;
+  keepalive = [a1, a2, a3, a4, a5, a6];
 
-bool ConfigureResourceConstraintsForCurrentPlatform(
-    ResourceConstraints* constraints) {
-  if (constraints == NULL) {
-    return false;
-  }
-
-  int lump_of_memory = (i::kPointerSize / 4) * i::MB;
-
-  // The young_space_size should be a power of 2 and old_generation_size should
-  // be a multiple of Page::kPageSize.
-#if V8_OS_ANDROID
-  constraints->set_max_young_space_size(8 * lump_of_memory);
-  constraints->set_max_old_space_size(256 * lump_of_memory);
-  constraints->set_max_executable_size(192 * lump_of_memory);
-#else
-  constraints->set_max_young_space_size(16 * lump_of_memory);
-  constraints->set_max_old_space_size(700 * lump_of_memory);
-  constraints->set_max_executable_size(256 * lump_of_memory);
-#endif
-  return true;
+  // Actual test.
+  if (left < right) return "ok";
+  return "bad";
 }
 
-
-bool SetDefaultResourceConstraintsForCurrentPlatform() {
-  ResourceConstraints constraints;
-  if (!ConfigureResourceConstraintsForCurrentPlatform(&constraints))
-    return false;
-  return SetResourceConstraints(&constraints);
+function prepare(base) {
+  right = 0.5 * base;
 }
 
-}  // namespace v8
+prepare(21);
+assertEquals("ok", foo());
+assertEquals("ok", foo());
+%OptimizeFunctionOnNextCall(foo);
+assertEquals("ok", foo());
