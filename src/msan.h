@@ -25,46 +25,25 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// The GYP based build ends up defining USING_V8_SHARED when compiling this
-// file.
-#undef USING_V8_SHARED
-#include "../include/v8-defaults.h"
+// MemorySanitizer support.
 
-#include "platform.h"
-#include "globals.h"
-#include "v8.h"
+#ifndef V8_MSAN_H_
+#define V8_MSAN_H_
 
-namespace v8 {
-
-
-bool ConfigureResourceConstraintsForCurrentPlatform(
-    ResourceConstraints* constraints) {
-  if (constraints == NULL) {
-    return false;
-  }
-
-  int lump_of_memory = (i::kPointerSize / 4) * i::MB;
-
-  // The young_space_size should be a power of 2 and old_generation_size should
-  // be a multiple of Page::kPageSize.
-#if V8_OS_ANDROID
-  constraints->set_max_young_space_size(8 * lump_of_memory);
-  constraints->set_max_old_space_size(256 * lump_of_memory);
-  constraints->set_max_executable_size(192 * lump_of_memory);
-#else
-  constraints->set_max_young_space_size(16 * lump_of_memory);
-  constraints->set_max_old_space_size(700 * lump_of_memory);
-  constraints->set_max_executable_size(256 * lump_of_memory);
+#ifndef __has_feature
+# define __has_feature(x) 0
 #endif
-  return true;
-}
 
+#if __has_feature(memory_sanitizer) && !defined(MEMORY_SANITIZER)
+# define MEMORY_SANITIZER
+#endif
 
-bool SetDefaultResourceConstraintsForCurrentPlatform() {
-  ResourceConstraints constraints;
-  if (!ConfigureResourceConstraintsForCurrentPlatform(&constraints))
-    return false;
-  return SetResourceConstraints(&constraints);
-}
+#ifdef MEMORY_SANITIZER
+# include <sanitizer/msan_interface.h>
+// Marks a memory range as fully initialized.
+# define MSAN_MEMORY_IS_INITIALIZED(p, s) __msan_unpoison((p), (s))
+#else
+# define MSAN_MEMORY_IS_INITIALIZED(p, s)
+#endif
 
-}  // namespace v8
+#endif  // V8_MSAN_H_

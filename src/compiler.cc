@@ -112,7 +112,7 @@ void CompilationInfo::Initialize(Isolate* isolate,
   zone_ = zone;
   deferred_handles_ = NULL;
   code_stub_ = NULL;
-  prologue_offset_ = kPrologueOffsetNotSet;
+  prologue_offset_ = Code::kPrologueOffsetNotSet;
   opt_count_ = shared_info().is_null() ? 0 : shared_info()->opt_count();
   no_frame_ranges_ = isolate->cpu_profiler()->is_profiling()
                    ? new List<OffsetRange>(2) : NULL;
@@ -123,7 +123,7 @@ void CompilationInfo::Initialize(Isolate* isolate,
     mode_ = STUB;
     return;
   }
-  mode_ = isolate->use_crankshaft() ? mode : NONOPT;
+  mode_ = mode;
   abort_due_to_dependency_ = false;
   if (script_->type()->value() == Script::TYPE_NATIVE) {
     MarkAsNative();
@@ -665,66 +665,70 @@ static Handle<SharedFunctionInfo> MakeFunctionInfo(CompilationInfo* info) {
     }
   }
 
-  // Measure how long it takes to do the compilation; only take the
-  // rest of the function into account to avoid overlap with the
-  // parsing statistics.
-  HistogramTimer* rate = info->is_eval()
-      ? info->isolate()->counters()->compile_eval()
-      : info->isolate()->counters()->compile();
-  HistogramTimerScope timer(rate);
-
-  // Compile the code.
   FunctionLiteral* lit = info->function();
   LiveEditFunctionTracker live_edit_tracker(isolate, lit);
-  if (!MakeCode(info)) {
-    if (!isolate->has_pending_exception()) isolate->StackOverflow();
-    return Handle<SharedFunctionInfo>::null();
+  Handle<SharedFunctionInfo> result;
+  {
+    // Measure how long it takes to do the compilation; only take the
+    // rest of the function into account to avoid overlap with the
+    // parsing statistics.
+    HistogramTimer* rate = info->is_eval()
+          ? info->isolate()->counters()->compile_eval()
+          : info->isolate()->counters()->compile();
+    HistogramTimerScope timer(rate);
+
+    // Compile the code.
+    if (!MakeCode(info)) {
+      if (!isolate->has_pending_exception()) isolate->StackOverflow();
+      return Handle<SharedFunctionInfo>::null();
+    }
+
+    // Allocate function.
+    ASSERT(!info->code().is_null());
+    result =
+        isolate->factory()->NewSharedFunctionInfo(
+            lit->name(),
+            lit->materialized_literal_count(),
+            lit->is_generator(),
+            info->code(),
+            ScopeInfo::Create(info->scope(), info->zone()));
+
+    ASSERT_EQ(RelocInfo::kNoPosition, lit->function_token_position());
+    Compiler::SetFunctionInfo(result, lit, true, script);
+
+    if (script->name()->IsString()) {
+      PROFILE(isolate, CodeCreateEvent(
+          info->is_eval()
+          ? Logger::EVAL_TAG
+              : Logger::ToNativeByScript(Logger::SCRIPT_TAG, *script),
+                *info->code(),
+                *result,
+                info,
+                String::cast(script->name())));
+      GDBJIT(AddCode(Handle<String>(String::cast(script->name())),
+                     script,
+                     info->code(),
+                     info));
+    } else {
+      PROFILE(isolate, CodeCreateEvent(
+          info->is_eval()
+          ? Logger::EVAL_TAG
+              : Logger::ToNativeByScript(Logger::SCRIPT_TAG, *script),
+                *info->code(),
+                *result,
+                info,
+                isolate->heap()->empty_string()));
+      GDBJIT(AddCode(Handle<String>(), script, info->code(), info));
+    }
+
+    // Hint to the runtime system used when allocating space for initial
+    // property space by setting the expected number of properties for
+    // the instances of the function.
+    SetExpectedNofPropertiesFromEstimate(result,
+                                         lit->expected_property_count());
+
+    script->set_compilation_state(Script::COMPILATION_STATE_COMPILED);
   }
-
-  // Allocate function.
-  ASSERT(!info->code().is_null());
-  Handle<SharedFunctionInfo> result =
-      isolate->factory()->NewSharedFunctionInfo(
-          lit->name(),
-          lit->materialized_literal_count(),
-          lit->is_generator(),
-          info->code(),
-          ScopeInfo::Create(info->scope(), info->zone()));
-
-  ASSERT_EQ(RelocInfo::kNoPosition, lit->function_token_position());
-  Compiler::SetFunctionInfo(result, lit, true, script);
-
-  if (script->name()->IsString()) {
-    PROFILE(isolate, CodeCreateEvent(
-        info->is_eval()
-            ? Logger::EVAL_TAG
-            : Logger::ToNativeByScript(Logger::SCRIPT_TAG, *script),
-        *info->code(),
-        *result,
-        info,
-        String::cast(script->name())));
-    GDBJIT(AddCode(Handle<String>(String::cast(script->name())),
-                   script,
-                   info->code(),
-                   info));
-  } else {
-    PROFILE(isolate, CodeCreateEvent(
-        info->is_eval()
-            ? Logger::EVAL_TAG
-            : Logger::ToNativeByScript(Logger::SCRIPT_TAG, *script),
-        *info->code(),
-        *result,
-        info,
-        isolate->heap()->empty_string()));
-    GDBJIT(AddCode(Handle<String>(), script, info->code(), info));
-  }
-
-  // Hint to the runtime system used when allocating space for initial
-  // property space by setting the expected number of properties for
-  // the instances of the function.
-  SetExpectedNofPropertiesFromEstimate(result, lit->expected_property_count());
-
-  script->set_compilation_state(Script::COMPILATION_STATE_COMPILED);
 
 #ifdef ENABLE_DEBUGGER_SUPPORT
   // Notify debugger

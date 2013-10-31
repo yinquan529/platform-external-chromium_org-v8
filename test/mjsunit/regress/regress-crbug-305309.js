@@ -25,46 +25,25 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// The GYP based build ends up defining USING_V8_SHARED when compiling this
-// file.
-#undef USING_V8_SHARED
-#include "../include/v8-defaults.h"
+// Flags: --allow-natives-syntax
 
-#include "platform.h"
-#include "globals.h"
-#include "v8.h"
-
-namespace v8 {
-
-
-bool ConfigureResourceConstraintsForCurrentPlatform(
-    ResourceConstraints* constraints) {
-  if (constraints == NULL) {
-    return false;
-  }
-
-  int lump_of_memory = (i::kPointerSize / 4) * i::MB;
-
-  // The young_space_size should be a power of 2 and old_generation_size should
-  // be a multiple of Page::kPageSize.
-#if V8_OS_ANDROID
-  constraints->set_max_young_space_size(8 * lump_of_memory);
-  constraints->set_max_old_space_size(256 * lump_of_memory);
-  constraints->set_max_executable_size(192 * lump_of_memory);
-#else
-  constraints->set_max_young_space_size(16 * lump_of_memory);
-  constraints->set_max_old_space_size(700 * lump_of_memory);
-  constraints->set_max_executable_size(256 * lump_of_memory);
-#endif
-  return true;
+function BadProto() {
+  this.constant_function = function() {};
+  this.one = 1;
+  this.two = 2;
 }
+var b1 = new BadProto();
+var b2 = new BadProto();
 
+function Ctor() {}
+Ctor.prototype = b1;
+var a = new Ctor();
 
-bool SetDefaultResourceConstraintsForCurrentPlatform() {
-  ResourceConstraints constraints;
-  if (!ConfigureResourceConstraintsForCurrentPlatform(&constraints))
-    return false;
-  return SetResourceConstraints(&constraints);
+function Two(x) {
+  return x.two;
 }
-
-}  // namespace v8
+assertEquals(2, Two(a));
+assertEquals(2, Two(a));
+b2.constant_function = "no longer constant!";
+%OptimizeFunctionOnNextCall(Two);
+assertEquals(2, Two(a));

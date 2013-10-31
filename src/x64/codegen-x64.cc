@@ -466,7 +466,7 @@ void ElementsTransitionGenerator::GenerateDoubleToObject(
   // Non-hole double, copy value into a heap number.
   __ AllocateHeapNumber(rax, r15, &gc_required);
   // rax: new heap number
-  __ movq(FieldOperand(rax, HeapNumber::kValueOffset), r14);
+  __ MoveDouble(FieldOperand(rax, HeapNumber::kValueOffset), r14);
   __ movq(FieldOperand(r11,
                        r9,
                        times_pointer_size,
@@ -675,8 +675,6 @@ void MathExpGenerator::EmitMathExp(MacroAssembler* masm,
 #undef __
 
 
-static const int kNoCodeAgeSequenceLength = 6;
-
 static byte* GetNoCodeAgeSequence(uint32_t* length) {
   static bool initialized = false;
   static byte sequence[kNoCodeAgeSequenceLength];
@@ -708,7 +706,7 @@ bool Code::IsYoungSequence(byte* sequence) {
 void Code::GetCodeAgeAndParity(byte* sequence, Age* age,
                                MarkingParity* parity) {
   if (IsYoungSequence(sequence)) {
-    *age = kNoAge;
+    *age = kNoAgeCodeAge;
     *parity = NO_MARKING_PARITY;
   } else {
     sequence++;  // Skip the kCallOpcode byte
@@ -726,18 +724,15 @@ void Code::PatchPlatformCodeAge(Isolate* isolate,
                                 MarkingParity parity) {
   uint32_t young_length;
   byte* young_sequence = GetNoCodeAgeSequence(&young_length);
-  if (age == kNoAge) {
+  if (age == kNoAgeCodeAge) {
     CopyBytes(sequence, young_sequence, young_length);
     CPU::FlushICache(sequence, young_length);
   } else {
     Code* stub = GetCodeAgeStub(isolate, age, parity);
     CodePatcher patcher(sequence, young_length);
     patcher.masm()->call(stub->instruction_start());
-    for (int i = 0;
-         i < kNoCodeAgeSequenceLength - Assembler::kShortCallInstructionLength;
-         i++) {
-      patcher.masm()->nop();
-    }
+    patcher.masm()->Nop(
+        kNoCodeAgeSequenceLength - Assembler::kShortCallInstructionLength);
   }
 }
 

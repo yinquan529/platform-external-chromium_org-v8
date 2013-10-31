@@ -1,4 +1,4 @@
-// Copyright 2011 the V8 project authors. All rights reserved.
+// Copyright 2013 the V8 project authors. All rights reserved.
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are
 // met:
@@ -25,17 +25,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Test that the expected string is parsed in the json parser when the length
-// is so big that the string can't fit in new space, and it includes special
-// characters.
+var a = [];
+Object.defineProperty(a, 0, {});
+assertThrows(function() { a.pop(); });
 
-var json = '{"key":"';
-var key = '';
-var expected = '';
-for(var i = 0; i < 60000; i++) {
-  key = key + "TESTING" + i + "\\n";
-  expected = expected + "TESTING" + i + "\n";
-}
-json = json + key  + '"}';
-var out = JSON.parse(json);
-assertEquals(expected, out.key);

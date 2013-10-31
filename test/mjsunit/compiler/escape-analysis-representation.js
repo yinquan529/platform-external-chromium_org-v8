@@ -25,46 +25,49 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// The GYP based build ends up defining USING_V8_SHARED when compiling this
-// file.
-#undef USING_V8_SHARED
-#include "../include/v8-defaults.h"
+// Flags: --allow-natives-syntax --use-escape-analysis --max-opt-count=100
 
-#include "platform.h"
-#include "globals.h"
-#include "v8.h"
+// This tests that captured objects materialized through the deoptimizer
+// have field descriptors with a representation matching the values that
+// have actually been stored in the object.
 
-namespace v8 {
+var values = [ function() { return {}; },
+               function() { return 23; },
+               function() { return 4.2; } ];
 
+function constructor(value_track) {
+  this.x = value_track();
+}
 
-bool ConfigureResourceConstraintsForCurrentPlatform(
-    ResourceConstraints* constraints) {
-  if (constraints == NULL) {
-    return false;
+function access(value_track, value_break, deopt) {
+  var o = new constructor(value_track);
+  o.x = value_break;
+  deopt.deopt
+  assertEquals(value_break, o.x);
+}
+
+function test(value_track, value_break) {
+  var deopt = { deopt:false };
+
+  // Warm-up field tracking to a certain representation.
+  access(value_track, value_track(), deopt);
+  access(value_track, value_track(), deopt);
+  %OptimizeFunctionOnNextCall(access);
+  access(value_track, value_track(), deopt);
+
+  // Deoptimize on a run with a different representation.
+  delete deopt.deopt;
+  access(value_track, value_break(), deopt);
+
+  // Clear type feedback of the access function for next run.
+  %ClearFunctionTypeFeedback(access);
+
+  // Also make sure the initial map of the constructor is reset.
+  constructor.prototype = {};
+}
+
+for (var i = 0; i < values.length; i++) {
+  for (var j = 0; j < values.length; j++) {
+    test(values[i], values[j])
   }
-
-  int lump_of_memory = (i::kPointerSize / 4) * i::MB;
-
-  // The young_space_size should be a power of 2 and old_generation_size should
-  // be a multiple of Page::kPageSize.
-#if V8_OS_ANDROID
-  constraints->set_max_young_space_size(8 * lump_of_memory);
-  constraints->set_max_old_space_size(256 * lump_of_memory);
-  constraints->set_max_executable_size(192 * lump_of_memory);
-#else
-  constraints->set_max_young_space_size(16 * lump_of_memory);
-  constraints->set_max_old_space_size(700 * lump_of_memory);
-  constraints->set_max_executable_size(256 * lump_of_memory);
-#endif
-  return true;
 }
-
-
-bool SetDefaultResourceConstraintsForCurrentPlatform() {
-  ResourceConstraints constraints;
-  if (!ConfigureResourceConstraintsForCurrentPlatform(&constraints))
-    return false;
-  return SetResourceConstraints(&constraints);
-}
-
-}  // namespace v8

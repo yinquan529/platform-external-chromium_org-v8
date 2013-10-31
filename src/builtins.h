@@ -50,6 +50,10 @@ enum BuiltinExtraArguments {
 #define CODE_AGE_LIST(V) \
   CODE_AGE_LIST_WITH_ARG(CODE_AGE_LIST_IGNORE_ARG, V)
 
+#define CODE_AGE_LIST_WITH_NO_AGE(V)               \
+  V(NoAge)                                         \
+  CODE_AGE_LIST_WITH_ARG(CODE_AGE_LIST_IGNORE_ARG, V)
+
 #define DECLARE_CODE_AGE_BUILTIN(C, V)             \
   V(Make##C##CodeYoungAgainOddMarking, BUILTIN,    \
     UNINITIALIZED, Code::kNoExtraICState)          \
@@ -203,6 +207,11 @@ enum BuiltinExtraArguments {
   V(OsrAfterStackCheck,             BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
   V(StackCheck,                     BUILTIN, UNINITIALIZED,             \
+                                    Code::kNoExtraICState)              \
+                                                                        \
+  V(MarkCodeAsExecutedOnce,         BUILTIN, UNINITIALIZED,             \
+                                    Code::kNoExtraICState)              \
+  V(MarkCodeAsExecutedTwice,        BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
   CODE_AGE_LIST_WITH_ARG(DECLARE_CODE_AGE_BUILTIN, V)
 
@@ -412,6 +421,9 @@ class Builtins {
       MacroAssembler* masm);
   CODE_AGE_LIST(DECLARE_CODE_AGE_BUILTIN_GENERATOR)
 #undef DECLARE_CODE_AGE_BUILTIN_GENERATOR
+
+  static void Generate_MarkCodeAsExecutedOnce(MacroAssembler* masm);
+  static void Generate_MarkCodeAsExecutedTwice(MacroAssembler* masm);
 
   static void InitBuiltinFunctionTable();
 

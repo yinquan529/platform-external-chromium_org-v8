@@ -121,33 +121,16 @@ bool LCodeGen::GeneratePrologue() {
     // receiver object). r5 is zero for method calls and non-zero for
     // function calls.
     if (!info_->is_classic_mode() || info_->is_native()) {
-      Label ok;
       __ cmp(r5, Operand::Zero());
-      __ b(eq, &ok);
       int receiver_offset = scope()->num_parameters() * kPointerSize;
       __ LoadRoot(r2, Heap::kUndefinedValueRootIndex);
-      __ str(r2, MemOperand(sp, receiver_offset));
-      __ bind(&ok);
+      __ str(r2, MemOperand(sp, receiver_offset), ne);
     }
   }
 
   info()->set_prologue_offset(masm_->pc_offset());
   if (NeedsEagerFrame()) {
-    if (info()->IsStub()) {
-      __ stm(db_w, sp, cp.bit() | fp.bit() | lr.bit());
-      __ Push(Smi::FromInt(StackFrame::STUB));
-      // Adjust FP to point to saved FP.
-      __ add(fp, sp, Operand(2 * kPointerSize));
-    } else {
-      PredictableCodeSizeScope predictible_code_size_scope(
-          masm_, kNoCodeAgeSequenceLength * Assembler::kInstrSize);
-      // The following three instructions must remain together and unmodified
-      // for code aging to work properly.
-      __ stm(db_w, sp, r1.bit() | cp.bit() | fp.bit() | lr.bit());
-      __ nop(ip.code());
-      // Adjust FP to point to saved FP.
-      __ add(fp, sp, Operand(2 * kPointerSize));
-    }
+    __ Prologue(info()->IsStub() ? BUILD_STUB_FRAME : BUILD_FUNCTION_FRAME);
     frame_is_built_ = true;
     info_->AddNoFrameRange(0, masm_->pc_offset());
   }
@@ -402,7 +385,7 @@ Register LCodeGen::EmitLoadRegister(LOperand* op, Register scratch) {
       Abort(kEmitLoadRegisterUnsupportedDoubleImmediate);
     } else {
       ASSERT(r.IsSmiOrTagged());
-      __ LoadObject(scratch, literal);
+      __ Move(scratch, literal);
     }
     return scratch;
   } else if (op->IsStackSlot() || op->IsArgument()) {
@@ -718,7 +701,7 @@ void LCodeGen::LoadContextFromDeferred(LOperand* context) {
   } else if (context->IsConstantOperand()) {
     HConstant* constant =
         chunk_->LookupConstant(LConstantOperand::cast(context));
-    __ LoadObject(cp, Handle<Object>::cast(constant->handle(isolate())));
+    __ Move(cp, Handle<Object>::cast(constant->handle(isolate())));
   } else {
     UNREACHABLE();
   }
@@ -1854,7 +1837,7 @@ void LCodeGen::DoConstantE(LConstantE* instr) {
 void LCodeGen::DoConstantT(LConstantT* instr) {
   Handle<Object> value = instr->value(isolate());
   AllowDeferredHandleDereference smi_check;
-  __ LoadObject(ToRegister(instr->result()), value);
+  __ Move(ToRegister(instr->result()), value);
 }
 
 
@@ -2811,7 +2794,7 @@ void LCodeGen::DoDeferredInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr,
   // offset to the location of the map check.
   Register temp = ToRegister(instr->temp());
   ASSERT(temp.is(r4));
-  __ LoadHeapObject(InstanceofStub::right(), instr->function());
+  __ Move(InstanceofStub::right(), instr->function());
   static const int kAdditionalDelta = 5;
   // Make sure that code size is predicable, since we use specific constants
   // offsets in the code to find embedded values..
@@ -3551,7 +3534,7 @@ void LCodeGen::DoOuterContext(LOuterContext* instr) {
 void LCodeGen::DoDeclareGlobals(LDeclareGlobals* instr) {
   ASSERT(ToRegister(instr->context()).is(cp));
   __ push(cp);  // The context is the first argument.
-  __ LoadHeapObject(scratch0(), instr->hydrogen()->pairs());
+  __ Move(scratch0(), instr->hydrogen()->pairs());
   __ push(scratch0());
   __ mov(scratch0(), Operand(Smi::FromInt(instr->hydrogen()->flags())));
   __ push(scratch0());
@@ -3588,7 +3571,7 @@ void LCodeGen::CallKnownFunction(Handle<JSFunction> function,
 
   if (can_invoke_directly) {
     if (r1_state == R1_UNINITIALIZED) {
-      __ LoadHeapObject(r1, function);
+      __ Move(r1, function);
     }
 
     // Change context.
@@ -5435,7 +5418,7 @@ void LCodeGen::DoRegExpLiteral(LRegExpLiteral* instr) {
   // r2-5 are used as temporaries.
   int literal_offset =
       FixedArray::OffsetOfElementAt(instr->hydrogen()->literal_index());
-  __ LoadHeapObject(r6, instr->hydrogen()->literals());
+  __ Move(r6, instr->hydrogen()->literals());
   __ ldr(r1, FieldMemOperand(r6, literal_offset));
   __ LoadRoot(ip, Heap::kUndefinedValueRootIndex);
   __ cmp(r1, ip);

@@ -139,6 +139,7 @@ Assignment::Assignment(Isolate* isolate,
       assignment_id_(GetNextId(isolate)),
       is_monomorphic_(false),
       is_uninitialized_(false),
+      is_pre_monomorphic_(false),
       store_mode_(STANDARD_STORE) { }
 
 
@@ -426,7 +427,9 @@ void Property::RecordTypeFeedback(TypeFeedbackOracle* oracle,
   is_uninitialized_ = oracle->LoadIsUninitialized(this);
   if (is_uninitialized_) return;
 
+  is_pre_monomorphic_ = oracle->LoadIsPreMonomorphic(this);
   is_monomorphic_ = oracle->LoadIsMonomorphicNormal(this);
+  ASSERT(!is_pre_monomorphic_ || !is_monomorphic_);
   receiver_types_.Clear();
   if (key()->IsPropertyName()) {
     FunctionPrototypeStub proto_stub(Code::LOAD_IC);
@@ -456,7 +459,10 @@ void Assignment::RecordTypeFeedback(TypeFeedbackOracle* oracle,
   TypeFeedbackId id = AssignmentFeedbackId();
   is_uninitialized_ = oracle->StoreIsUninitialized(id);
   if (is_uninitialized_) return;
+
+  is_pre_monomorphic_ = oracle->StoreIsPreMonomorphic(id);
   is_monomorphic_ = oracle->StoreIsMonomorphicNormal(id);
+  ASSERT(!is_pre_monomorphic_ || !is_monomorphic_);
   receiver_types_.Clear();
   if (prop->key()->IsPropertyName()) {
     Literal* lit_key = prop->key()->AsLiteral();
@@ -621,7 +627,7 @@ void Call::RecordTypeFeedback(TypeFeedbackOracle* oracle,
       holder_ = GetPrototypeForPrimitiveCheck(check_type_, oracle->isolate());
       receiver_types_.Add(handle(holder_->map()), oracle->zone());
     }
-#ifdef DEBUG
+#ifdef ENABLE_SLOW_ASSERTS
     if (FLAG_enable_slow_asserts) {
       int length = receiver_types_.length();
       for (int i = 0; i < length; i++) {

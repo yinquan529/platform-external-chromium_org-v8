@@ -561,29 +561,34 @@ LOperand* LChunkBuilder::UseAtStart(HValue* value) {
 }
 
 
+static inline bool CanBeImmediateConstant(HValue* value) {
+  return value->IsConstant() && HConstant::cast(value)->NotInNewSpace();
+}
+
+
 LOperand* LChunkBuilder::UseOrConstant(HValue* value) {
-  return value->IsConstant()
+  return CanBeImmediateConstant(value)
       ? chunk_->DefineConstantOperand(HConstant::cast(value))
       : Use(value);
 }
 
 
 LOperand* LChunkBuilder::UseOrConstantAtStart(HValue* value) {
-  return value->IsConstant()
+  return CanBeImmediateConstant(value)
       ? chunk_->DefineConstantOperand(HConstant::cast(value))
       : UseAtStart(value);
 }
 
 
 LOperand* LChunkBuilder::UseRegisterOrConstant(HValue* value) {
-  return value->IsConstant()
+  return CanBeImmediateConstant(value)
       ? chunk_->DefineConstantOperand(HConstant::cast(value))
       : UseRegister(value);
 }
 
 
 LOperand* LChunkBuilder::UseRegisterOrConstantAtStart(HValue* value) {
-  return value->IsConstant()
+  return CanBeImmediateConstant(value)
       ? chunk_->DefineConstantOperand(HConstant::cast(value))
       : UseRegisterAtStart(value);
 }
@@ -1723,9 +1728,12 @@ LInstruction* LChunkBuilder::DoCompareNumericAndBranch(
     ASSERT(instr->right()->representation().IsDouble());
     LOperand* left;
     LOperand* right;
-    if (instr->left()->IsConstant() && instr->right()->IsConstant()) {
-      left = UseRegisterOrConstantAtStart(instr->left());
-      right = UseRegisterOrConstantAtStart(instr->right());
+    if (CanBeImmediateConstant(instr->left()) &&
+        CanBeImmediateConstant(instr->right())) {
+      // The code generator requires either both inputs to be constant
+      // operands, or neither.
+      left = UseConstant(instr->left());
+      right = UseConstant(instr->right());
     } else {
       left = UseRegisterAtStart(instr->left());
       right = UseRegisterAtStart(instr->right());
