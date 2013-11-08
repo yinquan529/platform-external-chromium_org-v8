@@ -21,7 +21,7 @@ $(gyp_intermediate_dir)/snapshot.cc: gyp_shared_intermediate_dir := $(abspath $(
 $(gyp_intermediate_dir)/snapshot.cc: export PATH := $(subst $(ANDROID_BUILD_PATHS),,$(PATH))
 $(gyp_intermediate_dir)/snapshot.cc: $(gyp_shared_intermediate_dir)/mksnapshot.arm $(GYP_TARGET_DEPENDENCIES)
 	@echo "Gyp action: v8_tools_gyp_v8_gyp_v8_snapshot_target_run_mksnapshot ($@)"
-	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_intermediate_dir); "$(gyp_shared_intermediate_dir)/mksnapshot.arm" --log-snapshot-positions --logfile "$(gyp_intermediate_dir)/snapshot.log" "$(gyp_intermediate_dir)/snapshot.cc"
+	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_intermediate_dir); "$(gyp_shared_intermediate_dir)/mksnapshot.arm" --log-snapshot-positions --logfile "$(gyp_intermediate_dir)/snapshot.log" --random-seed 314159265 "$(gyp_intermediate_dir)/snapshot.cc"
 
 
 
@@ -205,7 +205,8 @@ MY_DEFS_Release := \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
-	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'
+	'-DDYNAMIC_ANNOTATIONS_ENABLED=0' \
+	'-DENABLE_HANDLE_ZAPPING'
 
 
 # Include paths placed before CFLAGS/CPPFLAGS
