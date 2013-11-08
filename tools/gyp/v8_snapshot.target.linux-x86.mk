@@ -57,7 +57,6 @@ MY_CFLAGS_Debug := \
 	-fvisibility=hidden \
 	-pipe \
 	-fPIC \
-	-g \
 	-Wno-format \
 	-m32 \
 	-mmmx \
@@ -151,7 +150,6 @@ MY_CFLAGS_Release := \
 	-fvisibility=hidden \
 	-pipe \
 	-fPIC \
-	-g \
 	-Wno-format \
 	-m32 \
 	-mmmx \
