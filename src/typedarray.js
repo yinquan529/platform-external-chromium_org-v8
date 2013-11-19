@@ -87,6 +87,9 @@ macro TYPED_ARRAY_CONSTRUCTOR(ARRAY_ID, NAME, ELEMENT_SIZE)
   function NAMEConstructByLength(obj, length) {
     var l = IS_UNDEFINED(length) ?
       0 : ToPositiveInteger(length, "invalid_typed_array_length");
+    if (l > %MaxSmi()) {
+      throw MakeRangeError("invalid_typed_array_length");
+    }
     var byteLength = l * ELEMENT_SIZE;
     var buffer = new $ArrayBuffer(byteLength);
     %TypedArrayInitialize(obj, ARRAY_ID, buffer, 0, byteLength);
@@ -306,7 +309,7 @@ function DataViewConstructor(buffer, byteOffset, byteLength) { // length = 3
     if (!IS_ARRAYBUFFER(buffer)) {
       throw MakeTypeError('data_view_not_array_buffer', []);
     }
-    var bufferByteLength = %ArrayBufferGetByteLength(buffer);
+    var bufferByteLength = buffer.byteLength;
     var offset = IS_UNDEFINED(byteOffset) ?
       0 : ToPositiveInteger(byteOffset, 'invalid_data_view_offset');
     if (offset > bufferByteLength) {

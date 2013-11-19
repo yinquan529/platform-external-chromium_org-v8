@@ -415,11 +415,23 @@ Handle<Object> LCodeGen::ToHandle(LConstantOperand* op) const {
 }
 
 
+static int ArgumentsOffsetWithoutFrame(int index) {
+  ASSERT(index < 0);
+  return -(index + 1) * kPointerSize + kPCOnStackSize;
+}
+
+
 Operand LCodeGen::ToOperand(LOperand* op) const {
   // Does not handle registers. In X64 assembler, plain registers are not
   // representable as an Operand.
   ASSERT(op->IsStackSlot() || op->IsDoubleStackSlot());
-  return Operand(rbp, StackSlotOffset(op->index()));
+  if (NeedsEagerFrame()) {
+    return Operand(rbp, StackSlotOffset(op->index()));
+  } else {
+    // Retrieve parameter without eager stack-frame relative to the
+    // stack-pointer.
+    return Operand(rsp, ArgumentsOffsetWithoutFrame(op->index()));
+  }
 }
 
 
@@ -3910,7 +3922,12 @@ void LCodeGen::DoCallFunction(LCallFunction* instr) {
 
   int arity = instr->arity();
   CallFunctionStub stub(arity, NO_CALL_FUNCTION_FLAGS);
-  CallCode(stub.GetCode(isolate()), RelocInfo::CODE_TARGET, instr);
+  if (instr->hydrogen()->IsTailCall()) {
+    if (NeedsEagerFrame()) __ leave();
+    __ jmp(stub.GetCode(isolate()), RelocInfo::CODE_TARGET);
+  } else {
+    CallCode(stub.GetCode(isolate()), RelocInfo::CODE_TARGET, instr);
+  }
 }
 
 
@@ -5231,19 +5248,21 @@ void LCodeGen::DoDeferredAllocate(LAllocate* instr) {
     __ Push(Smi::FromInt(size));
   }
 
+  int flags = 0;
   if (instr->hydrogen()->IsOldPointerSpaceAllocation()) {
     ASSERT(!instr->hydrogen()->IsOldDataSpaceAllocation());
     ASSERT(!instr->hydrogen()->IsNewSpaceAllocation());
-    CallRuntimeFromDeferred(
-        Runtime::kAllocateInOldPointerSpace, 1, instr, instr->context());
+    flags = AllocateTargetSpace::update(flags, OLD_POINTER_SPACE);
   } else if (instr->hydrogen()->IsOldDataSpaceAllocation()) {
     ASSERT(!instr->hydrogen()->IsNewSpaceAllocation());
-    CallRuntimeFromDeferred(
-        Runtime::kAllocateInOldDataSpace, 1, instr, instr->context());
+    flags = AllocateTargetSpace::update(flags, OLD_DATA_SPACE);
   } else {
-    CallRuntimeFromDeferred(
-        Runtime::kAllocateInNewSpace, 1, instr, instr->context());
+    flags = AllocateTargetSpace::update(flags, NEW_SPACE);
   }
+  __ Push(Smi::FromInt(flags));
+
+  CallRuntimeFromDeferred(
+      Runtime::kAllocateInTargetSpace, 2, instr, instr->context());
   __ StoreToSafepointRegisterSlot(result, rax);
 }
 
@@ -5348,44 +5367,49 @@ void LCodeGen::EmitPushTaggedOperand(LOperand* operand) {
 
 void LCodeGen::DoTypeofIsAndBranch(LTypeofIsAndBranch* instr) {
   Register input = ToRegister(instr->value());
-
-  Condition final_branch_condition =
-      EmitTypeofIs(instr->TrueLabel(chunk_),
-          instr->FalseLabel(chunk_), input, instr->type_literal());
+  Condition final_branch_condition = EmitTypeofIs(instr, input);
   if (final_branch_condition != no_condition) {
     EmitBranch(instr, final_branch_condition);
   }
 }
 
 
-Condition LCodeGen::EmitTypeofIs(Label* true_label,
-                                 Label* false_label,
-                                 Register input,
-                                 Handle<String> type_name) {
+Condition LCodeGen::EmitTypeofIs(LTypeofIsAndBranch* instr, Register input) {
+  Label* true_label = instr->TrueLabel(chunk_);
+  Label* false_label = instr->FalseLabel(chunk_);
+  Handle<String> type_name = instr->type_literal();
+  int left_block = instr->TrueDestination(chunk_);
+  int right_block = instr->FalseDestination(chunk_);
+  int next_block = GetNextEmittedBlock();
+
+  Label::Distance true_distance = left_block == next_block ? Label::kNear
+                                                           : Label::kFar;
+  Label::Distance false_distance = right_block == next_block ? Label::kNear
+                                                             : Label::kFar;
   Condition final_branch_condition = no_condition;
   if (type_name->Equals(heap()->number_string())) {
-    __ JumpIfSmi(input, true_label);
+    __ JumpIfSmi(input, true_label, true_distance);
     __ CompareRoot(FieldOperand(input, HeapObject::kMapOffset),
                    Heap::kHeapNumberMapRootIndex);
 
     final_branch_condition = equal;
 
   } else if (type_name->Equals(heap()->string_string())) {
-    __ JumpIfSmi(input, false_label);
+    __ JumpIfSmi(input, false_label, false_distance);
     __ CmpObjectType(input, FIRST_NONSTRING_TYPE, input);
-    __ j(above_equal, false_label);
+    __ j(above_equal, false_label, false_distance);
     __ testb(FieldOperand(input, Map::kBitFieldOffset),
              Immediate(1 << Map::kIsUndetectable));
     final_branch_condition = zero;
 
   } else if (type_name->Equals(heap()->symbol_string())) {
-    __ JumpIfSmi(input, false_label);
+    __ JumpIfSmi(input, false_label, false_distance);
     __ CmpObjectType(input, SYMBOL_TYPE, input);
     final_branch_condition = equal;
 
   } else if (type_name->Equals(heap()->boolean_string())) {
     __ CompareRoot(input, Heap::kTrueValueRootIndex);
-    __ j(equal, true_label);
+    __ j(equal, true_label, true_distance);
     __ CompareRoot(input, Heap::kFalseValueRootIndex);
     final_branch_condition = equal;
 
@@ -5395,8 +5419,8 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
 
   } else if (type_name->Equals(heap()->undefined_string())) {
     __ CompareRoot(input, Heap::kUndefinedValueRootIndex);
-    __ j(equal, true_label);
-    __ JumpIfSmi(input, false_label);
+    __ j(equal, true_label, true_distance);
+    __ JumpIfSmi(input, false_label, false_distance);
     // Check for undetectable objects => true.
     __ movq(input, FieldOperand(input, HeapObject::kMapOffset));
     __ testb(FieldOperand(input, Map::kBitFieldOffset),
@@ -5405,29 +5429,29 @@ Condition LCodeGen::EmitTypeofIs(Label* true_label,
 
   } else if (type_name->Equals(heap()->function_string())) {
     STATIC_ASSERT(NUM_OF_CALLABLE_SPEC_OBJECT_TYPES == 2);
-    __ JumpIfSmi(input, false_label);
+    __ JumpIfSmi(input, false_label, false_distance);
     __ CmpObjectType(input, JS_FUNCTION_TYPE, input);
-    __ j(equal, true_label);
+    __ j(equal, true_label, true_distance);
     __ CmpInstanceType(input, JS_FUNCTION_PROXY_TYPE);
     final_branch_condition = equal;
 
   } else if (type_name->Equals(heap()->object_string())) {
-    __ JumpIfSmi(input, false_label);
+    __ JumpIfSmi(input, false_label, false_distance);
     if (!FLAG_harmony_typeof) {
       __ CompareRoot(input, Heap::kNullValueRootIndex);
-      __ j(equal, true_label);
+      __ j(equal, true_label, true_distance);
     }
     __ CmpObjectType(input, FIRST_NONCALLABLE_SPEC_OBJECT_TYPE, input);
-    __ j(below, false_label);
+    __ j(below, false_label, false_distance);
     __ CmpInstanceType(input, LAST_NONCALLABLE_SPEC_OBJECT_TYPE);
-    __ j(above, false_label);
+    __ j(above, false_label, false_distance);
     // Check for undetectable objects => false.
     __ testb(FieldOperand(input, Map::kBitFieldOffset),
              Immediate(1 << Map::kIsUndetectable));
     final_branch_condition = zero;
 
   } else {
-    __ jmp(false_label);
+    __ jmp(false_label, false_distance);
   }
 
   return final_branch_condition;
