@@ -191,7 +191,6 @@ LOCAL_SRC_FILES := \
 	v8/src/ia32/regexp-macro-assembler-ia32.cc \
 	v8/src/ia32/stub-cache-ia32.cc \
 	v8/src/platform-posix.cc \
-	v8/src/defaults.cc \
 	v8/src/platform-linux.cc
 
 

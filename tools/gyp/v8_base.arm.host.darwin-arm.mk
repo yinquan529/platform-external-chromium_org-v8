@@ -192,7 +192,6 @@ LOCAL_SRC_FILES := \
 	v8/src/arm/simulator-arm.cc \
 	v8/src/arm/stub-cache-arm.cc \
 	v8/src/platform-posix.cc \
-	v8/src/defaults.cc \
 	v8/src/platform-macos.cc
 
 

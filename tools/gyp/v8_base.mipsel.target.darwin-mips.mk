@@ -193,7 +193,6 @@ LOCAL_SRC_FILES := \
 	v8/src/mips/simulator-mips.cc \
 	v8/src/mips/stub-cache-mips.cc \
 	v8/src/platform-posix.cc \
-	v8/src/defaults.cc \
 	v8/src/platform-linux.cc
 
 
