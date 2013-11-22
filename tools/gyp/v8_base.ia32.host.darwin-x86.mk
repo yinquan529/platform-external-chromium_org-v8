@@ -11,7 +11,8 @@ gyp_intermediate_dir := $(call local-intermediates-dir)
 gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 
 # Make sure our deps are built first.
-GYP_TARGET_DEPENDENCIES :=
+GYP_TARGET_DEPENDENCIES := \
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_generate_trig_table_host_gyp,true)/generate_trig_table.stamp
 
 GYP_GENERATED_OUTPUTS :=
 
@@ -54,6 +55,7 @@ LOCAL_SRC_FILES := \
 	v8/src/dateparser.cc \
 	v8/src/debug-agent.cc \
 	v8/src/debug.cc \
+	v8/src/default-platform.cc \
 	v8/src/deoptimizer.cc \
 	v8/src/disassembler.cc \
 	v8/src/diy-fp.cc \
@@ -231,6 +233,7 @@ MY_DEFS_Debug := \
 	'-DV8_TARGET_ARCH_IA32' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \
@@ -302,6 +305,7 @@ MY_DEFS_Release := \
 	'-DV8_TARGET_ARCH_IA32' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DU_STATIC_IMPLEMENTATION' \

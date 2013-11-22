@@ -15,6 +15,7 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 GYP_TARGET_DEPENDENCIES := \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_base_arm_host_gyp,true)/v8_tools_gyp_v8_base_arm_host_gyp.a \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_nosnapshot_arm_host_gyp,true)/v8_tools_gyp_v8_nosnapshot_arm_host_gyp.a \
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_generate_trig_table_host_gyp,true)/generate_trig_table.stamp \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,third_party_icu_icui18n_host_gyp,true)/third_party_icu_icui18n_host_gyp.a \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,third_party_icu_icuuc_host_gyp,true)/third_party_icu_icuuc_host_gyp.a \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,third_party_icu_icudata_host_gyp,true)/third_party_icu_icudata_host_gyp.a \
@@ -72,6 +73,7 @@ MY_DEFS_Debug := \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DARM_TEST' \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
@@ -138,6 +140,7 @@ MY_DEFS_Release := \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DARM_TEST' \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
 	'-DNDEBUG' \

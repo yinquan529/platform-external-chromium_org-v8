@@ -36,9 +36,12 @@ $(gyp_intermediate_dir)/libraries.cc: $(gyp_shared_intermediate_dir)/libraries.c
 	mkdir -p $(@D); cp $< $@
 $(gyp_intermediate_dir)/experimental-libraries.cc: $(gyp_shared_intermediate_dir)/experimental-libraries.cc
 	mkdir -p $(@D); cp $< $@
+$(gyp_intermediate_dir)/trig-table.cc: $(gyp_shared_intermediate_dir)/trig-table.cc
+	mkdir -p $(@D); cp $< $@
 LOCAL_GENERATED_SOURCES := \
 	$(gyp_intermediate_dir)/libraries.cc \
 	$(gyp_intermediate_dir)/experimental-libraries.cc \
+	$(gyp_intermediate_dir)/trig-table.cc \
 	$(gyp_intermediate_dir)/snapshot.cc
 
 GYP_COPIED_SOURCE_ORIGIN_DIRS := \
@@ -101,6 +104,7 @@ MY_DEFS_Debug := \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DANDROID' \
 	'-D__GNU_SOURCE=1' \
 	'-DUSE_STLPORT=1' \
@@ -198,6 +202,7 @@ MY_DEFS_Release := \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DANDROID' \
 	'-D__GNU_SOURCE=1' \
 	'-DUSE_STLPORT=1' \
