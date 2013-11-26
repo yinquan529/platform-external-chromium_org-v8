@@ -15,11 +15,11 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 GYP_TARGET_DEPENDENCIES := \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_base_mipsel_host_gyp,true)/v8_tools_gyp_v8_base_mipsel_host_gyp.a \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,v8_tools_gyp_v8_nosnapshot_mipsel_host_gyp,true)/v8_tools_gyp_v8_nosnapshot_mipsel_host_gyp.a \
-	$(call intermediates-dir-for,GYP,v8_tools_gyp_generate_trig_table_host_gyp,true)/generate_trig_table.stamp \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,third_party_icu_icui18n_host_gyp,true)/third_party_icu_icui18n_host_gyp.a \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,third_party_icu_icuuc_host_gyp,true)/third_party_icu_icuuc_host_gyp.a \
 	$(call intermediates-dir-for,STATIC_LIBRARIES,third_party_icu_icudata_host_gyp,true)/third_party_icu_icudata_host_gyp.a \
-	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp \
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_generate_trig_table_host_gyp,true)/generate_trig_table.stamp
 
 GYP_GENERATED_OUTPUTS :=
 

@@ -12,7 +12,8 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 # Make sure our deps are built first.
 GYP_TARGET_DEPENDENCIES := \
 	$(gyp_shared_intermediate_dir)/mksnapshot.ia32 \
-	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp \
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_generate_trig_table_host_gyp,true)/generate_trig_table.stamp
 
 ### Rules for action "run_mksnapshot":
 $(gyp_intermediate_dir)/snapshot.cc: gyp_local_path := $(LOCAL_PATH)
