@@ -64,6 +64,7 @@ LOCAL_SRC_FILES := \
 	v8/src/elements.cc \
 	v8/src/execution.cc \
 	v8/src/extensions/externalize-string-extension.cc \
+	v8/src/extensions/free-buffer-extension.cc \
 	v8/src/extensions/gc-extension.cc \
 	v8/src/extensions/statistics-extension.cc \
 	v8/src/factory.cc \
