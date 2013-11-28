@@ -29,9 +29,9 @@ $(gyp_shared_intermediate_dir)/experimental-libraries.cc: gyp_local_path := $(LO
 $(gyp_shared_intermediate_dir)/experimental-libraries.cc: gyp_intermediate_dir := $(abspath $(gyp_intermediate_dir))
 $(gyp_shared_intermediate_dir)/experimental-libraries.cc: gyp_shared_intermediate_dir := $(abspath $(gyp_shared_intermediate_dir))
 $(gyp_shared_intermediate_dir)/experimental-libraries.cc: export PATH := $(subst $(ANDROID_BUILD_PATHS),,$(PATH))
-$(gyp_shared_intermediate_dir)/experimental-libraries.cc: $(LOCAL_PATH)/v8/tools/js2c.py $(LOCAL_PATH)/v8/src/macros.py $(LOCAL_PATH)/v8/src/symbol.js $(LOCAL_PATH)/v8/src/proxy.js $(LOCAL_PATH)/v8/src/collection.js $(LOCAL_PATH)/v8/src/object-observe.js $(LOCAL_PATH)/v8/src/generator.js $(LOCAL_PATH)/v8/src/array-iterator.js $(LOCAL_PATH)/v8/src/harmony-string.js $(LOCAL_PATH)/v8/src/harmony-array.js $(LOCAL_PATH)/v8/src/harmony-math.js $(GYP_TARGET_DEPENDENCIES)
+$(gyp_shared_intermediate_dir)/experimental-libraries.cc: $(LOCAL_PATH)/v8/tools/js2c.py $(LOCAL_PATH)/v8/src/macros.py $(LOCAL_PATH)/v8/src/symbol.js $(LOCAL_PATH)/v8/src/proxy.js $(LOCAL_PATH)/v8/src/collection.js $(LOCAL_PATH)/v8/src/object-observe.js $(LOCAL_PATH)/v8/src/promise.js $(LOCAL_PATH)/v8/src/generator.js $(LOCAL_PATH)/v8/src/array-iterator.js $(LOCAL_PATH)/v8/src/harmony-string.js $(LOCAL_PATH)/v8/src/harmony-array.js $(LOCAL_PATH)/v8/src/harmony-math.js $(GYP_TARGET_DEPENDENCIES)
 	@echo "Gyp action: v8_tools_gyp_v8_gyp_js2c_host_js2c_experimental ($@)"
-	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_shared_intermediate_dir); python ../../tools/js2c.py "$(gyp_shared_intermediate_dir)/experimental-libraries.cc" EXPERIMENTAL off ../../src/macros.py ../../src/symbol.js ../../src/proxy.js ../../src/collection.js ../../src/object-observe.js ../../src/generator.js ../../src/array-iterator.js ../../src/harmony-string.js ../../src/harmony-array.js ../../src/harmony-math.js
+	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_shared_intermediate_dir); python ../../tools/js2c.py "$(gyp_shared_intermediate_dir)/experimental-libraries.cc" EXPERIMENTAL off ../../src/macros.py ../../src/symbol.js ../../src/proxy.js ../../src/collection.js ../../src/object-observe.js ../../src/promise.js ../../src/generator.js ../../src/array-iterator.js ../../src/harmony-string.js ../../src/harmony-array.js ../../src/harmony-math.js
 
 
 
