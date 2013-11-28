@@ -12,7 +12,8 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 # Make sure our deps are built first.
 GYP_TARGET_DEPENDENCIES := \
 	$(gyp_shared_intermediate_dir)/mksnapshot.mipsel \
-	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp \
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_generate_trig_table_host_gyp,true)/generate_trig_table.stamp
 
 ### Rules for action "run_mksnapshot":
 $(gyp_intermediate_dir)/snapshot.cc: gyp_local_path := $(LOCAL_PATH)
@@ -21,7 +22,7 @@ $(gyp_intermediate_dir)/snapshot.cc: gyp_shared_intermediate_dir := $(abspath $(
 $(gyp_intermediate_dir)/snapshot.cc: export PATH := $(subst $(ANDROID_BUILD_PATHS),,$(PATH))
 $(gyp_intermediate_dir)/snapshot.cc: $(gyp_shared_intermediate_dir)/mksnapshot.mipsel $(GYP_TARGET_DEPENDENCIES)
 	@echo "Gyp action: v8_tools_gyp_v8_gyp_v8_snapshot_target_run_mksnapshot ($@)"
-	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_intermediate_dir); "$(gyp_shared_intermediate_dir)/mksnapshot.mipsel" --log-snapshot-positions --logfile "$(gyp_intermediate_dir)/snapshot.log" "$(gyp_intermediate_dir)/snapshot.cc"
+	$(hide)cd $(gyp_local_path)/v8/tools/gyp; mkdir -p $(gyp_intermediate_dir); "$(gyp_shared_intermediate_dir)/mksnapshot.mipsel" --log-snapshot-positions --logfile "$(gyp_intermediate_dir)/snapshot.log" --random-seed 314159265 "$(gyp_intermediate_dir)/snapshot.cc"
 
 
 
@@ -36,9 +37,12 @@ $(gyp_intermediate_dir)/libraries.cc: $(gyp_shared_intermediate_dir)/libraries.c
 	mkdir -p $(@D); cp $< $@
 $(gyp_intermediate_dir)/experimental-libraries.cc: $(gyp_shared_intermediate_dir)/experimental-libraries.cc
 	mkdir -p $(@D); cp $< $@
+$(gyp_intermediate_dir)/trig-table.cc: $(gyp_shared_intermediate_dir)/trig-table.cc
+	mkdir -p $(@D); cp $< $@
 LOCAL_GENERATED_SOURCES := \
 	$(gyp_intermediate_dir)/libraries.cc \
 	$(gyp_intermediate_dir)/experimental-libraries.cc \
+	$(gyp_intermediate_dir)/trig-table.cc \
 	$(gyp_intermediate_dir)/snapshot.cc
 
 GYP_COPIED_SOURCE_ORIGIN_DIRS := \
@@ -97,11 +101,13 @@ MY_DEFS_Debug := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DCLD_VERSION=1' \
+	'-DENABLE_MANAGED_USERS=1' \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DANDROID' \
 	'-D__GNU_SOURCE=1' \
 	'-DUSE_STLPORT=1' \
@@ -193,11 +199,13 @@ MY_DEFS_Release := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DCLD_VERSION=1' \
+	'-DENABLE_MANAGED_USERS=1' \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DANDROID' \
 	'-D__GNU_SOURCE=1' \
 	'-DUSE_STLPORT=1' \
@@ -205,7 +213,8 @@ MY_DEFS_Release := \
 	'-DCHROME_BUILD_ID=""' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
-	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'
+	'-DDYNAMIC_ANNOTATIONS_ENABLED=0' \
+	'-DENABLE_HANDLE_ZAPPING'
 
 
 # Include paths placed before CFLAGS/CPPFLAGS

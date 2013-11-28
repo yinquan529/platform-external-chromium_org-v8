@@ -50,7 +50,9 @@ enum BuiltinExtraArguments {
 #define CODE_AGE_LIST(V) \
   CODE_AGE_LIST_WITH_ARG(CODE_AGE_LIST_IGNORE_ARG, V)
 
-#define CODE_AGE_LIST_WITH_NO_AGE(V)               \
+#define CODE_AGE_LIST_COMPLETE(V)                  \
+  V(NotExecuted)                                   \
+  V(ExecutedOnce)                                  \
   V(NoAge)                                         \
   CODE_AGE_LIST_WITH_ARG(CODE_AGE_LIST_IGNORE_ARG, V)
 
@@ -112,18 +114,16 @@ enum BuiltinExtraArguments {
                                     Code::kNoExtraICState)              \
   V(NotifyStubFailure,              BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
+  V(NotifyStubFailureSaveDoubles,   BUILTIN, UNINITIALIZED,             \
+                                    Code::kNoExtraICState)              \
                                                                         \
   V(LoadIC_Miss,                    BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
   V(KeyedLoadIC_Miss,               BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
-  V(KeyedLoadIC_MissForceGeneric,   BUILTIN, UNINITIALIZED,             \
-                                    Code::kNoExtraICState)              \
   V(StoreIC_Miss,                   BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
   V(KeyedStoreIC_Miss,              BUILTIN, UNINITIALIZED,             \
-                                    Code::kNoExtraICState)              \
-  V(KeyedStoreIC_MissForceGeneric,  BUILTIN, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
   V(LoadIC_Initialize,              LOAD_IC, UNINITIALIZED,             \
                                     Code::kNoExtraICState)              \
@@ -216,16 +216,13 @@ enum BuiltinExtraArguments {
   CODE_AGE_LIST_WITH_ARG(DECLARE_CODE_AGE_BUILTIN, V)
 
 // Define list of builtin handlers implemented in assembly.
-#define BUILTIN_LIST_H(V)                                                 \
-  V(LoadIC_Slow,                    LOAD_IC, Code::kNoExtraICState)       \
-  V(KeyedLoadIC_Slow,               KEYED_LOAD_IC, Code::kNoExtraICState) \
-  V(StoreIC_Slow,                   STORE_IC, Code::kNoExtraICState)      \
-  V(StoreIC_Slow_Strict,            STORE_IC, kStrictMode)                \
-  V(KeyedStoreIC_Slow,              KEYED_STORE_IC, Code::kNoExtraICState)\
-  V(KeyedStoreIC_Slow_Strict,       KEYED_STORE_IC, kStrictMode)          \
-  V(LoadIC_Normal,                  LOAD_IC, Code::kNoExtraICState)       \
-  V(StoreIC_Normal,                 STORE_IC, Code::kNoExtraICState)      \
-  V(StoreIC_Normal_Strict,          STORE_IC, kStrictMode)
+#define BUILTIN_LIST_H(V)                                               \
+  V(LoadIC_Slow,                    LOAD_IC)                            \
+  V(KeyedLoadIC_Slow,               KEYED_LOAD_IC)                      \
+  V(StoreIC_Slow,                   STORE_IC)                           \
+  V(KeyedStoreIC_Slow,              KEYED_STORE_IC)                     \
+  V(LoadIC_Normal,                  LOAD_IC)                            \
+  V(StoreIC_Normal,                 STORE_IC)
 
 #ifdef ENABLE_DEBUGGER_SUPPORT
 // Define list of builtins used by the debugger implemented in assembly.
@@ -314,7 +311,7 @@ class Builtins {
   enum Name {
 #define DEF_ENUM_C(name, ignore) k##name,
 #define DEF_ENUM_A(name, kind, state, extra) k##name,
-#define DEF_ENUM_H(name, kind, extra) k##name,
+#define DEF_ENUM_H(name, kind) k##name,
     BUILTIN_LIST_C(DEF_ENUM_C)
     BUILTIN_LIST_A(DEF_ENUM_A)
     BUILTIN_LIST_H(DEF_ENUM_H)
@@ -341,7 +338,7 @@ class Builtins {
 #define DECLARE_BUILTIN_ACCESSOR_C(name, ignore) Handle<Code> name();
 #define DECLARE_BUILTIN_ACCESSOR_A(name, kind, state, extra) \
   Handle<Code> name();
-#define DECLARE_BUILTIN_ACCESSOR_H(name, kind, extra) Handle<Code> name();
+#define DECLARE_BUILTIN_ACCESSOR_H(name, kind) Handle<Code> name();
   BUILTIN_LIST_C(DECLARE_BUILTIN_ACCESSOR_C)
   BUILTIN_LIST_A(DECLARE_BUILTIN_ACCESSOR_A)
   BUILTIN_LIST_H(DECLARE_BUILTIN_ACCESSOR_H)
@@ -364,6 +361,11 @@ class Builtins {
   }
 
   static const char* GetName(JavaScript id) { return javascript_names_[id]; }
+  const char* name(int index) {
+    ASSERT(index >= 0);
+    ASSERT(index < builtin_count);
+    return names_[index];
+  }
   static int GetArgumentsCount(JavaScript id) { return javascript_argc_[id]; }
   Handle<Code> GetCode(JavaScript id, bool* resolved);
   static int NumberOfJavaScriptBuiltins() { return id_count; }
@@ -400,6 +402,7 @@ class Builtins {
   static void Generate_NotifySoftDeoptimized(MacroAssembler* masm);
   static void Generate_NotifyLazyDeoptimized(MacroAssembler* masm);
   static void Generate_NotifyStubFailure(MacroAssembler* masm);
+  static void Generate_NotifyStubFailureSaveDoubles(MacroAssembler* masm);
   static void Generate_ArgumentsAdaptorTrampoline(MacroAssembler* masm);
 
   static void Generate_FunctionCall(MacroAssembler* masm);

@@ -202,6 +202,8 @@ DEFINE_implication(harmony_observation, harmony_collections)
 // Flags for experimental implementation features.
 DEFINE_bool(packed_arrays, true, "optimizes arrays that have no holes")
 DEFINE_bool(smi_only_arrays, true, "tracks arrays with only smi values")
+DEFINE_bool(compiled_keyed_dictionary_loads, true,
+            "use optimizing compiler to generate keyed dictionary load stubs")
 DEFINE_bool(clever_optimizations, true,
             "Optimize object size, Array shift, DOM strings and string +")
 DEFINE_bool(pretenuring, true, "allocate objects in old space")
@@ -311,7 +313,7 @@ DEFINE_bool(inline_construct, true, "inline constructor calls")
 DEFINE_bool(inline_arguments, true, "inline functions with arguments object")
 DEFINE_bool(inline_accessors, true, "inline JavaScript accessors")
 DEFINE_int(loop_weight, 1, "loop weight for representation inference")
-DEFINE_int(escape_analysis_iterations, 1,
+DEFINE_int(escape_analysis_iterations, 2,
            "maximum number of escape analysis fix-point iterations")
 
 DEFINE_bool(optimize_for_in, true,
@@ -337,6 +339,8 @@ DEFINE_implication(concurrent_osr, concurrent_recompilation)
 DEFINE_bool(omit_map_checks_for_leaf_maps, true,
             "do not emit check maps for constant values that have a leaf map, "
             "deoptimize the optimized code if the layout of the maps changes.")
+
+DEFINE_bool(new_string_add, false, "enable new string addition")
 
 // Experimental profiler changes.
 DEFINE_bool(experimental_profiler, true, "enable all profiler experiments")
@@ -403,6 +407,9 @@ DEFINE_bool(enable_vldr_imm, false,
 // bootstrapper.cc
 DEFINE_string(expose_natives_as, NULL, "expose natives in global object")
 DEFINE_string(expose_debug_as, NULL, "expose debug in global object")
+#ifdef ADDRESS_SANITIZER
+DEFINE_bool(expose_free_buffer, false, "expose freeBuffer extension")
+#endif
 DEFINE_bool(expose_gc, false, "expose gc extension")
 DEFINE_string(expose_gc_as, NULL,
               "expose gc extension under the specified name")
@@ -502,6 +509,9 @@ DEFINE_bool(trace_gc_ignore_scavenger, false,
             "do not print trace line after scavenger collection")
 DEFINE_bool(print_cumulative_gc_stat, false,
             "print cumulative GC statistics in name=value format on exit")
+DEFINE_bool(print_max_heap_committed, false,
+            "print statistics of the maximum memory committed for the heap "
+            "in name=value format on exit")
 DEFINE_bool(trace_gc_verbose, false,
             "print more details following each garbage collection")
 DEFINE_bool(trace_fragmentation, false,
@@ -593,8 +603,6 @@ DEFINE_bool(abort_on_uncaught_exception, false,
             "abort program (dump core) when an uncaught exception is thrown")
 DEFINE_bool(trace_exception, false,
             "print stack trace when throwing exceptions")
-DEFINE_bool(preallocate_message_memory, false,
-            "preallocate some memory to build stack traces.")
 DEFINE_bool(randomize_hashes, true,
             "randomize hashes to avoid predictable hash collisions "
             "(with snapshots this option cannot override the baked-in seed)")
@@ -605,10 +613,6 @@ DEFINE_int(hash_seed, 0,
 // snapshot-common.cc
 DEFINE_bool(profile_deserialization, false,
             "Print the time it takes to deserialize the snapshot.")
-
-// v8.cc
-DEFINE_bool(preemption, false,
-            "activate a 100ms timer that switches between V8 threads")
 
 // Regexp
 DEFINE_bool(regexp_optimization, true, "generate optimized regexp code")
@@ -784,6 +788,10 @@ DEFINE_bool(log_regexp, false, "Log regular expression execution.")
 DEFINE_string(logfile, "v8.log", "Specify the name of the log file.")
 DEFINE_bool(logfile_per_isolate, true, "Separate log files for each isolate.")
 DEFINE_bool(ll_prof, false, "Enable low-level linux profiler.")
+DEFINE_bool(perf_basic_prof, false,
+            "Enable perf linux profiler (basic support).")
+DEFINE_bool(perf_jit_prof, false,
+            "Enable perf linux profiler (experimental annotate support).")
 DEFINE_string(gc_fake_mmap, "/tmp/__v8_gc__",
               "Specify the name of the file for fake gc mmap used in ll_prof")
 DEFINE_bool(log_internal_timer_events, false, "Time internal events.")
@@ -791,6 +799,12 @@ DEFINE_bool(log_timer_events, false,
             "Time events including external callbacks.")
 DEFINE_implication(log_timer_events, log_internal_timer_events)
 DEFINE_implication(log_internal_timer_events, prof)
+
+DEFINE_bool(redirect_code_traces, false,
+            "output deopt information and disassembly into file "
+            "code-<pid>-<isolate id>.asm")
+DEFINE_string(redirect_code_traces_to, NULL,
+            "output deopt information and disassembly into the given file")
 
 //
 // Disassembler only flags

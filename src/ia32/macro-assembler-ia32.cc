@@ -56,6 +56,34 @@ MacroAssembler::MacroAssembler(Isolate* arg_isolate, void* buffer, int size)
 }
 
 
+void MacroAssembler::Load(Register dst, const Operand& src, Representation r) {
+  ASSERT(!r.IsDouble());
+  if (r.IsInteger8()) {
+    movsx_b(dst, src);
+  } else if (r.IsUInteger8()) {
+    movzx_b(dst, src);
+  } else if (r.IsInteger16()) {
+    movsx_w(dst, src);
+  } else if (r.IsUInteger16()) {
+    movzx_w(dst, src);
+  } else {
+    mov(dst, src);
+  }
+}
+
+
+void MacroAssembler::Store(Register src, const Operand& dst, Representation r) {
+  ASSERT(!r.IsDouble());
+  if (r.IsInteger8() || r.IsUInteger8()) {
+    mov_b(dst, src);
+  } else if (r.IsInteger16() || r.IsUInteger16()) {
+    mov_w(dst, src);
+  } else {
+    mov(dst, src);
+  }
+}
+
+
 void MacroAssembler::LoadRoot(Register destination, Heap::RootListIndex index) {
   if (isolate()->heap()->RootCanBeTreatedAsConstant(index)) {
     Handle<Object> value(&isolate()->heap()->roots_array_start()[index]);
@@ -586,6 +614,10 @@ void MacroAssembler::RecordWriteForMap(
     return;
   }
 
+  // Count number of write barriers in generated code.
+  isolate()->counters()->write_barriers_static()->Increment();
+  IncrementCounter(isolate()->counters()->write_barriers_dynamic(), 1);
+
   // A single check of the map's pages interesting flag suffices, since it is
   // only set during incremental collection, and then it's also guaranteed that
   // the from object's page's interesting flag is also set.  This optimization
@@ -641,6 +673,10 @@ void MacroAssembler::RecordWrite(Register object,
     int3();
     bind(&ok);
   }
+
+  // Count number of write barriers in generated code.
+  isolate()->counters()->write_barriers_static()->Increment();
+  IncrementCounter(isolate()->counters()->write_barriers_dynamic(), 1);
 
   // First, check if a write barrier is even needed. The tests below
   // catch stores of Smis and stores into young gen.
@@ -867,9 +903,7 @@ void MacroAssembler::StoreNumberToDoubleElements(
 }
 
 
-void MacroAssembler::CompareMap(Register obj,
-                                Handle<Map> map,
-                                Label* early_success) {
+void MacroAssembler::CompareMap(Register obj, Handle<Map> map) {
   cmp(FieldOperand(obj, HeapObject::kMapOffset), map);
 }
 
@@ -882,10 +916,8 @@ void MacroAssembler::CheckMap(Register obj,
     JumpIfSmi(obj, fail);
   }
 
-  Label success;
-  CompareMap(obj, map, &success);
+  CompareMap(obj, map);
   j(not_equal, fail);
-  bind(&success);
 }
 
 
@@ -1388,8 +1420,9 @@ void MacroAssembler::CheckAccessGlobalProxy(Register holder_reg,
 }
 
 
-// Compute the hash code from the untagged key.  This must be kept in sync
-// with ComputeIntegerHash in utils.h.
+// Compute the hash code from the untagged key.  This must be kept in sync with
+// ComputeIntegerHash in utils.h and KeyedLoadGenericElementStub in
+// code-stub-hydrogen.cc
 //
 // Note: r0 will contain hash code
 void MacroAssembler::GetNumberHash(Register r0, Register scratch) {
@@ -1465,8 +1498,7 @@ void MacroAssembler::LoadFromNumberDictionary(Label* miss,
   dec(r1);
 
   // Generate an unrolled loop that performs a few probes before giving up.
-  const int kProbes = 4;
-  for (int i = 0; i < kProbes; i++) {
+  for (int i = 0; i < kNumberDictionaryProbes; i++) {
     // Use r2 for index calculations and keep the hash intact in r0.
     mov(r2, r0);
     // Compute the masked index: (hash + i + i * i) & mask.
@@ -1484,7 +1516,7 @@ void MacroAssembler::LoadFromNumberDictionary(Label* miss,
                           r2,
                           times_pointer_size,
                           SeededNumberDictionary::kElementsStartOffset));
-    if (i != (kProbes - 1)) {
+    if (i != (kNumberDictionaryProbes - 1)) {
       j(equal, &done);
     } else {
       j(not_equal, miss);
@@ -1986,30 +2018,48 @@ void MacroAssembler::CopyBytes(Register source,
                                Register destination,
                                Register length,
                                Register scratch) {
-  Label loop, done, short_string, short_loop;
-  // Experimentation shows that the short string loop is faster if length < 10.
-  cmp(length, Immediate(10));
-  j(less_equal, &short_string);
-
+  Label short_loop, len4, len8, len12, done, short_string;
   ASSERT(source.is(esi));
   ASSERT(destination.is(edi));
   ASSERT(length.is(ecx));
+  cmp(length, Immediate(4));
+  j(below, &short_string, Label::kNear);
 
   // Because source is 4-byte aligned in our uses of this function,
   // we keep source aligned for the rep_movs call by copying the odd bytes
   // at the end of the ranges.
   mov(scratch, Operand(source, length, times_1, -4));
   mov(Operand(destination, length, times_1, -4), scratch);
+
+  cmp(length, Immediate(8));
+  j(below_equal, &len4, Label::kNear);
+  cmp(length, Immediate(12));
+  j(below_equal, &len8, Label::kNear);
+  cmp(length, Immediate(16));
+  j(below_equal, &len12, Label::kNear);
+
   mov(scratch, ecx);
   shr(ecx, 2);
   rep_movs();
   and_(scratch, Immediate(0x3));
   add(destination, scratch);
-  jmp(&done);
+  jmp(&done, Label::kNear);
+
+  bind(&len12);
+  mov(scratch, Operand(source, 8));
+  mov(Operand(destination, 8), scratch);
+  bind(&len8);
+  mov(scratch, Operand(source, 4));
+  mov(Operand(destination, 4), scratch);
+  bind(&len4);
+  mov(scratch, Operand(source, 0));
+  mov(Operand(destination, 0), scratch);
+  add(destination, length);
+  jmp(&done, Label::kNear);
 
   bind(&short_string);
   test(length, length);
-  j(zero, &done);
+  j(zero, &done, Label::kNear);
 
   bind(&short_loop);
   mov_b(scratch, Operand(source, 0));
@@ -3023,6 +3073,40 @@ void MacroAssembler::Abort(BailoutReason reason) {
 }
 
 
+void MacroAssembler::Throw(BailoutReason reason) {
+#ifdef DEBUG
+  const char* msg = GetBailoutReason(reason);
+  if (msg != NULL) {
+    RecordComment("Throw message: ");
+    RecordComment(msg);
+  }
+#endif
+
+  push(eax);
+  push(Immediate(Smi::FromInt(reason)));
+  // Disable stub call restrictions to always allow calls to throw.
+  if (!has_frame_) {
+    // We don't actually want to generate a pile of code for this, so just
+    // claim there is a stack frame, without generating one.
+    FrameScope scope(this, StackFrame::NONE);
+    CallRuntime(Runtime::kThrowMessage, 1);
+  } else {
+    CallRuntime(Runtime::kThrowMessage, 1);
+  }
+  // will not return here
+  int3();
+}
+
+
+void MacroAssembler::ThrowIf(Condition cc, BailoutReason reason) {
+  Label L;
+  j(NegateCondition(cc), &L);
+  Throw(reason);
+  // will not return here
+  bind(&L);
+}
+
+
 void MacroAssembler::LoadInstanceDescriptors(Register map,
                                              Register descriptors) {
   mov(descriptors, FieldOperand(map, Map::kDescriptorsOffset));
@@ -3185,6 +3269,42 @@ void MacroAssembler::JumpIfNotUniqueName(Operand operand,
   j(not_equal, not_unique_name, distance);
 
   bind(&succeed);
+}
+
+
+void MacroAssembler::EmitSeqStringSetCharCheck(Register string,
+                                               Register index,
+                                               Register value,
+                                               uint32_t encoding_mask) {
+  Label is_object;
+  JumpIfNotSmi(string, &is_object, Label::kNear);
+  Throw(kNonObject);
+  bind(&is_object);
+
+  push(value);
+  mov(value, FieldOperand(string, HeapObject::kMapOffset));
+  movzx_b(value, FieldOperand(value, Map::kInstanceTypeOffset));
+
+  and_(value, Immediate(kStringRepresentationMask | kStringEncodingMask));
+  cmp(value, Immediate(encoding_mask));
+  pop(value);
+  ThrowIf(not_equal, kUnexpectedStringType);
+
+  // The index is assumed to be untagged coming in, tag it to compare with the
+  // string length without using a temp register, it is restored at the end of
+  // this function.
+  SmiTag(index);
+  // Can't use overflow here directly, compiler can't seem to disambiguate.
+  ThrowIf(NegateCondition(no_overflow), kIndexIsTooLarge);
+
+  cmp(index, FieldOperand(string, String::kLengthOffset));
+  ThrowIf(greater_equal, kIndexIsTooLarge);
+
+  cmp(index, Immediate(Smi::FromInt(0)));
+  ThrowIf(less, kIndexIsNegative);
+
+  // Restore the index
+  SmiUntag(index);
 }
 
 
@@ -3504,7 +3624,7 @@ void MacroAssembler::CheckEnumCache(Label* call_runtime) {
   mov(ebx, FieldOperand(ecx, HeapObject::kMapOffset));
 
   EnumLength(edx, ebx);
-  cmp(edx, Immediate(Smi::FromInt(Map::kInvalidEnumCache)));
+  cmp(edx, Immediate(Smi::FromInt(kInvalidEnumCacheSentinel)));
   j(equal, call_runtime);
 
   jmp(&start);
@@ -3550,6 +3670,32 @@ void MacroAssembler::TestJSArrayForAllocationMemento(
       Immediate(isolate()->factory()->allocation_memento_map()));
 }
 
+
+void MacroAssembler::JumpIfDictionaryInPrototypeChain(
+    Register object,
+    Register scratch0,
+    Register scratch1,
+    Label* found) {
+  ASSERT(!scratch1.is(scratch0));
+  Factory* factory = isolate()->factory();
+  Register current = scratch0;
+  Label loop_again;
+
+  // scratch contained elements pointer.
+  mov(current, object);
+
+  // Loop based on the map going up the prototype chain.
+  bind(&loop_again);
+  mov(current, FieldOperand(current, HeapObject::kMapOffset));
+  mov(scratch1, FieldOperand(current, Map::kBitField2Offset));
+  and_(scratch1, Map::kElementsKindMask);
+  shr(scratch1, Map::kElementsKindShift);
+  cmp(scratch1, Immediate(DICTIONARY_ELEMENTS));
+  j(equal, found);
+  mov(current, FieldOperand(current, Map::kPrototypeOffset));
+  cmp(current, Immediate(factory->null_value()));
+  j(not_equal, &loop_again);
+}
 
 } }  // namespace v8::internal
 

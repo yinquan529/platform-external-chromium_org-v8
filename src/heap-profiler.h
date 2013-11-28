@@ -56,10 +56,6 @@ class HeapProfiler {
   void StartHeapObjectsTracking();
   void StopHeapObjectsTracking();
 
-  static void RecordObjectAllocationFromMasm(Isolate* isolate,
-                                             Address obj,
-                                             int size);
-
   SnapshotObjectId PushHeapObjectsStats(OutputStream* stream);
   int GetSnapshotsCount();
   HeapSnapshot* GetSnapshot(int index);
@@ -93,8 +89,6 @@ class HeapProfiler {
   int FindUntrackedObjects() {
     return snapshots_->FindUntrackedObjects();
   }
-
-  void DropCompiledCode();
 
  private:
   Heap* heap() const { return snapshots_->heap(); }

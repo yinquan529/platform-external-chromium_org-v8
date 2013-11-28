@@ -161,6 +161,9 @@ class MacroAssembler: public Assembler {
   void Move(Register dst, Register src, Condition cond = al);
   void Move(DwVfpRegister dst, DwVfpRegister src);
 
+  void Load(Register dst, const MemOperand& src, Representation r);
+  void Store(Register src, const MemOperand& dst, Representation r);
+
   // Load an object from the root table.
   void LoadRoot(Register destination,
                 Heap::RootListIndex index,
@@ -658,6 +661,12 @@ class MacroAssembler: public Assembler {
   // handler chain.
   void ThrowUncatchable(Register value);
 
+  // Throw a message string as an exception.
+  void Throw(BailoutReason reason);
+
+  // Throw a message string as an exception if a condition is not true.
+  void ThrowIf(Condition cc, BailoutReason reason);
+
   // ---------------------------------------------------------------------------
   // Inline caching support
 
@@ -836,10 +845,20 @@ class MacroAssembler: public Assembler {
   // are the same register).  It leaves the heap object in the heap_object
   // register unless the heap_object register is the same register as one of the
   // other registers.
+  // Type_reg can be no_reg. In that case ip is used.
   void CompareObjectType(Register heap_object,
                          Register map,
                          Register type_reg,
                          InstanceType type);
+
+  // Compare object type for heap object. Branch to false_label if type
+  // is lower than min_type or greater than max_type.
+  // Load map into the register map.
+  void CheckObjectTypeRange(Register heap_object,
+                            Register map,
+                            InstanceType min_type,
+                            InstanceType max_type,
+                            Label* false_label);
 
   // Compare instance type in a map.  map contains a valid map object whose
   // object type should be compared with the given type.  This both
@@ -1045,8 +1064,10 @@ class MacroAssembler: public Assembler {
   }
 
   // Convenience function: Same as above, but takes the fid instead.
-  void CallRuntime(Runtime::FunctionId id, int num_arguments) {
-    CallRuntime(Runtime::FunctionForId(id), num_arguments);
+  void CallRuntime(Runtime::FunctionId id,
+                   int num_arguments,
+                   SaveFPRegsMode save_doubles = kDontSaveFPRegs) {
+    CallRuntime(Runtime::FunctionForId(id), num_arguments, save_doubles);
   }
 
   // Convenience function: call an external reference.
@@ -1338,6 +1359,11 @@ class MacroAssembler: public Assembler {
 
   void JumpIfNotUniqueName(Register reg, Label* not_unique_name);
 
+  void EmitSeqStringSetCharCheck(Register string,
+                                 Register index,
+                                 Register value,
+                                 uint32_t encoding_mask);
+
   // ---------------------------------------------------------------------------
   // Patching helpers.
 
@@ -1393,6 +1419,10 @@ class MacroAssembler: public Assembler {
     b(eq, memento_found);
     bind(&no_memento_found);
   }
+
+  // Jumps to found label if a prototype map has dictionary elements.
+  void JumpIfDictionaryInPrototypeChain(Register object, Register scratch0,
+                                        Register scratch1, Label* found);
 
  private:
   void CallCFunctionHelper(Register function,

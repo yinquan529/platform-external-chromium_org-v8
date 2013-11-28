@@ -55,6 +55,7 @@ LOCAL_SRC_FILES := \
 	v8/src/dateparser.cc \
 	v8/src/debug-agent.cc \
 	v8/src/debug.cc \
+	v8/src/default-platform.cc \
 	v8/src/deoptimizer.cc \
 	v8/src/disassembler.cc \
 	v8/src/diy-fp.cc \
@@ -63,6 +64,7 @@ LOCAL_SRC_FILES := \
 	v8/src/elements.cc \
 	v8/src/execution.cc \
 	v8/src/extensions/externalize-string-extension.cc \
+	v8/src/extensions/free-buffer-extension.cc \
 	v8/src/extensions/gc-extension.cc \
 	v8/src/extensions/statistics-extension.cc \
 	v8/src/factory.cc \
@@ -193,8 +195,7 @@ LOCAL_SRC_FILES := \
 	v8/src/mips/simulator-mips.cc \
 	v8/src/mips/stub-cache-mips.cc \
 	v8/src/platform-posix.cc \
-	v8/src/platform-linux.cc \
-	v8/src/defaults.cc
+	v8/src/platform-linux.cc
 
 
 # Flags passed to both C and C++ files.
@@ -247,11 +248,13 @@ MY_DEFS_Debug := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DCLD_VERSION=1' \
+	'-DENABLE_MANAGED_USERS=1' \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DANDROID' \
@@ -347,11 +350,13 @@ MY_DEFS_Release := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DCLD_VERSION=1' \
+	'-DENABLE_MANAGED_USERS=1' \
 	'-DV8_TARGET_ARCH_MIPS' \
 	'-DCAN_USE_FPU_INSTRUCTIONS' \
 	'-D__mips_hard_float=1' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DCAN_USE_VFP_INSTRUCTIONS' \
 	'-DU_USING_ICU_NAMESPACE=0' \
 	'-DANDROID' \
@@ -361,7 +366,8 @@ MY_DEFS_Release := \
 	'-DCHROME_BUILD_ID=""' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
-	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'
+	'-DDYNAMIC_ANNOTATIONS_ENABLED=0' \
+	'-DENABLE_HANDLE_ZAPPING'
 
 
 # Include paths placed before CFLAGS/CPPFLAGS

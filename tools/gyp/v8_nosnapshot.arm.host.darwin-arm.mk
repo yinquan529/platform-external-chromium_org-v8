@@ -12,7 +12,8 @@ gyp_shared_intermediate_dir := $(call intermediates-dir-for,GYP,shared)
 
 # Make sure our deps are built first.
 GYP_TARGET_DEPENDENCIES := \
-	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_js2c_host_gyp,true)/js2c.stamp \
+	$(call intermediates-dir-for,GYP,v8_tools_gyp_generate_trig_table_host_gyp,true)/generate_trig_table.stamp
 
 GYP_GENERATED_OUTPUTS :=
 
@@ -24,9 +25,12 @@ $(gyp_intermediate_dir)/libraries.cc: $(gyp_shared_intermediate_dir)/libraries.c
 	mkdir -p $(@D); cp $< $@
 $(gyp_intermediate_dir)/experimental-libraries.cc: $(gyp_shared_intermediate_dir)/experimental-libraries.cc
 	mkdir -p $(@D); cp $< $@
+$(gyp_intermediate_dir)/trig-table.cc: $(gyp_shared_intermediate_dir)/trig-table.cc
+	mkdir -p $(@D); cp $< $@
 LOCAL_GENERATED_SOURCES := \
 	$(gyp_intermediate_dir)/libraries.cc \
-	$(gyp_intermediate_dir)/experimental-libraries.cc
+	$(gyp_intermediate_dir)/experimental-libraries.cc \
+	$(gyp_intermediate_dir)/trig-table.cc
 
 GYP_COPIED_SOURCE_ORIGIN_DIRS := \
 	$(gyp_shared_intermediate_dir)
@@ -69,9 +73,11 @@ MY_DEFS_Debug := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DCLD_VERSION=1' \
+	'-DENABLE_MANAGED_USERS=1' \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DARM_TEST' \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
 	'-DDYNAMIC_ANNOTATIONS_ENABLED=1' \
@@ -134,14 +140,17 @@ MY_DEFS_Release := \
 	'-DUSE_OPENSSL=1' \
 	'-DENABLE_EGLIMAGE=1' \
 	'-DCLD_VERSION=1' \
+	'-DENABLE_MANAGED_USERS=1' \
 	'-DV8_TARGET_ARCH_ARM' \
 	'-DENABLE_DEBUGGER_SUPPORT' \
 	'-DV8_I18N_SUPPORT' \
+	'-DV8_USE_DEFAULT_PLATFORM' \
 	'-DARM_TEST' \
 	'-DCAN_USE_ARMV7_INSTRUCTIONS=1' \
 	'-DNDEBUG' \
 	'-DNVALGRIND' \
-	'-DDYNAMIC_ANNOTATIONS_ENABLED=0'
+	'-DDYNAMIC_ANNOTATIONS_ENABLED=0' \
+	'-DENABLE_HANDLE_ZAPPING'
 
 
 # Include paths placed before CFLAGS/CPPFLAGS
