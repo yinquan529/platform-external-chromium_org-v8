@@ -171,6 +171,7 @@ DEFINE_bool(harmony_modules, false,
             "enable harmony modules (implies block scoping)")
 DEFINE_bool(harmony_symbols, false,
             "enable harmony symbols (a.k.a. private names)")
+DEFINE_bool(harmony_promises, false, "enable harmony promises")
 DEFINE_bool(harmony_proxies, false, "enable harmony proxies")
 DEFINE_bool(harmony_collections, false,
             "enable harmony collections (sets, maps, and weak maps)")
@@ -187,6 +188,7 @@ DEFINE_bool(harmony, false, "enable all harmony features (except typeof)")
 DEFINE_implication(harmony, harmony_scoping)
 DEFINE_implication(harmony, harmony_modules)
 DEFINE_implication(harmony, harmony_symbols)
+DEFINE_implication(harmony, harmony_promises)
 DEFINE_implication(harmony, harmony_proxies)
 DEFINE_implication(harmony, harmony_collections)
 DEFINE_implication(harmony, harmony_observation)
@@ -196,6 +198,7 @@ DEFINE_implication(harmony, harmony_numeric_literals)
 DEFINE_implication(harmony, harmony_strings)
 DEFINE_implication(harmony, harmony_arrays)
 DEFINE_implication(harmony, harmony_maths)
+DEFINE_implication(harmony_promises, harmony_collections)
 DEFINE_implication(harmony_modules, harmony_scoping)
 DEFINE_implication(harmony_observation, harmony_collections)
 
@@ -212,6 +215,8 @@ DEFINE_bool(pretenuring, true, "allocate objects in old space")
 DEFINE_bool(pretenuring_call_new, false, "pretenure call new")
 DEFINE_bool(allocation_site_pretenuring, false,
             "pretenure with allocation sites")
+DEFINE_bool(trace_pretenuring, false,
+            "trace pretenuring decisions of HAllocate instructions")
 DEFINE_bool(track_fields, true, "track fields with only smi values")
 DEFINE_bool(track_double_fields, true, "track fields with double values")
 DEFINE_bool(track_heap_object_fields, true, "track fields with heap values")
@@ -237,7 +242,7 @@ DEFINE_bool(use_range, true, "use hydrogen range analysis")
 DEFINE_bool(use_gvn, true, "use hydrogen global value numbering")
 DEFINE_bool(use_canonicalizing, true, "use hydrogen instruction canonicalizing")
 DEFINE_bool(use_inlining, true, "use function inlining")
-DEFINE_bool(use_escape_analysis, true, "use hydrogen escape analysis")
+DEFINE_bool(use_escape_analysis, false, "use hydrogen escape analysis")
 DEFINE_bool(use_allocation_folding, true, "use allocation folding")
 DEFINE_int(max_inlining_levels, 5, "maximum number of inlining levels")
 DEFINE_int(max_inlined_source_size, 600,
@@ -291,7 +296,7 @@ DEFINE_bool(array_index_dehoisting, true,
             "perform array index dehoisting")
 DEFINE_bool(analyze_environment_liveness, true,
             "analyze liveness of environment slots and zap dead values")
-DEFINE_bool(load_elimination, false, "use load elimination")
+DEFINE_bool(load_elimination, true, "use load elimination")
 DEFINE_bool(check_elimination, false, "use check elimination")
 DEFINE_bool(dead_code_elimination, true, "use dead code elimination")
 DEFINE_bool(fold_constants, true, "use constant folding")
@@ -340,7 +345,7 @@ DEFINE_bool(omit_map_checks_for_leaf_maps, true,
             "do not emit check maps for constant values that have a leaf map, "
             "deoptimize the optimized code if the layout of the maps changes.")
 
-DEFINE_bool(new_string_add, false, "enable new string addition")
+DEFINE_bool(new_string_add, true, "enable new string addition")
 
 // Experimental profiler changes.
 DEFINE_bool(experimental_profiler, true, "enable all profiler experiments")

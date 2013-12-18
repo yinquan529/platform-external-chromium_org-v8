@@ -1602,7 +1602,7 @@ HValue* HGraphBuilder::BuildNumberToString(HValue* object,
   if_objectissmi.Else();
   {
     if (type->Is(Type::Smi())) {
-      if_objectissmi.Deopt("Excepted smi");
+      if_objectissmi.Deopt("Expected smi");
     } else {
       // Check if the object is a heap number.
       IfBuilder if_objectisnumber(this);
@@ -2237,26 +2237,8 @@ HInnerAllocatedObject* HGraphBuilder::BuildJSArrayHeader(HValue* array,
                         length_field);
 
   if (mode == TRACK_ALLOCATION_SITE) {
-    BuildCreateAllocationMemento(array,
-                                 JSArray::kSize,
-                                 allocation_site_payload);
-    if (FLAG_allocation_site_pretenuring) {
-      // TODO(mvstanton): move this code into BuildCreateAllocationMemento when
-      // constructed arrays also pay attention to pretenuring.
-      HObjectAccess access =
-          HObjectAccess::ForAllocationSiteOffset(
-              AllocationSite::kMementoCreateCountOffset);
-      HValue* create_info = Add<HLoadNamedField>(allocation_site_payload,
-                                                 access);
-      HInstruction* new_create_info = HAdd::New(zone(), context(),
-                                                create_info,
-                                                graph()->GetConstant1());
-      new_create_info->ClearFlag(HValue::kCanOverflow);
-      HStoreNamedField* store = Add<HStoreNamedField>(allocation_site_payload,
-                                                      access, new_create_info);
-      // No write barrier needed to store a smi.
-      store->SkipWriteBarrier();
-    }
+    BuildCreateAllocationMemento(
+        array, Add<HConstant>(JSArray::kSize), allocation_site_payload);
   }
 
   int elements_location = JSArray::kSize;
@@ -2264,9 +2246,10 @@ HInnerAllocatedObject* HGraphBuilder::BuildJSArrayHeader(HValue* array,
     elements_location += AllocationMemento::kSize;
   }
 
-  HValue* elements = Add<HInnerAllocatedObject>(array, elements_location);
+  HInnerAllocatedObject* elements = Add<HInnerAllocatedObject>(
+      array, Add<HConstant>(elements_location));
   Add<HStoreNamedField>(array, HObjectAccess::ForElementsPointer(), elements);
-  return static_cast<HInnerAllocatedObject*>(elements);
+  return elements;
 }
 
 
@@ -2496,7 +2479,8 @@ HValue* HGraphBuilder::BuildCloneShallowArray(HValue* boilerplate,
 
   // Create an allocation site info if requested.
   if (mode == TRACK_ALLOCATION_SITE) {
-    BuildCreateAllocationMemento(object, JSArray::kSize, allocation_site);
+    BuildCreateAllocationMemento(
+        object, Add<HConstant>(JSArray::kSize), allocation_site);
   }
 
   if (length > 0) {
@@ -2589,18 +2573,31 @@ void HGraphBuilder::BuildCompareNil(
 }
 
 
-HValue* HGraphBuilder::BuildCreateAllocationMemento(HValue* previous_object,
-                                                    int previous_object_size,
-                                                    HValue* alloc_site) {
-  ASSERT(alloc_site != NULL);
-  HInnerAllocatedObject* alloc_memento = Add<HInnerAllocatedObject>(
+void HGraphBuilder::BuildCreateAllocationMemento(
+    HValue* previous_object,
+    HValue* previous_object_size,
+    HValue* allocation_site) {
+  ASSERT(allocation_site != NULL);
+  HInnerAllocatedObject* allocation_memento = Add<HInnerAllocatedObject>(
       previous_object, previous_object_size);
-  Handle<Map> alloc_memento_map =
-      isolate()->factory()->allocation_memento_map();
-  AddStoreMapConstant(alloc_memento, alloc_memento_map);
-  HObjectAccess access = HObjectAccess::ForAllocationMementoSite();
-  Add<HStoreNamedField>(alloc_memento, access, alloc_site);
-  return alloc_memento;
+  AddStoreMapConstant(
+      allocation_memento, isolate()->factory()->allocation_memento_map());
+  Add<HStoreNamedField>(
+      allocation_memento,
+      HObjectAccess::ForAllocationMementoSite(),
+      allocation_site);
+  if (FLAG_allocation_site_pretenuring) {
+    HValue* memento_create_count = Add<HLoadNamedField>(
+        allocation_site, HObjectAccess::ForAllocationSiteOffset(
+            AllocationSite::kMementoCreateCountOffset));
+    memento_create_count = AddUncasted<HAdd>(
+        memento_create_count, graph()->GetConstant1());
+    HStoreNamedField* store = Add<HStoreNamedField>(
+        allocation_site, HObjectAccess::ForAllocationSiteOffset(
+            AllocationSite::kMementoCreateCountOffset), memento_create_count);
+    // No write barrier needed to store a smi.
+    store->SkipWriteBarrier();
+  }
 }
 
 
@@ -3571,15 +3568,8 @@ void TestContext::BuildBranch(HValue* value) {
   if (value != NULL && value->CheckFlag(HValue::kIsArguments)) {
     builder->Bailout(kArgumentsObjectValueInATestContext);
   }
-  HBasicBlock* empty_true = builder->graph()->CreateBasicBlock();
-  HBasicBlock* empty_false = builder->graph()->CreateBasicBlock();
   ToBooleanStub::Types expected(condition()->to_boolean_types());
-  builder->FinishCurrentBlock(builder->New<HBranch>(
-          value, expected, empty_true, empty_false));
-
-  owner()->Goto(empty_true, if_true(), builder->function_state());
-  owner()->Goto(empty_false , if_false(), builder->function_state());
-  builder->set_current_block(NULL);
+  ReturnControl(owner()->New<HBranch>(value, expected), BailoutId::None());
 }
 
 
@@ -3771,7 +3761,6 @@ bool HGraph::Optimize(BailoutReason* bailout_reason) {
   // where unreachable code could unnecessarily defeat LICM.
   Run<HMarkUnreachableBlocksPhase>();
 
-  if (FLAG_check_elimination) Run<HCheckEliminationPhase>();
   if (FLAG_dead_code_elimination) Run<HDeadCodeEliminationPhase>();
   if (FLAG_use_escape_analysis) Run<HEscapeAnalysisPhase>();
 
@@ -3801,6 +3790,8 @@ bool HGraph::Optimize(BailoutReason* bailout_reason) {
   if (FLAG_use_canonicalizing) Run<HCanonicalizePhase>();
 
   if (FLAG_use_gvn) Run<HGlobalValueNumberingPhase>();
+
+  if (FLAG_check_elimination) Run<HCheckEliminationPhase>();
 
   if (FLAG_use_range) Run<HRangeAnalysisPhase>();
 
@@ -7560,6 +7551,7 @@ bool HOptimizedGraphBuilder::TryCallApply(Call* expr) {
   // Found pattern f.apply(receiver, arguments).
   CHECK_ALIVE_OR_RETURN(VisitForValue(prop->obj()), true);
   HValue* function = Top();
+
   AddCheckConstantFunction(expr->holder(), function, function_map);
   Drop(1);
 
@@ -7590,10 +7582,10 @@ bool HOptimizedGraphBuilder::TryCallApply(Call* expr) {
     }
 
     Handle<JSFunction> known_function;
-    if (function->IsConstant()) {
-      HConstant* constant_function = HConstant::cast(function);
+    if (function->IsConstant() &&
+        HConstant::cast(function)->handle(isolate())->IsJSFunction()) {
       known_function = Handle<JSFunction>::cast(
-          constant_function->handle(isolate()));
+          HConstant::cast(function)->handle(isolate()));
       int args_count = arguments_count - 1;  // Excluding receiver.
       if (TryInlineApply(known_function, expr, args_count)) return true;
     }
@@ -8866,8 +8858,10 @@ HValue* HGraphBuilder::BuildBinaryOperation(
       case Token::MOD: {
         if (fixed_right_arg.has_value) {
           if (right->IsConstant()) {
-            ASSERT_EQ(fixed_right_arg.value,
-                      HConstant::cast(right)->Integer32Value());
+            HConstant* c_right = HConstant::cast(right);
+            if (c_right->HasInteger32Value()) {
+              ASSERT_EQ(fixed_right_arg.value, c_right->Integer32Value());
+            }
           } else {
             HConstant* fixed_right = Add<HConstant>(
                 static_cast<int>(fixed_right_arg.value));
@@ -9359,16 +9353,10 @@ HInstruction* HOptimizedGraphBuilder::BuildFastLiteral(
     pretenure_flag = site_context->current()->GetPretenureMode()
         ? TENURED
         : NOT_TENURED;
-    if (FLAG_trace_track_allocation_sites) {
-      PrintF("Hydrogen: AllocationSite %p boilerplate %p %s\n",
-             static_cast<void*>(*(site_context->current())),
-             static_cast<void*>(*boilerplate_object),
-             pretenure_flag == TENURED ? "tenured" : "not tenured");
-    }
   }
 
   HInstruction* object = Add<HAllocate>(object_size_constant, type,
-      pretenure_flag, instance_type);
+      pretenure_flag, instance_type, site_context->current());
 
   BuildEmitObjectHeader(boilerplate_object, object);
 
@@ -9382,10 +9370,10 @@ HInstruction* HOptimizedGraphBuilder::BuildFastLiteral(
     HValue* object_elements_size = Add<HConstant>(elements_size);
     if (boilerplate_object->HasFastDoubleElements()) {
       object_elements = Add<HAllocate>(object_elements_size, HType::JSObject(),
-          pretenure_flag, FIXED_DOUBLE_ARRAY_TYPE);
+          pretenure_flag, FIXED_DOUBLE_ARRAY_TYPE, site_context->current());
     } else {
       object_elements = Add<HAllocate>(object_elements_size, HType::JSObject(),
-          pretenure_flag, FIXED_ARRAY_TYPE);
+          pretenure_flag, FIXED_ARRAY_TYPE, site_context->current());
     }
   }
   BuildInitElementsInObjectHeader(boilerplate_object, object, object_elements);

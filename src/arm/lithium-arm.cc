@@ -272,7 +272,8 @@ void LStoreCodeEntry::PrintDataTo(StringStream* stream) {
 void LInnerAllocatedObject::PrintDataTo(StringStream* stream) {
   stream->Add(" = ");
   base_object()->PrintTo(stream);
-  stream->Add(" + %d", offset());
+  stream->Add(" + ");
+  offset()->PrintTo(stream);
 }
 
 
@@ -758,13 +759,10 @@ LInstruction* LChunkBuilder::DoArithmeticD(Token::Value op,
   ASSERT(instr->left()->representation().IsDouble());
   ASSERT(instr->right()->representation().IsDouble());
   if (op == Token::MOD) {
-    LOperand* left = UseFixedDouble(instr->left(), d1);
-    LOperand* right = UseFixedDouble(instr->right(), d2);
+    LOperand* left = UseFixedDouble(instr->left(), d0);
+    LOperand* right = UseFixedDouble(instr->right(), d1);
     LArithmeticD* result = new(zone()) LArithmeticD(op, left, right);
-    // We call a C function for double modulo. It can't trigger a GC. We need
-    // to use fixed result register for the call.
-    // TODO(fschneider): Allow any register as input registers.
-    return MarkAsCall(DefineFixedDouble(result, d1), instr);
+    return MarkAsCall(DefineFixedDouble(result, d0), instr);
   } else {
     LOperand* left = UseRegisterAtStart(instr->left());
     LOperand* right = UseRegisterAtStart(instr->right());
@@ -1087,7 +1085,7 @@ LInstruction* LChunkBuilder::DoWrapReceiver(HWrapReceiver* instr) {
   LOperand* receiver = UseRegisterAtStart(instr->receiver());
   LOperand* function = UseRegisterAtStart(instr->function());
   LWrapReceiver* result = new(zone()) LWrapReceiver(receiver, function);
-  return AssignEnvironment(DefineSameAsFirst(result));
+  return AssignEnvironment(DefineAsRegister(result));
 }
 
 
@@ -1119,11 +1117,11 @@ LInstruction* LChunkBuilder::DoStoreCodeEntry(
 
 
 LInstruction* LChunkBuilder::DoInnerAllocatedObject(
-    HInnerAllocatedObject* inner_object) {
-  LOperand* base_object = UseRegisterAtStart(inner_object->base_object());
-  LInnerAllocatedObject* result =
-    new(zone()) LInnerAllocatedObject(base_object);
-  return DefineAsRegister(result);
+    HInnerAllocatedObject* instr) {
+  LOperand* base_object = UseRegisterAtStart(instr->base_object());
+  LOperand* offset = UseRegisterOrConstantAtStart(instr->offset());
+  return DefineAsRegister(
+      new(zone()) LInnerAllocatedObject(base_object, offset));
 }
 
 
@@ -1269,17 +1267,16 @@ LInstruction* LChunkBuilder::DoMathExp(HUnaryMathOperation* instr) {
 
 
 LInstruction* LChunkBuilder::DoMathSqrt(HUnaryMathOperation* instr) {
-  LOperand* input = UseRegister(instr->value());
+  LOperand* input = UseRegisterAtStart(instr->value());
   LMathSqrt* result = new(zone()) LMathSqrt(input);
   return DefineAsRegister(result);
 }
 
 
 LInstruction* LChunkBuilder::DoMathPowHalf(HUnaryMathOperation* instr) {
-  LOperand* input = UseFixedDouble(instr->value(), d2);
-  LOperand* temp = FixedTemp(d3);
-  LMathPowHalf* result = new(zone()) LMathPowHalf(input, temp);
-  return DefineFixedDouble(result, d2);
+  LOperand* input = UseRegisterAtStart(instr->value());
+  LMathPowHalf* result = new(zone()) LMathPowHalf(input);
+  return DefineAsRegister(result);
 }
 
 
@@ -1477,7 +1474,7 @@ LInstruction* LChunkBuilder::DoMod(HMod* instr) {
     if (instr->HasPowerOf2Divisor()) {
       ASSERT(!right->CanBeZero());
       LModI* mod = new(zone()) LModI(UseRegisterAtStart(left),
-                                     UseOrConstant(right));
+                                     UseConstant(right));
       LInstruction* result = DefineAsRegister(mod);
       return (left->CanBeNegative() &&
               instr->CheckFlag(HValue::kBailoutOnMinusZero))
@@ -1718,12 +1715,12 @@ LInstruction* LChunkBuilder::DoPower(HPower* instr) {
   // We need to use fixed result register for the call.
   Representation exponent_type = instr->right()->representation();
   ASSERT(instr->left()->representation().IsDouble());
-  LOperand* left = UseFixedDouble(instr->left(), d1);
+  LOperand* left = UseFixedDouble(instr->left(), d0);
   LOperand* right = exponent_type.IsDouble() ?
-      UseFixedDouble(instr->right(), d2) :
+      UseFixedDouble(instr->right(), d1) :
       UseFixed(instr->right(), r2);
   LPower* result = new(zone()) LPower(left, right);
-  return MarkAsCall(DefineFixedDouble(result, d3),
+  return MarkAsCall(DefineFixedDouble(result, d2),
                     instr,
                     CAN_DEOPTIMIZE_EAGERLY);
 }
@@ -2020,7 +2017,7 @@ LInstruction* LChunkBuilder::DoChange(HChange* instr) {
       LOperand* value = UseRegisterAtStart(val);
       if (val->CheckFlag(HInstruction::kUint32)) {
         LNumberTagU* result = new(zone()) LNumberTagU(value);
-        return AssignEnvironment(AssignPointerMap(DefineSameAsFirst(result)));
+        return AssignEnvironment(AssignPointerMap(DefineAsRegister(result)));
       } else if (val->HasRange() && val->range()->IsInSmiRange()) {
         return DefineAsRegister(new(zone()) LSmiTag(value));
       } else {

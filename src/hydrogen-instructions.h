@@ -5439,9 +5439,11 @@ class HAllocate V8_FINAL : public HTemplateInstruction<2> {
                         HValue* size,
                         HType type,
                         PretenureFlag pretenure_flag,
-                        InstanceType instance_type) {
+                        InstanceType instance_type,
+                        Handle<AllocationSite> allocation_site =
+                            Handle<AllocationSite>::null()) {
     return new(zone) HAllocate(context, size, type, pretenure_flag,
-        instance_type);
+        instance_type, allocation_site);
   }
 
   // Maximum instance size for which allocations will be inlined.
@@ -5514,7 +5516,9 @@ class HAllocate V8_FINAL : public HTemplateInstruction<2> {
             HValue* size,
             HType type,
             PretenureFlag pretenure_flag,
-            InstanceType instance_type)
+            InstanceType instance_type,
+            Handle<AllocationSite> allocation_site =
+                Handle<AllocationSite>::null())
       : HTemplateInstruction<2>(type),
         dominating_allocate_(NULL),
         filler_free_space_size_(NULL),
@@ -5542,6 +5546,14 @@ class HAllocate V8_FINAL : public HTemplateInstruction<2> {
     }
     clear_next_map_word_ = pretenure_flag == NOT_TENURED &&
         AllocationSite::CanTrack(instance_type);
+
+    if (FLAG_trace_pretenuring) {
+      PrintF("HAllocate with AllocationSite %p %s\n",
+             allocation_site.is_null()
+                 ? static_cast<void*>(NULL)
+                 : static_cast<void*>(*allocation_site),
+             pretenure_flag == TENURED ? "tenured" : "not tenured");
+    }
   }
 
   void UpdateSize(HValue* size) {
@@ -5597,21 +5609,21 @@ class HStoreCodeEntry V8_FINAL: public HTemplateInstruction<2> {
 };
 
 
-class HInnerAllocatedObject V8_FINAL: public HTemplateInstruction<1> {
+class HInnerAllocatedObject V8_FINAL : public HTemplateInstruction<2> {
  public:
   static HInnerAllocatedObject* New(Zone* zone,
                                     HValue* context,
                                     HValue* value,
-                                    int offset,
+                                    HValue* offset,
                                     HType type = HType::Tagged()) {
     return new(zone) HInnerAllocatedObject(value, offset, type);
   }
 
   HValue* base_object() { return OperandAt(0); }
-  int offset() { return offset_; }
+  HValue* offset() { return OperandAt(1); }
 
   virtual Representation RequiredInputRepresentation(int index) V8_OVERRIDE {
-    return Representation::Tagged();
+    return index == 0 ? Representation::Tagged() : Representation::Integer32();
   }
 
   virtual void PrintDataTo(StringStream* stream) V8_OVERRIDE;
@@ -5619,15 +5631,16 @@ class HInnerAllocatedObject V8_FINAL: public HTemplateInstruction<1> {
   DECLARE_CONCRETE_INSTRUCTION(InnerAllocatedObject)
 
  private:
-  HInnerAllocatedObject(HValue* value, int offset, HType type = HType::Tagged())
-      : HTemplateInstruction<1>(type), offset_(offset) {
+  HInnerAllocatedObject(HValue* value,
+                        HValue* offset,
+                        HType type = HType::Tagged())
+      : HTemplateInstruction<2>(type) {
     ASSERT(value->IsAllocate());
     SetOperandAt(0, value);
+    SetOperandAt(1, offset);
     set_type(type);
     set_representation(Representation::Tagged());
   }
-
-  int offset_;
 };
 
 
@@ -5639,11 +5652,10 @@ inline bool StoringValueNeedsWriteBarrier(HValue* value) {
 
 
 inline bool ReceiverObjectNeedsWriteBarrier(HValue* object,
+                                            HValue* value,
                                             HValue* new_space_dominator) {
-  if (object->IsInnerAllocatedObject()) {
-    return ReceiverObjectNeedsWriteBarrier(
-        HInnerAllocatedObject::cast(object)->base_object(),
-        new_space_dominator);
+  while (object->IsInnerAllocatedObject()) {
+    object = HInnerAllocatedObject::cast(object)->base_object();
   }
   if (object->IsConstant() && HConstant::cast(object)->IsCell()) {
     return false;
@@ -5655,7 +5667,17 @@ inline bool ReceiverObjectNeedsWriteBarrier(HValue* object,
   }
   if (object != new_space_dominator) return true;
   if (object->IsAllocate()) {
-    return !HAllocate::cast(object)->IsNewSpaceAllocation();
+    // Stores to new space allocations require no write barriers if the object
+    // is the new space dominator.
+    if (HAllocate::cast(object)->IsNewSpaceAllocation()) {
+      return false;
+    }
+    // Likewise we don't need a write barrier if we store a value that
+    // originates from the same allocation (via allocation folding).
+    while (value->IsInnerAllocatedObject()) {
+      value = HInnerAllocatedObject::cast(value)->base_object();
+    }
+    return object != value;
   }
   return true;
 }
@@ -6576,12 +6598,14 @@ class HStoreNamedField V8_FINAL : public HTemplateInstruction<3> {
     if (field_representation().IsInteger32()) return false;
     if (field_representation().IsExternal()) return false;
     return StoringValueNeedsWriteBarrier(value()) &&
-        ReceiverObjectNeedsWriteBarrier(object(), new_space_dominator());
+        ReceiverObjectNeedsWriteBarrier(object(), value(),
+                                        new_space_dominator());
   }
 
   bool NeedsWriteBarrierForMap() {
     if (IsSkipWriteBarrier()) return false;
-    return ReceiverObjectNeedsWriteBarrier(object(), new_space_dominator());
+    return ReceiverObjectNeedsWriteBarrier(object(), transition(),
+                                           new_space_dominator());
   }
 
   Representation field_representation() const {
@@ -6743,7 +6767,8 @@ class HStoreKeyed V8_FINAL
       return false;
     } else {
       return StoringValueNeedsWriteBarrier(value()) &&
-          ReceiverObjectNeedsWriteBarrier(elements(), new_space_dominator());
+          ReceiverObjectNeedsWriteBarrier(elements(), value(),
+                                          new_space_dominator());
     }
   }
 

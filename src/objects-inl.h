@@ -3889,14 +3889,14 @@ InlineCacheState Code::ic_state() {
 }
 
 
-Code::ExtraICState Code::extra_ic_state() {
+ExtraICState Code::extra_ic_state() {
   ASSERT((is_inline_cache_stub() && !needs_extended_extra_ic_state(kind()))
          || ic_state() == DEBUG_STUB);
   return ExtractExtraICStateFromFlags(flags());
 }
 
 
-Code::ExtraICState Code::extended_extra_ic_state() {
+ExtraICState Code::extended_extra_ic_state() {
   ASSERT(is_inline_cache_stub() || ic_state() == DEBUG_STUB);
   ASSERT(needs_extended_extra_ic_state(kind()));
   return ExtractExtendedExtraICStateFromFlags(flags());
@@ -3956,19 +3956,6 @@ bool Code::has_major_key() {
       kind() == KEYED_STORE_IC ||
       kind() == KEYED_CALL_IC ||
       kind() == TO_BOOLEAN_IC;
-}
-
-
-bool Code::is_pregenerated() {
-  return (kind() == STUB && IsPregeneratedField::decode(flags()));
-}
-
-
-void Code::set_is_pregenerated(bool value) {
-  ASSERT(kind() == STUB);
-  Flags f = flags();
-  f = static_cast<Flags>(IsPregeneratedField::update(f, value));
-  set_flags(f);
 }
 
 
@@ -4233,12 +4220,12 @@ InlineCacheState Code::ExtractICStateFromFlags(Flags flags) {
 }
 
 
-Code::ExtraICState Code::ExtractExtraICStateFromFlags(Flags flags) {
+ExtraICState Code::ExtractExtraICStateFromFlags(Flags flags) {
   return ExtraICStateField::decode(flags);
 }
 
 
-Code::ExtraICState Code::ExtractExtendedExtraICStateFromFlags(
+ExtraICState Code::ExtractExtendedExtraICStateFromFlags(
     Flags flags) {
   return ExtendedExtraICStateField::decode(flags);
 }

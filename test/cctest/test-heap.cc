@@ -935,7 +935,7 @@ TEST(EmptyHandleEscapeFrom) {
   Handle<JSObject> runaway;
 
   {
-      v8::HandleScope nested(CcTest::isolate());
+      v8::EscapableHandleScope nested(CcTest::isolate());
       Handle<JSObject> empty;
       runaway = empty.EscapeFrom(&nested);
   }
@@ -2977,7 +2977,8 @@ void ReleaseStackTraceDataTest(const char* source, const char* accessor) {
   SourceResource* resource = new SourceResource(i::StrDup(source));
   {
     v8::HandleScope scope(CcTest::isolate());
-    v8::Handle<v8::String> source_string = v8::String::NewExternal(resource);
+    v8::Handle<v8::String> source_string =
+        v8::String::NewExternal(CcTest::isolate(), resource);
     CcTest::heap()->CollectAllAvailableGarbage();
     v8::Script::Compile(source_string)->Run();
     CHECK(!resource->IsDisposed());
