@@ -5230,7 +5230,7 @@ HInstruction* HOptimizedGraphBuilder::BuildStoreNamedField(
   }
 
   HObjectAccess field_access = HObjectAccess::ForField(map, lookup, name);
-  bool transition_to_field = lookup->IsTransitionToField(*map);
+  bool transition_to_field = lookup->IsTransitionToField();
 
   HStoreNamedField *instr;
   if (FLAG_track_double_fields && field_access.representation().IsDouble()) {
@@ -5266,7 +5266,7 @@ HInstruction* HOptimizedGraphBuilder::BuildStoreNamedField(
   }
 
   if (transition_to_field) {
-    Handle<Map> transition(lookup->GetTransitionMapFromMap(*map));
+    Handle<Map> transition(lookup->GetTransitionTarget());
     HConstant* transition_constant = Add<HConstant>(transition);
     instr->SetTransition(transition_constant, top_info());
     // TODO(fschneider): Record the new map type of the object in the IR to
@@ -5306,7 +5306,7 @@ static bool ComputeStoreField(Handle<Map> type,
   if (!lookup_transition) return false;
 
   type->LookupTransition(NULL, *name, lookup);
-  return lookup->IsTransitionToField(*type) &&
+  return lookup->IsTransitionToField() &&
       (type->unused_property_fields() > 0);
 }
 
@@ -9475,7 +9475,7 @@ void HOptimizedGraphBuilder::BuildEmitInObjectProperties(
       Add<HStoreNamedField>(object, access, result);
     } else {
       Representation representation = details.representation();
-      HInstruction* value_instruction = Add<HConstant>(value);
+      HInstruction* value_instruction;
 
       if (representation.IsDouble()) {
         // Allocate a HeapNumber box and store the value into it.
@@ -9490,8 +9490,16 @@ void HOptimizedGraphBuilder::BuildEmitInObjectProperties(
         AddStoreMapConstant(double_box,
             isolate()->factory()->heap_number_map());
         Add<HStoreNamedField>(double_box, HObjectAccess::ForHeapNumberValue(),
-            value_instruction);
+                              Add<HConstant>(value));
         value_instruction = double_box;
+      } else if (representation.IsSmi()) {
+        value_instruction = value->IsUninitialized()
+            ? graph()->GetConstant0()
+            : Add<HConstant>(value);
+        // Ensure that value is stored as smi.
+        access = access.WithRepresentation(representation);
+      } else {
+        value_instruction = Add<HConstant>(value);
       }
 
       Add<HStoreNamedField>(object, access, value_instruction);
